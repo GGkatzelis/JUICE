@@ -7,7 +7,12 @@ class EasyParser:
     def __init__(self, file_path: str, include_dirs: list = None):
         self.file_path = file_path
         import os
-        self.include_dirs = include_dirs or [os.path.dirname(os.path.abspath(file_path))]
+        # Add the directory of the root file to the include paths
+        self.base_dir = os.path.dirname(os.path.abspath(file_path))
+        self.include_dirs = include_dirs or []
+        if self.base_dir not in self.include_dirs:
+            self.include_dirs.insert(0, self.base_dir)
+
         self.mechanism = Mechanism()
         self.lines = self._read_lines_with_includes(self.file_path)
 
@@ -15,33 +20,45 @@ class EasyParser:
         """Reads lines from the file and recursively processes #include directives."""
         import os
         lines = []
+        
         try:
             with open(current_file, 'r') as f:
                 raw_lines = f.readlines()
         except FileNotFoundError:
             print(f"Warning: Could not read file '{current_file}'.")
             return lines
-            
+
         for line in raw_lines:
             stripped = line.strip()
             if stripped.startswith('#include'):
-                parts = stripped.split()
-                if len(parts) > 1:
-                    inc_filename = parts[1]
-                    # Find the included file in the provided directories recursively
-                    found_path = None
-                    for d in self.include_dirs:
-                        for root, _, files in os.walk(d):
-                            if inc_filename in files:
-                                found_path = os.path.join(root, inc_filename)
-                                break
-                        if found_path:
-                            break
-                            
-                    if found_path:
-                        lines.extend(self._read_lines_with_includes(found_path))
-                    else:
-                        print(f"Warning: Included file '{inc_filename}' not found in include directories.")
+                # parts = stripped.split()
+                # if len(parts) > 1:
+                #     inc_filename = parts[1]
+                    
+                #     # 1. Try to find the file relative to the current file
+                #     current_dir = os.path.dirname(os.path.abspath(current_file))
+                #     path_to_try = os.path.join(current_dir, inc_filename)
+                    
+                #     if os.path.exists(path_to_try):
+                #         lines.extend(self._read_lines_with_includes(path_to_try))
+                #         continue
+
+                #     # 2. If not found, search in all include directories
+                #     found_in_includes = False
+                #     found_path = None
+                #     for d in self.include_dirs:
+                #         for root, _, files in os.walk(d):
+                #             if inc_filename in files:
+                #                 found_path = os.path.join(root, inc_filename)
+                #                 break
+                #         if found_path:
+                #             lines.extend(self._read_lines_with_includes(found_path))
+                #             found_in_includes = True
+                #             break
+                    
+                #     if not found_in_includes:
+                #         print(f"Warning: Included file '{inc_filename}' not found.")
+                pass
             else:
                 lines.append(line)
                 
@@ -56,35 +73,33 @@ class EasyParser:
 
     def _parse_sections(self):
         """Parses sections like FILES, FACS, INITIALS, FUNCTIONS."""
-        section_regex = re.compile(r"FACS\[(\w+)\]\s*=\s*(.*)|"
-                                   r"FILES\[(\w+)\]\s*=\s*(.*)|"
-                                   r"INITIAL\[(.*?)\]\s*=\s*(.*)|"
-                                   r"(\w+)\s*=\s*FUNCTION\[(.*?)\]|"
-                                   r"(\w+)\s*=\s*INPUT\((\w+)\)|"
-                                   r"(\w+)\s*=\s*(\w+)\((.*)\)")
+        facs_regex = re.compile(r"FACS\[(\w+)\]\s*=\s*(.*)")
+        files_regex = re.compile(r"FILES\[(\w+)\]\s*=\s*(.*)")
+        initial_regex = re.compile(r"INITIAL\[(.*?)\]\s*=\s*(.*)")
+        function_regex = re.compile(r"(\w+)\s*=\s*FUNCTION\[(.*?)\]")
+        input_regex = re.compile(r"(\w+)\s*=\s*INPUT\((.*?)\)")
+        const_regex = re.compile(r"(\w+)\s*=\s*CONST\((.*?)\)")
+        var_regex = re.compile(r"(\w+)\s*=\s*(\w+)\((.*)\)")
 
         for line in self.lines:
             line = line.strip()
             if not line or line.startswith(';'):
                 continue
 
-            match = section_regex.match(line)
-            if not match:
-                continue
-
-            groups = match.groups()
-            if groups[0] is not None:
-                self.mechanism.facsimile_params[groups[0]] = groups[1].strip()
-            elif groups[2] is not None:
-                self.mechanism.enz_files[groups[2]] = groups[3].strip()
-            elif groups[4] is not None:
-                self.mechanism.initial_conditions[groups[4]] = groups[5].strip()
-            elif groups[6] is not None:
-                self.mechanism.functions[groups[6]] = f"FUNCTION[{groups[7].strip()}]"
-            elif groups[8] is not None:
-                self.mechanism.variables[groups[8]] = f"INPUT({groups[9].strip()})"
-            elif groups[10] is not None and groups[11] is not None:
-                self.mechanism.variables[groups[10]] = f"{groups[11]}({groups[12].strip()})"
+            if match := facs_regex.match(line):
+                self.mechanism.facsimile_params[match.group(1)] = match.group(2).strip()
+            elif match := files_regex.match(line):
+                self.mechanism.enz_files[match.group(1)] = match.group(2).strip()
+            elif match := initial_regex.match(line):
+                self.mechanism.initial_conditions[match.group(1)] = match.group(2).strip()
+            elif match := function_regex.match(line):
+                self.mechanism.functions[match.group(1)] = f"FUNCTION[{match.group(2).strip()}]"
+            elif match := input_regex.match(line):
+                self.mechanism.variables[match.group(1)] = f"INPUT({match.group(2).strip()})"
+            elif match := const_regex.match(line):
+                self.mechanism.variables[match.group(1)] = f"CONST({match.group(2).strip()})"
+            elif match := var_regex.match(line):
+                 self.mechanism.variables[match.group(1)] = f"{match.group(2)}({match.group(3).strip()})"
 
 
     def _parse_reactions_and_rates(self):
