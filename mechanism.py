@@ -21,6 +21,7 @@ class Mechanism:
     initial_conditions: Dict[str, str] = field(default_factory=dict)
     functions: Dict[str, str] = field(default_factory=dict)
     variables: Dict[str, str] = field(default_factory=dict)
+    aliases: Dict[str, str] = field(default_factory=dict)
     reactions: List[Reaction] = field(default_factory=list)
     species: List[Species] = field(default_factory=list)
 
@@ -33,20 +34,15 @@ class Mechanism:
         species_names = set()
         for reaction in self.reactions:
             for reactant in reaction.reactants:
-                species_names.add(reactant)
+                if reactant not in self.variables:
+                    species_names.add(reactant)
             for product in reaction.products:
-                species_names.add(product)
+                if product not in self.variables:
+                    species_names.add(product)
         
         # Also add species from initial conditions
         for species_name in self.initial_conditions.keys():
-            if species_name != '*':
+            if species_name != '*' and species_name not in self.variables:
                 species_names.add(species_name)
 
-        # Non-chemical species like HV should be handled carefully
-        # For now, we assume everything in a reaction is a species
-        # We might need to refine this later
-        if 'HV' in species_names:
-            species_names.remove('HV')
-
         self.species = sorted([Species(name=name) for name in species_names])
-
