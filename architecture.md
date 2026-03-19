@@ -20,13 +20,21 @@ The **MCM_SAPHIR_Tool** is a Python-based pipeline designed to translate chemica
 - **`hd_generator.py`**: The Header generator. Creates the `.hd` file which defines the structure and columns for the `.cs`, `.kv`, and `.pd` output files.
 - **`main.py`**: The entry point/CLI. Orchestrates the pipeline: Argument parsing -> easy_parser -> fac/hd generators -> file writing -> subprocess execution of `facsim_b.exe`.
 
-## 4. Current Status
-**Overall Status:** The translation pipeline is built, functioning, and successfully executes the simulation from end-to-end! IDE default run support is added. File headers and layout structures successfully map 1:1 with the legacy outputs.
+## 4. Current Status & Next Steps
 
-**Current Issue (Logic Alignment - Mixing Ratios):**
-The generated Python `.fac` file is missing the mixing ratio conversion logic in the `COMPILE parset` block compared to the legacy `.fac` files. 
-Specifically, the original tool converts concentrations to mixing ratios, performs density/T/P assignments, and converts back to concentrations before assigning the reaction rate arrays.
+**Overall Status:** The core pipeline successfully parses simple, self-contained `.easy` files and runs the FACSIMILE simulation.
 
-**Immediate Next Steps:**
-1. Update `fac_generator.py` to inject the mixing ratio conversion `DO` loops (`* convert to mixing ratios;` and `* convert back to conc;`) inside the `_generate_parset_compile_block()` function.
-2. Verify the generated output data exactly matches the legacy values after the equations are added.
+**Stuck Point (New Blocker):** The parser (`easy_parser.py`) cannot handle `.easy` files that use `#include` directives to import external mechanism and rate constant files. The more complex and realistic scenarios, such as the `ethanol.easy` case, rely heavily on this feature. The current parser only reads the main file, leading to an incomplete representation of the chemical mechanism.
+
+**Immediate Next Steps (Include File Pre-Processing):**
+The primary goal is to make the parser "include-aware". This will be achieved by adding a pre-processing step to `easy_parser.py`.
+
+1.  **Implement a Pre-processor:**
+    *   Create a function that reads the main `.easy` file.
+    *   When it encounters a line with an `#include` statement, it will resolve the path to the included file (which may be relative to the location of the parent file).
+    *   It will then read the content of the included file and substitute it into the main stream of data.
+    *   This process must be recursive to handle nested includes.
+2.  **Feed Pre-processed Content to Parser:**
+    *   The existing parsing logic will then receive the complete, flattened mechanism as a single string or stream, as if it were originally in one file.
+3.  **Address Secondary Issues:**
+    *   Once the parser can handle complex mechanisms, the previously identified issue of "Logic Alignment - Mixing Ratios" can be re-evaluated and addressed.

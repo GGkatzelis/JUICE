@@ -16,49 +16,70 @@ class EasyParser:
         self.mechanism = Mechanism()
         self.lines = self._read_lines_with_includes(self.file_path)
 
-    def _read_lines_with_includes(self, current_file: str) -> list[str]:
+    def _read_lines_with_includes(self, current_file: str, processed_files: set = None) -> list[str]:
         """Reads lines from the file and recursively processes #include directives."""
         import os
+        
+        if processed_files is None:
+            processed_files = set()
+
+        abs_current_file = os.path.abspath(current_file)
+        if abs_current_file in processed_files:
+            return []
+        
+        processed_files.add(abs_current_file)
+
         lines = []
         
         try:
-            with open(current_file, 'r') as f:
+            with open(abs_current_file, 'r') as f:
                 raw_lines = f.readlines()
         except FileNotFoundError:
-            print(f"Warning: Could not read file '{current_file}'.")
+            found = False
+            for inc_dir in self.include_dirs:
+                path_to_try = os.path.join(inc_dir, os.path.basename(current_file))
+                if os.path.exists(path_to_try):
+                    return self._read_lines_with_includes(path_to_try, processed_files)
+            
+            # If not found directly in include dirs, walk them
+            for inc_dir in self.include_dirs:
+                for root, _, files in os.walk(inc_dir):
+                    if os.path.basename(current_file) in files:
+                        found_path = os.path.join(root, os.path.basename(current_file))
+                        return self._read_lines_with_includes(found_path, processed_files)
+
+            print(f"Warning: Could not find include file '{current_file}'.")
             return lines
+
+        current_dir = os.path.dirname(abs_current_file)
 
         for line in raw_lines:
             stripped = line.strip()
             if stripped.startswith('#include'):
-                # parts = stripped.split()
-                # if len(parts) > 1:
-                #     inc_filename = parts[1]
+                parts = stripped.split()
+                if len(parts) > 1:
+                    inc_filename = parts[1]
                     
-                #     # 1. Try to find the file relative to the current file
-                #     current_dir = os.path.dirname(os.path.abspath(current_file))
-                #     path_to_try = os.path.join(current_dir, inc_filename)
-                    
-                #     if os.path.exists(path_to_try):
-                #         lines.extend(self._read_lines_with_includes(path_to_try))
-                #         continue
+                    # 1. Try relative path first
+                    path_to_try = os.path.join(current_dir, inc_filename)
+                    if os.path.exists(path_to_try):
+                        lines.extend(self._read_lines_with_includes(path_to_try, processed_files))
+                        continue
 
-                #     # 2. If not found, search in all include directories
-                #     found_in_includes = False
-                #     found_path = None
-                #     for d in self.include_dirs:
-                #         for root, _, files in os.walk(d):
-                #             if inc_filename in files:
-                #                 found_path = os.path.join(root, inc_filename)
-                #                 break
-                #         if found_path:
-                #             lines.extend(self._read_lines_with_includes(found_path))
-                #             found_in_includes = True
-                #             break
+                    # 2. If not, search in include directories (including subdirectories)
+                    found_in_includes = False
+                    for d in self.include_dirs:
+                        for root, _, files in os.walk(d):
+                            if inc_filename in files:
+                                found_path = os.path.join(root, inc_filename)
+                                lines.extend(self._read_lines_with_includes(found_path, processed_files))
+                                found_in_includes = True
+                                break
+                        if found_in_includes:
+                            break
                     
-                #     if not found_in_includes:
-                #         print(f"Warning: Included file '{inc_filename}' not found.")
-                pass
+                    if not found_in_includes:
+                        print(f"Warning: Included file '{inc_filename}' not found.")
             else:
                 lines.append(line)
                 
@@ -76,13 +97,16 @@ class EasyParser:
         facs_regex = re.compile(r"FACS\[(\w+)\]\s*=\s*(.*)")
         files_regex = re.compile(r"FILES\[(\w+)\]\s*=\s*(.*)")
         initial_regex = re.compile(r"INITIAL\[(.*?)\]\s*=\s*(.*)")
-        function_regex = re.compile(r"(\w+)\s*=\s*FUNCTION\[(.*?)\]")
+        function_regex = re.compile(r"(\w+)\s*=\s*FUNCTION\[(.*)") # Modified to be non-greedy
         input_regex = re.compile(r"(\w+)\s*=\s*INPUT\((.*?)\)")
         const_regex = re.compile(r"(\w+)\s*=\s*CONST\((.*?)\)")
         var_regex = re.compile(r"(\w+)\s*=\s*(\w+)\((.*)\)")
 
-        for line in self.lines:
-            line = line.strip()
+        i = 0
+        while i < len(self.lines):
+            line = self.lines[i].strip()
+            i += 1
+
             if not line or line.startswith(';'):
                 continue
 
@@ -93,7 +117,24 @@ class EasyParser:
             elif match := initial_regex.match(line):
                 self.mechanism.initial_conditions[match.group(1)] = match.group(2).strip()
             elif match := function_regex.match(line):
-                self.mechanism.functions[match.group(1)] = f"FUNCTION[{match.group(2).strip()}]"
+                name = match.group(1)
+                body = match.group(2)
+                open_brackets = body.count('[') - body.count(']')
+                
+                # Handle multi-line functions
+                while open_brackets > 0 and i < len(self.lines):
+                    next_line = self.lines[i].strip()
+                    body += next_line
+                    open_brackets += next_line.count('[') - next_line.count(']')
+                    i += 1
+                
+                # Clean up the body
+                body = body.replace('$', '').strip()
+                if body.endswith(']'):
+                    body = body[:-1]
+
+                self.mechanism.functions[name] = f"FUNCTION[{body}]"
+
             elif match := input_regex.match(line):
                 self.mechanism.variables[match.group(1)] = f"INPUT({match.group(2).strip()})"
             elif match := const_regex.match(line):
