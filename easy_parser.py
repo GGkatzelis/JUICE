@@ -151,6 +151,21 @@ class EasyParser:
 
         parsed_reactions = []
 
+        def parse_species_list(s_list_str):
+            species_list = []
+            for part in s_list_str.split('+'):
+                part = part.strip()
+                if '*' in part:
+                    coeff_str, name = part.split('*', 1)
+                    try:
+                        # We don't use the coefficient for now, just the species name
+                        species_list.append(name.strip())
+                    except ValueError:
+                        species_list.append(part) # Not a valid coefficient, treat as part of the name
+                else:
+                    species_list.append(part)
+            return tuple(species_list)
+
         for line in self.lines:
             line = line.split(';')[0].strip()
             if not line:
@@ -162,8 +177,8 @@ class EasyParser:
                 products_str = rate_match.group(2).strip()
                 rate = rate_match.group(3).strip()
 
-                reactants = tuple(r.strip() for r in reactants_str.split('+'))
-                products = tuple(p.strip() for p in products_str.split('+'))
+                reactants = parse_species_list(reactants_str)
+                products = parse_species_list(products_str)
                 
                 reaction_key = (reactants, products)
                 
@@ -188,8 +203,8 @@ class EasyParser:
                 reactants_str = reaction_match.group(1).strip()
                 products_str = reaction_match.group(2).strip()
                 
-                reactants = tuple(r.strip() for r in reactants_str.split('+'))
-                products = tuple(p.strip() for p in products_str.split('+'))
+                reactants = parse_species_list(reactants_str)
+                products = parse_species_list(products_str)
 
                 parsed_reactions.append({'reactants': reactants, 'products': products, 'rate': None})
         
