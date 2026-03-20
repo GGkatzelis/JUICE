@@ -20,13 +20,21 @@ The **MCM_SAPHIR_Tool** is a Python-based pipeline designed to translate chemica
 - **`hd_generator.py`**: The Header generator. Creates the `.hd` file which defines the structure and columns for the `.cs`, `.kv`, and `.pd` output files.
 - **`main.py`**: The entry point/CLI. Orchestrates the pipeline: Argument parsing -> easy_parser -> fac/hd generators -> file writing -> subprocess execution of `facsim_b.exe`.
 
-**4. Mimicking Original File Output:**
-- **Goal:** To produce a `.fac` file that is more similar to the original `ethanol.fac` file, which uses pre-set values and simpler assignments.
-- **Problem:** The `_expand_expr` function in `fac_generator.py` was expanding all functions and variables, leading to a much larger and more complex output file than the original.
-- **Solution:** The `_expand_expr` function was modified to return the expression as-is, without any expansion. This will prevent the expansion of functions and variables, and the generated file will be more similar to the original `ethanol.fac`.
+## 4. Mimicking Original File Output
+- **Goal:** To produce a `.fac` file that is a functionally equivalent translation of the definitions in the `.easy` file and its includes.
+- **Original Assumption (Incorrect):** The initial goal was to prevent the expansion of functions and variables. This was based on a misunderstanding of the target `.fac` file.
+- **Corrected Goal:** The new goal is to correctly expand all user-defined EASY functions and variables, while leaving the built-in FACSIMILE functions (like `AMAX`, `EXP`, etc.) as they are.
 
+## 5. Status Update
+The project is currently in the process of implementing the expression expansion logic in `fac_generator.py`. Several attempts have been made to create a robust expansion mechanism, but they have been met with the following challenges:
+- **Initial Implementation:** A simple, non-expanding function was created, which was based on the incorrect assumption mentioned above.
+- **Recursive Implementation:** A recursive approach was attempted, but it led to "maximum recursion depth exceeded" errors, indicating a problem with the recursion logic.
+- **Iterative Implementation:** An iterative approach was then tried, but it resulted in timeouts, suggesting an inefficient expansion strategy.
+- **Name Substitution Issues:** Throughout these attempts, the logic for substituting variable and species names with their FACSIMILE representations (`s<...>` and `c<...>`) has been problematic, often leading to corrupted expressions.
 
-## 5. Include File Reference
+The current state is that the `fac_generator.py` script is still not producing the correct output, and the expression expansion and name substitution logic needs a complete refactoring.
+
+## 6. Include File Reference
 This section provides a summary of the include files used in the `ethanol.easy` scenario.
 
 -   **`anorg.mcm331.dark.rate`**: Defines rate constants for inorganic "dark" reactions (reactions that occur without light). It uses a `COMPRC` function for complex rate coefficients.
