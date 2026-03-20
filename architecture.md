@@ -8,31 +8,31 @@ The **MCM_SAPHIR_Tool** is a Python-based pipeline designed to translate chemica
 2. **Parsing:** `easy_parser.py` reads the `.easy` file and recursively processes any `#include` directives. It parses the combined content and populates a central data structure (`mechanism.py`).
 3. **Generation:**
    - `fac_generator.py` reads the `Mechanism` data and translates it into FACSIMILE syntax (`.fac` file). This includes expanding user-defined functions and variables.
-   - `hd_generator.py` reads the `Mechanism` data and builds the output column headers (`.hd` file).
-4. **Execution:** `main.py` uses `subprocess` to feed the generated `.fac` file into `facsim_b.exe`.
+   - `hd_generator.py` (to be created) will read the `Mechanism` data and build the output column headers (`.hd` file).
+4. **Execution:** `main.py` (to be created) will use `subprocess` to feed the generated `.fac` file into `facsim_b.exe`.
 5. **Output:** The FACSIMILE executable reads auxiliary data (e.g., `kammer.enz`) and generates time-series outputs (`.cs` for concentrations, `.kv` for reaction rates, `.pd` for production/destruction).
 
 ## 3. File Directory & Roles
 
-- **`mechanism.py`**: The core data model. Contains dataclasses (`Mechanism`, `Reaction`, `Species`) that hold the parsed data in a structured, accessible format.
-- **`easy_parser.py`**: The parser. Handles `#include` directives and uses Regular Expressions to extract parameters, initial conditions, input variables, and reactions from the `.easy` file and included files. It populates the `Mechanism` object.
-- **`fac_generator.py`**: The FACSIMILE script generator. Handles topological sorting of variables and maps the `Mechanism` object into the specific blocks (`COMPILE initial`, `COMPILE equations`, etc.) required by FACSIMILE. It contains the `_expand_expr` function for expanding user-defined functions.
-- **`hd_generator.py`**: The Header generator. Creates the `.hd` file which defines the structure and columns for the `.cs`, `.kv`, and `.pd` output files.
-- **`main.py`**: The entry point/CLI. Orchestrates the pipeline: Argument parsing -> easy_parser -> fac/hd generators -> file writing -> subprocess execution of `facsim_b.exe`.
+The project is currently undergoing a reverse engineering process. The original Python files have been deleted, and new files are being created from scratch to ensure a clean and well-structured implementation.
+
+- **`mechanism.py`**: The core data model, re-created from scratch. Contains dataclasses (`Mechanism`, `Reaction`, `Species`) that hold the parsed data in a structured, accessible format.
+- **`easy_parser.py`**: The parser, re-created from scratch. Handles `#include` directives and uses Regular Expressions to extract parameters, initial conditions, input variables, and reactions from the `.easy` file and included files. It populates the `Mechanism` object.
+- **`fac_generator.py`**: The FACSIMILE script generator, re-created from scratch. It is responsible for translating the `Mechanism` object into a `.fac` file. The current implementation is focused on generating the core logic and handling expression expansion.
 
 ## 4. Mimicking Original File Output
 - **Goal:** To produce a `.fac` file that is a functionally equivalent translation of the definitions in the `.easy` file and its includes.
-- **Original Assumption (Incorrect):** The initial goal was to prevent the expansion of functions and variables. This was based on a misunderstanding of the target `.fac` file.
 - **Corrected Goal:** The new goal is to correctly expand all user-defined EASY functions and variables, while leaving the built-in FACSIMILE functions (like `AMAX`, `EXP`, etc.) as they are.
 
 ## 5. Status Update
-The project is currently in the process of implementing the expression expansion logic in `fac_generator.py`. Several attempts have been made to create a robust expansion mechanism, but they have been met with the following challenges:
-- **Initial Implementation:** A simple, non-expanding function was created, which was based on the incorrect assumption mentioned above.
-- **Recursive Implementation:** A recursive approach was attempted, but it led to "maximum recursion depth exceeded" errors, indicating a problem with the recursion logic.
-- **Iterative Implementation:** An iterative approach was then tried, but it resulted in timeouts, suggesting an inefficient expansion strategy.
-- **Name Substitution Issues:** Throughout these attempts, the logic for substituting variable and species names with their FACSIMILE representations (`s<...>` and `c<...>`) has been problematic, often leading to corrupted expressions.
+The project is being reverse-engineered from the ground up. The original Python files were deleted to facilitate a clean start. The following files have been re-created:
+- `mechanism.py`: Defines the core data structures.
+- `easy_parser.py`: Parses the `.easy` files.
+- `fac_generator.py`: Generates the `.fac` files.
 
-The current state is that the `fac_generator.py` script is still not producing the correct output, and the expression expansion and name substitution logic needs a complete refactoring.
+The current focus is on implementing the expression expansion logic in `fac_generator.py`. This has proven to be a challenging task. Several approaches have been attempted, including recursive and iterative methods, but they have so far failed to correctly handle the nested and complex nature of the expressions. The main difficulty lies in the correct order of expansion for nested functions and parameters.
+
+The current state is that the `fac_generator.py` script can generate a basic `.fac` file, but the expression expansion is not yet functional. This is the main blocker for the project.
 
 ## 6. Include File Reference
 This section provides a summary of the include files used in the `ethanol.easy` scenario.
