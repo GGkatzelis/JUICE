@@ -1,49 +1,82 @@
-# MCM_SAPHIR_Tool Architecture & Status
+🏗️ SAPHIR-MCM Tool: Architecture Overview
 
-## 1. Project Overview
-The **MCM_SAPHIR_Tool** is a Python-based pipeline designed to translate chemical mechanism definitions (from `.easy` format) into FACSIMILE compatible scripts (`.fac`) and header files (`.hd`). It then automates the execution of the legacy FACSIMILE Fortran executable (`facsim_b.exe`) to run simulations and generate output data (`.cs`, `.kv`, `.pd`).
+The tool is designed as a Modular Simulation Framework that replaces the legacy MCM/EASY Fortran-based workflow with a modern Python/ODE-solver ecosystem. It bridges the gap between raw chamber measurement data (.enz files) and the Master Chemical Mechanism (MCM) kinetics.
+1. Data-Centric Design Pattern
 
-## 2. System Architecture & Data Flow
-1. **Input:** `.easy` file (e.g., `NOx_O3.easy`, `ethanol.easy`) containing initial conditions, reactions, rate constants, and file definitions. These files can contain `#include` directives to import other files.
-2. **Parsing:** `easy_parser.py` reads the `.easy` file and recursively processes any `#include` directives. It parses the combined content and populates a central data structure (`mechanism.py`).
-3. **Generation:**
-   - `fac_generator.py` reads the `Mechanism` data and translates it into FACSIMILE syntax (`.fac` file). This includes expanding user-defined functions and variables.
-   - `hd_generator.py` (to be created) will read the `Mechanism` data and build the output column headers (`.hd` file).
-4. **Execution:** `main.py` (to be created) will use `subprocess` to feed the generated `.fac` file into `facsim_b.exe`.
-5. **Output:** The FACSIMILE executable reads auxiliary data (e.g., `kammer.enz`) and generates time-series outputs (`.cs` for concentrations, `.kv` for reaction rates, `.pd` for production/destruction).
+The architecture follows a Decoupled Workflow:
 
-## 3. File Directory & Roles
+    Front-End (saphir_gui.py): A PyQt6-based "Scenario Builder." Its sole purpose is to generate a scenario_config.json. This JSON acts as the "Chemical Matrix," containing user-selected mechanism files, coordinate mappings for environmental data, and chamber-specific artifact constants.
 
-The project is currently undergoing a reverse engineering process. The original Python files have been deleted, and new files are being created from scratch to ensure a clean and well-structured implementation.
+    The Matrix (scenario_config.json): The single source of truth. It defines what is "Measured" (dynamic interpolation) vs. what is "Fixed" (constants) and stores the "Scaling Factors" for chamber emissions.
 
-- **`mechanism.py`**: The core data model, re-created from scratch. Contains dataclasses (`Mechanism`, `Reaction`, `Species`) that hold the parsed data in a structured, accessible format.
-- **`easy_parser.py`**: The parser, re-created from scratch. Handles `#include` directives and uses Regular Expressions to extract parameters, initial conditions, input variables, and reactions from the `.easy` file and included files. It populates the `Mechanism` object.
-- **`fac_generator.py`**: The FACSIMILE script generator, re-created from scratch. It is responsible for translating the `Mechanism` object into a `.fac` file. The current implementation is focused on generating the core logic and handling expression expansion.
+    Back-End Engine (scenario_runner.py): A headless simulation script that consumes the JSON. It uses scipy.integrate.solve_ivp (BDF method) to solve the stiff chemical ODEs.
 
-## 4. Mimicking Original File Output
-- **Goal:** To produce a `.fac` file that is a functionally equivalent translation of the definitions in the `.easy` file and its includes.
-- **Corrected Goal:** The new goal is to correctly expand all user-defined EASY functions and variables, while leaving the built-in FACSIMILE functions (like `AMAX`, `EXP`, etc.) as they are.
+2. Core Technical Components
+A. The Physical-Chemical "Bridge"
 
-## 5. Status Update
-The project is being reverse-engineered from the ground up. The original Python files were deleted to facilitate a clean start. The following files have been re-created:
-- `mechanism.py`: Defines the core data structures.
-- `easy_parser.py`: Parses the `.easy` files.
-- `fac_generator.py`: Generates the `.fac` files.
+The agent must maintain the transparency of how gas-phase mixing ratios are converted to concentrations:
 
-The current focus is on implementing the expression expansion logic in `fac_generator.py`. This has proven to be a challenging task. Several approaches have been attempted, including recursive and iterative methods, but they have so far failed to correctly handle the nested and complex nature of the expressions. The main difficulty lies in the correct order of expansion for nested functions and parameters.
+    Air Density (M): Dynamically calculated using the Ideal Gas Law:
+    M=kB​TP​
 
-The current state is that the `fac_generator.py` script can generate a basic `.fac` file, but the expression expansion is not yet functional. This is the main blocker for the project.
+    All ppb inputs from the GUI are converted to molec/cm3 using this dynamic M.
 
-## 6. Include File Reference
-This section provides a summary of the include files used in the `ethanol.easy` scenario.
+    Dilution Logic: Applied as a first-order decay term for all species:
+    dtd[C]​=MCM_Net−[C]×Vol×3600Flow+0.6​
 
--   **`anorg.mcm331.dark.rate`**: Defines rate constants for inorganic "dark" reactions (reactions that occur without light). It uses a `COMPRC` function for complex rate coefficients.
--   **`anorg.mcm331.dark.mech`**: Lists the inorganic "dark" chemical reactions.
--   **`anorg.mcm331.phot.rate`**: Defines photolysis frequencies (light-dependent reaction rates) for inorganic reactions, using a `PHTFKT` (photolysis function).
--   **`anorg.mcm331.phot.mech`**: Lists the inorganic photolysis reactions.
--   **`ethanol.fac.saphir.incl`**: Contains constants and functions specific to the MCMv3.3.1 ethanol mechanism. This includes definitions for `T` (temperature), `P` (pressure), aliases for chemical species, and photolysis-related functions. It also defines a version of the `PHTFKT` function.
--   **`ethanol.fac.ro2.incl`**: Defines the `RO2` variable as the sum of various peroxy radical species.
--   **`ethanol.fac.mech`**: Contains the core reaction mechanism for the degradation of ethanol.
--   **`ethanol.fac.rate`**: Provides the corresponding rate constants for the reactions listed in `ethanol.fac.mech`.
--   **`j_clear_sky.incl`**: Defines functions for clear-sky photolysis calculations. It includes definitions for `AMAX`, `AMIN`, and `COSX`.
--   **`Cl2_related.incl`**: A large file containing reactions and rate constants for chlorine chemistry, based on a 2015 publication by Xue et al. It defines many species and reactions and appears to be a self-contained chemical mechanism for chlorine-related atmospheric chemistry.
+B. The Artifacts Engine
+
+Unlike standard MCM models, this tool explicitly models SAPHIR "Background" physics:
+
+    Photolytic Sources: Parameterized emissions of HONO and HCHO from Teflon walls, scaled by measured JNO2​ and user-defined Scaling Factors.
+
+    Missing Reactivity (Y): Implementation of a virtual species Y that reacts with OH to match observed chamber reactivity.
+
+    Wall Dark HONO: A background thermal production term (H2​O→HONO) active in dark conditions.
+
+3. Agent Instructions for "Takeover"
+
+When continuing development, the Gemini agent must:
+
+    Maintain GUI Integrity: Ensure that adding new variables (e.g., Cl2​, NOx​ sources) follows the "Active Checkbox + Scaling Factor" pattern for transparency.
+
+    Solver Stability: Use the BDF or Radau methods in solve_ivp as the chemical systems are mathematically "stiff."
+
+    Transparency Console: Always update the logic_preview box in the GUI when a user changes a parameter so the "Science Logic" is visible before the simulation starts.
+
+    Unit Consistency: Strictly enforce K for Temperature, hPa for Pressure, and s−1 for photolysis frequencies.
+
+mechanism.py: Defines the data structures (Species, Reaction).
+
+easy_parser.py: Reads MCM chemistry files.
+
+mechanism_solver.py: The ODE calculator (handles T, M, RH, and Artifact Equations).
+
+saphir_gui.py: The Builder (creates the JSON Matrix).
+
+scenario_runner.py: The Executor (interpolates measurements and runs the solver).
+
+## SAPHIR GUI (`saphir_gui.py`)
+The `saphir_gui.py` module provides a graphical user interface (GUI) for building and configuring simulation scenarios. It is built using PyQt6 and allows users to define environmental conditions, initial concentrations, chamber effects, and chemical injections, and then save this configuration to a `scenario_config.json` file.
+
+### Purpose and Workflow
+The primary goal of the GUI is to streamline the process of creating complex simulation scenarios by providing an intuitive, interactive interface. The workflow is as follows:
+1.  **Load Folder**: The user starts by selecting a root folder for the scenario, which should contain the necessary mechanism files and a SAPHIR `.enz` data file.
+2.  **Configure Scenario**: The user navigates through the tabs to define:
+    -   **Environment**: Maps model variables (e.g., Temperature, Pressure) to data columns from the `.enz` file or sets them as fixed constants.
+    -   **Chamber & Initials**: Sets the initial concentrations of key chemical species and configures chamber-specific artifacts (e.g., wall emissions).
+    -   **Injections**: Defines time-based "burst" injections of chemicals into the model.
+3.  **Live Preview**: A console provides a real-time summary of the configured logic, allowing the user to see the effect of their choices.
+4.  **Generate JSON**: Once the configuration is complete, the user saves the settings to a `scenario_config.json` file, which can then be used by the main pipeline to run the simulation.
+
+### Key Components
+-   **`SaphirGUI(QMainWindow)`**: The main application window.
+-   **Folder Selection**: A simple dialog to select the working directory.
+-   **Sidebar**: Displays a list of mechanism files and the detected `.enz` file.
+-   **Tabs**:
+    -   **Environment**: A table for mapping environmental variables.
+    -   **Chamber & Initials**: Controls for setting initial concentrations and chamber artifacts.
+    -   **Injections**: A table for defining chemical injections.
+-   **Logic Console**: A read-only text area that shows the current state of the model configuration.
+-   **Scientific Help**: Provides tooltips with scientific explanations for various parameters.
+-   **JSON Output**: The `save_json` function serializes the configuration into a structured JSON file.
