@@ -63,20 +63,20 @@ The `saphir_gui.py` module provides a graphical user interface (GUI) for buildin
 The primary goal of the GUI is to streamline the process of creating complex simulation scenarios by providing an intuitive, interactive interface. The workflow is as follows:
 1.  **Load Folder**: The user starts by selecting a root folder for the scenario, which should contain the necessary mechanism files and a SAPHIR `.enz` data file.
 2.  **Configure Scenario**: The user navigates through the tabs to define:
-    -   **Environment**: Maps model variables (e.g., Temperature, Pressure) to data columns from the `.enz` file or sets them as fixed constants.
-    -   **Chamber & Initials**: Sets the initial concentrations of key chemical species and configures chamber-specific artifacts (e.g., wall emissions).
-    -   **Injections**: Defines time-based "burst" injections of chemicals into the model.
-3.  **Live Preview**: A console provides a real-time summary of the configured logic, allowing the user to see the effect of their choices.
+    -   **Constrained Variables**: Maps model variables to `.enz` columns or fixed constants, and defines Derived Photolysis Frequencies (J-Value scaling).
+    -   **Chamber Sources**: Configures chamber-specific artifacts (light/dark emissions, Y-background) and steady Continuous Sources (e.g., mixing influxes, water impurities).
+    -   **Chamber Initialization**: Sets initial concentrations, schedules UTC-based Burst Injections, and defines Custom Reactions for ad-hoc VOC chemistry.
+3.  **Active Scenario Summary**: A sidebar console provides a real-time, highly explicit summary of the configured logic, mapped variables, and active equations.
 4.  **Generate JSON**: Once the configuration is complete, the user saves the settings to a `scenario_config.json` file, which can then be used by the main pipeline to run the simulation.
 
 ### Key Components
 -   **`SaphirGUI(QMainWindow)`**: The main application window.
 -   **Folder Selection**: A simple dialog to select the working directory.
--   **Sidebar**: Displays a list of mechanism files and the detected `.enz` file.
+-   **Sidebar**: Displays mechanism files, detects `.enz` files, calculates exact UTC Start/Stop ranges from data Epochs, and houses the Active Scenario Summary.
 -   **Tabs**:
-    -   **Environment**: A table for mapping environmental variables.
-    -   **Chamber & Initials**: Controls for setting initial concentrations and chamber artifacts.
-    -   **Injections**: A table for defining chemical injections.
--   **Logic Console**: A read-only text area that shows the current state of the model configuration.
+    -   **Constrained Variables**: Tables for environment mapping and derived J-values.
+    -   **Chamber Sources**: Controls for chamber artifacts and continuous species influxes.
+    -   **Chamber Initialization**: Controls for initial conditions, burst injections, and custom reactions.
+-   **Active Scenario Summary**: A read-only text area that details the active state of the matrix.
 -   **Scientific Help**: Provides tooltips with scientific explanations for various parameters.
 -   **JSON Output**: The `save_json` function serializes the configuration into a structured JSON file.
