@@ -65,23 +65,36 @@ class EasyParser:
                 rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
                 continue
 
+            def process_side(side_str):
+                parts = [s.strip() for s in side_str.split('+') if s.strip()]
+                for p in parts:
+                    name = p.split('*')[-1].strip().upper()
+                    # Only add to species if it's not a parameter or reserved word
+                    if name not in RESERVED and name not in self.mech.parameters and len(name) > 0:
+                        if name not in self.mech.species: self.mech.species.append(name)
+                return parts
+
             # 3. Capture Reactions
+            # Case A: EASY format `A + B --> C`
             if '-->' in line and '=' not in line:
                 clean_line = re.split(r'[;{]', line)[0].strip()
                 left, right = clean_line.split('-->', 1)
-                
-                def process_side(side_str):
-                    parts = [s.strip() for s in side_str.split('+') if s.strip()]
-                    for p in parts:
-                        name = p.split('*')[-1].strip().upper()
-                        # Only add to species if it's not a parameter or reserved word
-                        if name not in RESERVED and name not in self.mech.parameters and len(name) > 0:
-                            if name not in self.mech.species: self.mech.species.append(name)
-                    return parts
-
                 reacs = process_side(left)
                 prods = process_side(right)
                 key = clean_line.replace(' ', '').upper()
                 self.mech.reactions.append(Reaction(reacs, prods, rates_map.get(key, "0.0")))
+
+            # Case B: FACSIMILE format `% rate : A + B = C ;`
+            elif line.startswith('%'):
+                clean_line = re.split(r'[;{]', line)[0].strip()
+                parts = clean_line.split(':', 1)
+                if len(parts) == 2:
+                    rate_expr = parts[0].replace('%', '').strip().upper()
+                    rxn_part = parts[1]
+                    if '=' in rxn_part:
+                        left, right = rxn_part.split('=', 1)
+                        reacs = process_side(left)
+                        prods = process_side(right)
+                        self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
         
         return self.mech

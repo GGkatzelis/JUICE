@@ -1,6 +1,6 @@
 🏗️ SAPHIR-MCM Tool: Architecture Overview
 
-The tool is designed as a Modular Simulation Framework that replaces the legacy MCM/EASY Fortran-based workflow with a modern Python/ODE-solver ecosystem. It bridges the gap between raw chamber measurement data (.enz files) and the Master Chemical Mechanism (MCM) kinetics.
+The tool is designed as a full-stack Simulation Framework that replaces the legacy MCM/EASY Fortran-based workflow with a modern Python/ODE-solver ecosystem. It bridges the gap between raw chamber measurement data (.enz files) and the Master Chemical Mechanism (MCM) kinetics, incorporating robust GUI generation, mathematical stiffness solving, and interactive visualization.
 1. Data-Centric Design Pattern
 
 The architecture follows a Decoupled Workflow:
@@ -10,6 +10,8 @@ The architecture follows a Decoupled Workflow:
     The Matrix (scenario_config.json): The single source of truth. It defines what is "Measured" (dynamic interpolation) vs. what is "Fixed" (constants) and stores the "Scaling Factors" for chamber emissions.
 
     Back-End Engine (scenario_runner.py): A headless simulation script that consumes the JSON. It uses scipy.integrate.solve_ivp (BDF method) to solve the stiff chemical ODEs.
+
+    Interactive Diagnostics: Upon completion, the runner automatically launches an interactive Tkinter/Matplotlib viewer, natively merging `.enz` environmental parameters, chamber injection timelines, and chemical species outputs onto overlapping twin-axis graphs.
 
 2. Core Technical Components
 A. The Physical-Chemical "Bridge"
@@ -48,7 +50,7 @@ When continuing development, the Gemini agent must:
 
 mechanism.py: Defines the data structures (Species, Reaction).
 
-easy_parser.py: Reads MCM chemistry files.
+easy_parser.py: Parses dual-syntax chemistry files (Standard FACSIMILE `% k : A + B = C ;` and SAPHIR EASY `A --> B`).
 
 mechanism_solver.py: The ODE calculator (handles T, M, RH, and Artifact Equations).
 
@@ -81,23 +83,13 @@ The primary goal of the GUI is to streamline the process of creating complex sim
 -   **Scientific Help**: Provides tooltips with scientific explanations for various parameters.
 -   **JSON Output**: The `save_json` function serializes the configuration into a structured JSON file.
 
-## To-Dos
+## Next Steps & Future Enhancements
 
-Based on the review of the codebase, here is a list of tasks that need to be completed:
+Based on the recent major milestones (complete injection logic, artifact mapping, integrated plotting), here are the final polish tasks:
 
-1.  **Implement missing artifacts in `scenario_runner.py`**:
-    *   Implement the "Y Background" artifact.
-    *   Implement the "Wall Dark HONO" artifact.
-2.  **Implement injection logic in `scenario_runner.py`**:
-    *   Implement continuous injections.
-    *   Implement burst injections.
-3.  **Complete the `mechanism_solver.py`**:
-    *   The `calculate_rhs` function is very basic. It should be extended to handle all the features described in the `architecture.md` file.
-4.  **Improve the `check_results.py` and `test_pipeline.py` scripts**:
-    *   These scripts are very basic. They should be improved to provide a more comprehensive testing and analysis framework.
-5.  **Update the GUI to support all features**:
-    *   The GUI should be updated to allow the user to configure all the features of the simulation, including all artifacts and injections.
-6.  **Create a proper command-line interface**:
-    *   A proper command-line interface should be created to allow the user to run simulations without using the GUI.
-7.  **Add documentation and examples**:
-    *   The codebase should be documented, and examples should be provided to help users get started.
+1.  **Batch Processing Pipeline**:
+    *   Create a command-line interface or a "Batch Mode" in the GUI to run multiple `scenario_config.json` files sequentially.
+2.  **Data Export & Reporting**:
+    *   Add PDF/PNG export buttons directly to the interactive Matplotlib viewer.
+3.  **Deprecate Obsolete Wrappers**:
+    *   `mechanism_solver.py`'s calculate function has been fully migrated natively into `scenario_runner.py`'s ODE closure for massive dynamic scoping improvements. Legacy stubs should be safely removed.

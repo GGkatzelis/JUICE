@@ -41,9 +41,10 @@ class ScenarioRunner:
             self._setup_environment()
             self._build_mechanism()
             self._solve()
-            self._export_results()
+            out_path = self._export_results()
             print("-" * 40)
             print("✨ All steps completed successfully.")
+            self._show_results(out_path)
         except Exception as e:
             print(f"\n❌ [CRITICAL ERROR] Simulation failed!")
             print(f"Error Details: {str(e)}")
@@ -304,8 +305,175 @@ class ScenarioRunner:
         out_molec = pd.DataFrame(self.sol.y.T, index=self.sol.t, columns=self.solver.species)
         M_array = np.array([self.get_M(t) for t in self.sol.t])
         out_ppb = out_molec.div(M_array * 1e-9, axis=0) # Export back into easy PPB
+        
+        # --- NEW: Append Kammer Data & Mapped Environmental Variables ---
+        for k, func in self.ctx_data.items():
+            try: out_ppb[f"ENV_{k}"] = [float(func(t_val)) for t_val in self.sol.t]
+            except: pass
+            
+        # --- NEW: Record Injection Events as a Timeseries ---
+        out_ppb["INJECTION_EVENT"] = ""
+        saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
+        actual_start_utc = saphir_base_date + pd.to_timedelta(self.t_span[0], unit='s')
+        col_idx = out_ppb.columns.get_loc("INJECTION_EVENT")
+        
+        for b in self.cfg.get('burst_injections', []):
+            if not b.get('target') or not b.get('ppb') or b['ppb'] == "": continue
+            user_dt = pd.to_datetime(b['start_utc'], dayfirst=True)
+            target_utc = user_dt.replace(year=actual_start_utc.year, month=actual_start_utc.month, day=actual_start_utc.day)
+            start_s = (target_utc - saphir_base_date).total_seconds()
+            
+            # Find the closest time step in the ODE output to attach the string
+            idx = np.argmin(np.abs(self.sol.t - start_s))
+            existing = out_ppb.iat[idx, col_idx]
+            evt_str = f"Injected {b['ppb']}ppb {b['target']} @ {b['start_utc']}"
+            out_ppb.iat[idx, col_idx] = (existing + " | " + evt_str) if existing else evt_str
+
         out_ppb.to_csv(output_path)
-        print(f">>> [DEBUG] Results (in ppb) saved to: {output_path}")
+        print(f">>> [DEBUG] Results (including ENV observations) saved to: {output_path}")
+        return output_path
+
+    def _show_results(self, output_path):
+        print(">>> [DEBUG] Launching Interactive Results Viewer...")
+        import tkinter as tk
+        from tkinter import ttk
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+        import matplotlib.pyplot as plt
+
+        df = pd.read_csv(output_path, index_col=0)
+        time_hours = (df.index - df.index[0]) / 3600.0
+        # Hide the text event column from the plotting selector
+        species_list = [c for c in df.columns if c != "INJECTION_EVENT"]
+
+        root = tk.Tk()
+        root.title("SAPHIR Simulation Results Viewer")
+        root.geometry("1000x600")
+
+        # Left sidebar for list and search
+        left_frame = ttk.Frame(root, width=200, padding=10)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+        ttk.Label(left_frame, text="Search Species:").pack(side=tk.TOP, anchor='w')
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(left_frame, textvariable=search_var)
+        search_entry.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+
+        # Plotting Controls
+        btn_frame = ttk.Frame(left_frame)
+        btn_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        ttk.Label(btn_frame, text="Actions (Or Double-Click list):").pack(side=tk.TOP, anchor='w')
+        ttk.Button(btn_frame, text="Replace Plot (Left Axis)", command=lambda: plot_action('replace')).pack(side=tk.TOP, fill=tk.X, pady=1)
+        ttk.Button(btn_frame, text="+ Append Left Axis", command=lambda: plot_action('add_left')).pack(side=tk.TOP, fill=tk.X, pady=1)
+        ttk.Button(btn_frame, text="+ Append Right Axis", command=lambda: plot_action('add_right')).pack(side=tk.TOP, fill=tk.X, pady=1)
+        ttk.Button(btn_frame, text="Clear Plot", command=lambda: plot_action('clear')).pack(side=tk.TOP, fill=tk.X, pady=1)
+
+        list_frame = ttk.Frame(left_frame)
+        list_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, exportselection=False)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        def update_list(*args):
+            search_term = search_var.get().lower()
+            listbox.delete(0, tk.END)
+            for sp in species_list:
+                if search_term in sp.lower(): listbox.insert(tk.END, sp)
+
+        search_var.trace_add("write", update_list)
+        update_list()
+
+        # Right area for plotting
+        right_frame = ttk.Frame(root)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        canvas = FigureCanvasTkAgg(fig, master=right_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar = NavigationToolbar2Tk(canvas, right_frame)
+        toolbar.update()
+
+        plot_state = {'left': [], 'right': []}
+
+        def redraw():
+            ax.clear()
+            if hasattr(ax, 'right_ax'):
+                ax.right_ax.remove()
+                del ax.right_ax
+
+            lines = []
+            labels = []
+            colors = plt.cm.tab10.colors
+            c_idx = 0
+
+            # Left Axis
+            if plot_state['left']:
+                for sp in plot_state['left']:
+                    l, = ax.plot(time_hours, df[sp], label=sp, color=colors[c_idx % 10], linewidth=2)
+                    lines.append(l)
+                    labels.append(sp)
+                    c_idx += 1
+                ax.set_ylabel("Measured Value" if any(s.startswith("ENV_") for s in plot_state['left']) else "Concentration (ppb) [Left]")
+            else:
+                ax.set_ylabel("")
+
+            # Right Axis
+            if plot_state['right']:
+                ax.right_ax = ax.twinx()
+                for sp in plot_state['right']:
+                    l, = ax.right_ax.plot(time_hours, df[sp], label=sp+' (R)', color=colors[c_idx % 10], linewidth=2, linestyle='--')
+                    lines.append(l)
+                    labels.append(sp+' (R)')
+                    c_idx += 1
+                ax.right_ax.set_ylabel("Measured Value" if any(s.startswith("ENV_") for s in plot_state['right']) else "Concentration (ppb) [Right]")
+
+            ax.set_xlabel("Time (Hours Since Start)")
+            ax.grid(True, linestyle='--', alpha=0.7)
+
+            if lines:
+                ax.legend(lines, labels, loc='best')
+
+            # Injections
+            if "INJECTION_EVENT" in df.columns:
+                inj_mask = df["INJECTION_EVENT"].fillna("").astype(str) != ""
+                trans = ax.get_xaxis_transform()
+                for inj_time_s, event_str in df.loc[inj_mask, "INJECTION_EVENT"].items():
+                    h = (inj_time_s - df.index[0]) / 3600.0
+                    ax.axvline(x=h, color='k', linestyle=':', alpha=0.6)
+                    tag = str(event_str).split(' @ ')[0] 
+                    ax.text(h, 1.02, f" {tag}", transform=trans, rotation=45, verticalalignment='bottom', horizontalalignment='left', alpha=0.8, fontsize=9)
+                    
+            ax.set_title("Simulation Results", fontsize=12, fontweight='bold', pad=60)
+            fig.tight_layout()
+            canvas.draw()
+
+        def plot_action(action):
+            selection = listbox.curselection()
+            species = listbox.get(selection[0]) if selection else None
+            
+            if action == 'clear':
+                plot_state['left'] = []; plot_state['right'] = []
+            elif not species: return
+            elif action == 'replace':
+                plot_state['left'] = [species]; plot_state['right'] = []
+            elif action == 'add_left' and species not in plot_state['left']: plot_state['left'].append(species)
+            elif action == 'add_right' and species not in plot_state['right']: plot_state['right'].append(species)
+            redraw()
+
+        listbox.bind('<Double-1>', lambda e: plot_action('replace'))
+
+        # Set default selection to Ethanol if it exists
+        default_sp = "C2H5OH" if "C2H5OH" in species_list else (species_list[0] if species_list else None)
+        if default_sp:
+            try:
+                idx = listbox.get(0, tk.END).index(default_sp)
+                listbox.selection_set(idx)
+                listbox.see(idx)
+                plot_action('replace')
+            except ValueError: pass
+
+        root.mainloop()
 
 if __name__ == "__main__":
     config_file = sys.argv[1] if len(sys.argv) > 1 else "scenario_config.json"
