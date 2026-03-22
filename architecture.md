@@ -80,3 +80,24 @@ The primary goal of the GUI is to streamline the process of creating complex sim
 -   **Active Scenario Summary**: A read-only text area that details the active state of the matrix.
 -   **Scientific Help**: Provides tooltips with scientific explanations for various parameters.
 -   **JSON Output**: The `save_json` function serializes the configuration into a structured JSON file.
+
+## To-Dos
+
+Based on the review of the codebase, here is a list of tasks that need to be completed:
+
+1.  **Implement missing artifacts in `scenario_runner.py`**:
+    *   Implement the "Y Background" artifact.
+    *   Implement the "Wall Dark HONO" artifact.
+2.  **Implement injection logic in `scenario_runner.py`**:
+    *   Implement continuous injections.
+    *   Implement burst injections.
+3.  **Complete the `mechanism_solver.py`**:
+    *   The `calculate_rhs` function is very basic. It should be extended to handle all the features described in the `architecture.md` file.
+4.  **Improve the `check_results.py` and `test_pipeline.py` scripts**:
+    *   These scripts are very basic. They should be improved to provide a more comprehensive testing and analysis framework.
+5.  **Update the GUI to support all features**:
+    *   The GUI should be updated to allow the user to configure all the features of the simulation, including all artifacts and injections.
+6.  **Create a proper command-line interface**:
+    *   A proper command-line interface should be created to allow the user to run simulations without using the GUI.
+7.  **Add documentation and examples**:
+    *   The codebase should be documented, and examples should be provided to help users get started.
