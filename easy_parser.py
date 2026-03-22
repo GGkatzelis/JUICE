@@ -7,6 +7,7 @@ class EasyParser:
         self.mech = Mechanism()
         self.base_path = base_path
         self.include_dir = include_dir
+        self.rates_map = {}
 
     def _find_file(self, filename: str) -> str:
         if os.path.isabs(filename) and os.path.exists(filename): return filename
@@ -29,62 +30,80 @@ class EasyParser:
         return content
 
     def parse(self, filename: str):
+        # Create a new mechanism object for each file, as the runner accumulates them.
+        self.mech = Mechanism()
         full_content = self.preprocess(filename)
         lines = full_content.split('\n')
-        rates_map = {}
         
-        # Reserved math/env keywords (Must be Upper)
         RESERVED = {'EXP', 'LOG', 'LOG10', 'TEMP', 'M', 'P', 'DIL', 'HV', 'RH', 'T', 'H2O', 'O2', 'N2',
-                    'CONST', 'SUM', 'VARIABLE', 'FUNCTION', 'INPUT', 'PHTFKT', 'TROE', 'STOP'}
+                    'CONST', 'SUM', 'VARIABLE', 'FUNCTION', 'INPUT', 'PHTFKT', 'TROE', 'STOP', 'PHOTMMSC'}
 
-        # First pass: collect all parameters
+        if 'JSCALE' not in self.mech.parameters:
+             self.mech.parameters['JSCALE'] = 'JNO2 / 1.165E-02'
+        
         for line in lines:
             line = line.strip()
+            if not line or line.startswith(('*', ';', '#')): continue
+
+            # New photolysis handler
+            photo_match = re.search(r'k\[(.*?)\](?:\{J<(\d+)>)\}\s*=\s*(PHTFKT|PHOTMMSC)\((.*?)\)', line, re.I)
+            if photo_match:
+                rxn_str, j_num, func, args = photo_match.groups()
+                rate_param_name = f"J{j_num}"
+                
+                # Use the first argument of PHTFKT/PHOTMMSC for scaling
+                j_arg = args.split(',')[0].strip()
+                self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
+                
+                self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
+                continue
+
+            # Handle PHOTMMSC calls that don't have a J<> number
+            phot_no_j_match = re.search(r'k\[(.*?)\]\s*=\s*PHOTMMSC\((.*?)\)', line, re.I)
+            if phot_no_j_match:
+                rxn_str, args = phot_no_j_match.groups()
+                # Create a unique name for the rate parameter
+                rate_param_name = f"J_{rxn_str.split('+')[0].strip()}"
+                j_arg = args.split(',')[0].strip()
+                self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
+                self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
+                continue
+
+
             if '=' in line and not line.lower().startswith(('k[', 'initial', 'facs', 'files')):
                 name = line.split('=')[0].strip().upper()
                 if name not in RESERVED:
                     expr = line.split('=')[1].strip()
-                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)$', r'\2', expr, flags=re.I)
+                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)
                     self.mech.parameters[name] = expr.upper()
 
-        # Second pass: collect reactions and initial conditions
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith(('*', ';')): continue
-
-            # 1. Capture INITIAL
             init_match = re.search(r'INITIAL\s*\[(.*?)\]\s*=\s*CONST\((.*)\)', line, re.I)
             if init_match:
                 spec, expr = init_match.groups()
                 self.mech.initial_conditions[spec.strip().upper()] = expr.strip().upper()
                 continue
 
-            # 2. Capture Rate Definitions
             rate_def = re.match(r'k\[(.*?)\]\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line, re.I)
             if rate_def:
-                rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
+                self.rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
                 continue
 
             def process_side(side_str):
                 parts = [s.strip() for s in side_str.split('+') if s.strip()]
                 for p in parts:
                     name = p.split('*')[-1].strip().upper()
-                    # Only add to species if it's not a parameter or reserved word
                     if name not in RESERVED and name not in self.mech.parameters and len(name) > 0:
                         if name not in self.mech.species: self.mech.species.append(name)
                 return parts
 
-            # 3. Capture Reactions
-            # Case A: EASY format `A + B --> C`
             if '-->' in line and '=' not in line:
                 clean_line = re.split(r'[;{]', line)[0].strip()
                 left, right = clean_line.split('-->', 1)
                 reacs = process_side(left)
                 prods = process_side(right)
                 key = clean_line.replace(' ', '').upper()
-                self.mech.reactions.append(Reaction(reacs, prods, rates_map.get(key, "0.0")))
+                self.mech.reactions.append(Reaction(reacs, prods, self.rates_map.get(key, "0.0")))
 
-            # Case B: FACSIMILE format `% rate : A + B = C ;`
             elif line.startswith('%'):
                 clean_line = re.split(r'[;{]', line)[0].strip()
                 parts = clean_line.split(':', 1)
