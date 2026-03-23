@@ -39,6 +39,8 @@ class ScenarioRunner:
         self.t_span = None
         self.ctx_data = {}
         self.var_assignments = []
+        self.debug_counter = 0
+        self.debug_counter = 0
 
     def run(self):
         try:
@@ -158,8 +160,7 @@ class ScenarioRunner:
         y0 = np.zeros(self.solver.num_species)
         
         saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
-        actual_start_utc = saphir_base_date + pd.to_timedelta(self.t_span[0], unit='s')
-
+        
         for spec, ppb in self.cfg.get('initials', {}).items():
             if not ppb: continue
             spec_up = spec.upper()
@@ -264,7 +265,8 @@ class ScenarioRunner:
                 min_dur = min(min_dur, dur)
                 mu = start_s + (dur / 2.0)
                 sigma = dur / 6.0 
-                coeff = (float(b['ppb']) * 1e-9 * self.get_M(start_s)) / (sigma * np.sqrt(2 * np.pi))
+                # Use M from the start of the simulation to prevent extrapolation errors
+                coeff = (float(b['ppb']) * 1e-9 * self.get_M(self.t_span[0])) / (sigma * np.sqrt(2 * np.pi))
                 burst_eval.append({'idx': self.solver.species_to_idx[target], 'mu': mu, 'sigma': sigma, 'coeff': coeff})
 
         def system_ode(t, y):
@@ -274,6 +276,7 @@ class ScenarioRunner:
             T_now = self.ctx_data['TEMP'](t)
 
             ctx = SafeDict()
+            co2_idx = self.solver.species_to_idx.get('CO2', -1)
 
             # 1. Baseline Environment Data (Loads everything from .enz)
             active_constraints = set()
@@ -350,8 +353,17 @@ class ScenarioRunner:
                         else: v = 0.0; break
                     
                     if v > 0.0:
+                        dydt_before = dydt[co2_idx] if co2_idx != -1 else 0
+                        
                         for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                         for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
+                        
+                        dydt_after = dydt[co2_idx] if co2_idx != -1 else 0
+                        if self.debug_counter < 5 and abs(dydt_before - dydt_after) > 1e-10:
+                            print(f"\n!!! ROGUE REACTION altering CO2 gradient !!!")
+                            print(f"  Reaction: {' + '.join(rxn.reactants)} -> {' + '.join(rxn.products)}")
+                            print(f"  Rate Expression: {getattr(rxn, 'rate_expression', 'N/A')}")
+                            print(f"  Velocity v = {v:.4e}")
 
             # 6. Physical Chamber Dynamics
             k_dil = (self.ctx_data['FLOW'](t) + 0.6) / (self.cfg['chamber_vol'] * 3600)
@@ -363,10 +375,13 @@ class ScenarioRunner:
             for b in burst_eval:
                 dydt[b['idx']] += b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
             
+            self.debug_counter += 1
             return dydt
 
-        step_limit = min(min_dur / 2.0, 60.0)
+        step_limit = min(min_dur / 4.0, 15.0)
         print(f">>> [DEBUG] Solving for {len(self.mechanism.species)} species using BDF (Max Step: {step_limit}s)...")
+        k_dil_initial = (self.ctx_data['FLOW'](self.t_span[0]) + 0.6) / (self.cfg['chamber_vol'] * 3600)
+        print(f">>> [DEBUG] Initial Dilution Rate (k_dil) = {k_dil_initial:.4e} s-1")
         self.sol = solve_ivp(system_ode, [self.t_span[0], self.t_span[-1]], y0, method='BDF', t_eval=self.t_span, max_step=step_limit)
         if not self.sol.success: print(f"\n⚠️ [WARNING] ODE Solver stopped early!\nReason: {self.sol.message}")
 
