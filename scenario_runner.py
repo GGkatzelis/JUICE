@@ -6,6 +6,7 @@ from scipy.integrate import solve_ivp
 import sys
 import re
 import warnings
+import time
 
 # Internal Module Imports
 from mechanism_solver import MechanismSolver
@@ -39,8 +40,11 @@ class ScenarioRunner:
         self.t_span = None
         self.ctx_data = {}
         self.var_assignments = []
-        self.debug_counter = 0
-        self.debug_counter = 0
+        self.last_progress_print_time = -1
+        self.t_start = 0
+        self.t_end = 0
+        self.eval_count = 0
+        self.real_start_time = 0.0
 
     def run(self):
         try:
@@ -52,7 +56,7 @@ class ScenarioRunner:
             out_path = self._export_results()
             print("-" * 40)
             print(">>> All steps completed successfully.")
-            # self._show_results(out_path)
+            self._show_results(out_path)
         except Exception as e:
             print(f"\n[ERROR] [CRITICAL ERROR] Simulation failed!")
             print(f"Error Details: {str(e)}")
@@ -133,6 +137,7 @@ class ScenarioRunner:
             products = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
             self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
 
+        # --- BUG FIX: Only purge explicitly mapped GUI variables, leave O3 alone! ---
         for mapped_key in self.cfg['env_map'].keys():
             all_species.discard(mapped_key.upper())
         for bg in ['RH', 'O2', 'N2', 'M']:
@@ -160,7 +165,8 @@ class ScenarioRunner:
         y0 = np.zeros(self.solver.num_species)
         
         saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
-        
+        actual_start_utc = saphir_base_date + pd.to_timedelta(self.t_span[0], unit='s')
+
         for spec, ppb in self.cfg.get('initials', {}).items():
             if not ppb: continue
             spec_up = spec.upper()
@@ -218,7 +224,7 @@ class ScenarioRunner:
                     rxn.safe_expr = compile(expr, '<string>', 'eval')
                     eval(rxn.safe_expr, globals(), test_ctx)
                 except Exception as e: 
-                    failed_rxns.append(f"'{expr}' ({e})")
+                    failed_rxns.append((expr, str(e)))
                     rxn.safe_expr = compile('0.0', '<string>', 'eval')
 
                 rxn.reactants_parsed = []
@@ -242,7 +248,7 @@ class ScenarioRunner:
                         rxn.products_parsed.append({'idx': self.solver.species_to_idx[name], 'coeff': coeff})
 
             if failed_rxns:
-                print(f"[WARNING] {len(failed_rxns)} reactions failed to evaluate and will be DEAD! Details: {failed_rxns}")
+                print(f"[WARNING] {len(failed_rxns)} reactions failed to evaluate and will be DEAD!")
             else:
                 print(">>> [DIAGNOSTICS] All chemical equations evaluated successfully!")
 
@@ -265,8 +271,7 @@ class ScenarioRunner:
                 min_dur = min(min_dur, dur)
                 mu = start_s + (dur / 2.0)
                 sigma = dur / 6.0 
-                # Use M from the start of the simulation to prevent extrapolation errors
-                coeff = (float(b['ppb']) * 1e-9 * self.get_M(self.t_span[0])) / (sigma * np.sqrt(2 * np.pi))
+                coeff = (float(b['ppb']) * 1e-9 * self.get_M(start_s)) / (sigma * np.sqrt(2 * np.pi))
                 burst_eval.append({'idx': self.solver.species_to_idx[target], 'mu': mu, 'sigma': sigma, 'coeff': coeff})
 
         def system_ode(t, y):
@@ -276,7 +281,6 @@ class ScenarioRunner:
             T_now = self.ctx_data['TEMP'](t)
 
             ctx = SafeDict()
-            co2_idx = self.solver.species_to_idx.get('CO2', -1)
 
             # 1. Baseline Environment Data (Loads everything from .enz)
             active_constraints = set()
@@ -288,21 +292,17 @@ class ScenarioRunner:
                 except Exception:
                     pass
 
-            # --- CORRECTED WATER AND RH LOGIC ---
-            if 'H2O' in self.ctx_data:
-                h2o_ppb = float(self.ctx_data['H2O'](t))
-                ctx['H2O'] = (h2o_ppb * 1e-9) * M_now
-                if 'PRESS' in self.ctx_data:
-                    press_hpa = float(self.ctx_data['PRESS'](t))
-                    # Magnus formula for saturation vapor pressure in hPa
-                    p_sat_hpa = 6.112 * np.exp((17.67 * (T_now - 273.15)) / (T_now - 29.65))
-                    p_h2o_hpa = (h2o_ppb * 1e-9) * press_hpa
-                    ctx['RH'] = (p_h2o_hpa / p_sat_hpa) * 100.0
-                else:
-                    ctx['RH'] = 50.0 # Fallback
+            # --- THE WATER AUTO-BALANCER ---
+            if 'RH' in ctx and 'H2O' not in ctx:
+                p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                ctx['H2O'] = (ctx['RH'] / 100.0) * (p_sat / press) 
+                
+            if 'H2O' in ctx and ctx['H2O'] > 0:
+                if ctx['H2O'] > 1.0: ctx['H2O'] = ctx['H2O'] / 100.0 # Fix percentage data
+                ctx['H2O'] = ctx['H2O'] * M_now
             else:
-                ctx['H2O'] = 0.01 * M_now # 1% Fallback
-                ctx['RH'] = 50.0
+                ctx['H2O'] = 0.01 * M_now # Safe 1% Fallback
 
             # --- THE PHOTOLYSIS AUTO-LINKER ---
             if 'J41' not in ctx or ctx['J41'] == 0.0:
@@ -312,13 +312,16 @@ class ScenarioRunner:
             if 'J3' not in ctx or ctx['J3'] == 0.0:
                 if 'JHONO' in ctx: ctx['J3'] = ctx['JHONO']
 
-            # 2. Math & Atmospheric Bulk Gases
             ctx.update({
                 "T": T_now, "TEMP": T_now, "M": M_now, 
-                "O2": 0.2095 * M_now, "N2": 0.7809 * M_now, "np": np, 
-                "exp": np.exp, "EXP": np.exp, "LOG10": np.log10, "log10": np.log10,
-                "LOG": np.log, "log": np.log, "COS": np.cos, "SIN": np.sin, "TAN": np.tan, "SQRT": np.sqrt
+                "O2": 0.2095 * M_now, 
+                "N2": 0.7809 * M_now, 
+                "np": np, "exp": np.exp, "EXP": np.exp, 
+                "LOG10": np.log10, "log10": np.log10,
+                "LOG": np.log, "log": np.log,
+                "COS": np.cos, "SIN": np.sin, "TAN": np.tan, "SQRT": np.sqrt
             })
+            
             for func_name in dir(mcm_kinetics):
                 if not func_name.startswith('_'):
                     func = getattr(mcm_kinetics, func_name)
@@ -327,45 +330,32 @@ class ScenarioRunner:
                     else:
                         ctx[func_name.upper()] = func
 
-            # 3. Inject Simulated Species
             for i, name in enumerate(self.solver.species):
                 ctx[name] = float(y[i])
 
-            # 4. Variable Assignments
             for _ in range(2):
                 for var_name, comp_expr in self.var_assignments:
-                    if var_name in active_constraints: continue 
-                    try: ctx[var_name] = eval(comp_expr, globals(), ctx)
-                    except: ctx[var_name] = 0.0
+                    if var_name in active_constraints:
+                        continue 
+                    try: 
+                        ctx[var_name] = eval(comp_expr, globals(), ctx)
+                    except:
+                        ctx[var_name] = 0.0
 
-            # 5. Chemistry Kinetics
             for rxn in self.mechanism.reactions:
                 try: 
                     k = eval(rxn.safe_expr, globals(), ctx)
                 except:
                     k = 0.0
 
-                if k > 0.0:
+                if k != 0.0:
                     v = k
                     for r in rxn.reactants_parsed: v *= (y[r['idx']] ** r['coeff'])
-                    for r in rxn.reactants_env: 
-                        if r['name'] in ctx: v *= (ctx[r['name']] ** r['coeff'])
-                        else: v = 0.0; break
+                    for r in rxn.reactants_env: v *= (ctx[r['name']] ** r['coeff']) 
                     
-                    if v > 0.0:
-                        dydt_before = dydt[co2_idx] if co2_idx != -1 else 0
-                        
-                        for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
-                        for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
-                        
-                        dydt_after = dydt[co2_idx] if co2_idx != -1 else 0
-                        if self.debug_counter < 5 and abs(dydt_before - dydt_after) > 1e-10:
-                            print(f"\n!!! ROGUE REACTION altering CO2 gradient !!!")
-                            print(f"  Reaction: {' + '.join(rxn.reactants)} -> {' + '.join(rxn.products)}")
-                            print(f"  Rate Expression: {getattr(rxn, 'rate_expression', 'N/A')}")
-                            print(f"  Velocity v = {v:.4e}")
+                    for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
+                    for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
-            # 6. Physical Chamber Dynamics
             k_dil = (self.ctx_data['FLOW'](t) + 0.6) / (self.cfg['chamber_vol'] * 3600)
             dydt -= y * k_dil
 
@@ -375,186 +365,282 @@ class ScenarioRunner:
             for b in burst_eval:
                 dydt[b['idx']] += b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
             
-            self.debug_counter += 1
+            self.eval_count += 1
+            if self.eval_count % 500 == 0 or t > self.last_progress_print_time + 300:
+                progress = max(0.0, min((t - self.t_start) / (self.t_end - self.t_start), 1.0))
+                
+                eta_str = ""
+                if progress > 0:
+                    elapsed = time.time() - self.real_start_time
+                    total_est = elapsed / progress
+                    rem_secs = int(total_est - elapsed)
+                    eta_str = f" | ETA: {rem_secs // 60}m {rem_secs % 60}s"
+                
+                print(f"  ... ODE Eval Step: {self.eval_count} | Sim Time: {t-self.t_start:.1f}s / {self.t_end-self.t_start:.1f}s | Fraction Done: {progress:.3f} ({progress*100:.1f}%){eta_str}")
+                if t > self.last_progress_print_time + 300:
+                    self.last_progress_print_time = t
+
             return dydt
 
-        step_limit = min(min_dur / 4.0, 15.0)
-        print(f">>> [DEBUG] Solving for {len(self.mechanism.species)} species using BDF (Max Step: {step_limit}s)...")
-        k_dil_initial = (self.ctx_data['FLOW'](self.t_span[0]) + 0.6) / (self.cfg['chamber_vol'] * 3600)
-        print(f">>> [DEBUG] Initial Dilution Rate (k_dil) = {k_dil_initial:.4e} s-1")
-        self.sol = solve_ivp(system_ode, [self.t_span[0], self.t_span[-1]], y0, method='BDF', t_eval=self.t_span, max_step=step_limit)
-        if not self.sol.success: print(f"\n⚠️ [WARNING] ODE Solver stopped early!\nReason: {self.sol.message}")
+        solver_method = 'BDF'
+        step_limit = min(min_dur / 2.0, 60.0)
+        
+        self.t_start = self.t_span[0]
+        self.t_end = self.t_span[-1]
+        self.last_progress_print_time = self.t_start
+        self.eval_count = 0
+        self.real_start_time = time.time()
+        
+        print(f">>> [DEBUG] Solving for {len(self.mechanism.species)} species using {solver_method} (Max Step: {step_limit}s)...")
+        self.sol = solve_ivp(
+            system_ode, 
+            [self.t_span[0], self.t_span[-1]], 
+            y0, 
+            method=solver_method, 
+            t_eval=self.t_span, 
+            max_step=step_limit,
+            rtol=1e-3,
+            atol=1e4
+        )
+        if not self.sol.success: print(f"\n[WARNING] ODE Solver stopped early!\nReason: {self.sol.message}")
 
     def _export_results(self):
-        output_path = os.path.join(self.root, "model_output.csv")
-        out_molec = pd.DataFrame(self.sol.y.T, index=self.sol.t, columns=self.solver.species)
-        M_array = np.array([self.get_M(t) for t in self.sol.t])
-        out_ppb = out_molec.div(M_array * 1e-9, axis=0) 
+        print("\n>>> [DATA] Exporting results to CSV...")
         
-        # --- THE RADICAL VISIBILITY EXPORTER ---
-        for rad in ['OH', 'O1D']:
-            if rad in out_molec.columns: out_ppb[f"{rad}_molec"] = out_molec[rad] # Molecules/cm3
-        for rad in ['HO2', 'CH3O2']:
-            if rad in out_molec.columns: out_ppb[f"{rad}_ppt"] = out_molec[rad] / (M_array * 1e-12) # ppt
+        # Transpose sol.y so rows are time steps and columns are species
+        df = pd.DataFrame(self.sol.y.T, columns=self.solver.species, index=self.sol.t)
+        df.index.name = "Time_s"
         
-        for k, func in self.ctx_data.items():
-            try: out_ppb[f"ENV_{k}"] = [float(func(t_val)) for t_val in self.sol.t]
-            except: pass
-            
-        out_ppb["INJECTION_EVENT"] = ""
-        saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
-        actual_start_utc = saphir_base_date + pd.to_timedelta(self.t_span[0], unit='s')
-        col_idx = out_ppb.columns.get_loc("INJECTION_EVENT")
+        # Calculate Air Density (M) for every time step to allow for ppb conversions later
+        df['M'] = [self.get_M(t) for t in self.sol.t]
         
-        for b in self.cfg.get('burst_injections', []):
-            if not b.get('target') or not b.get('ppb') or b['ppb'] == "": continue
-            user_dt = pd.to_datetime(b['start_utc'], dayfirst=True)
-            target_utc = user_dt.replace(year=actual_start_utc.year, month=actual_start_utc.month, day=actual_start_utc.day)
-            start_s = (target_utc - saphir_base_date).total_seconds()
+        # Merge SAPHIR Interpolated Data into the Results CSV for direct comparison
+        for k, v_func in self.ctx_data.items():
+            if callable(v_func):
+                try:
+                    saphir_vals = v_func(self.sol.t)
+                    if isinstance(saphir_vals, (float, int)):
+                        saphir_vals = np.full_like(self.sol.t, saphir_vals)
+                    df[f"SAPHIR_{k}"] = saphir_vals
+                except Exception:
+                    pass
+
+        out_path = os.path.join(self.root, "simulation_results.csv")
+        df.to_csv(out_path)
+        
+        print(f"  ... Saved to {out_path}")
+        return out_path
+
+    def _show_results(self, out_path):
+        try:
+            from PyQt6.QtWidgets import QApplication
+            has_pyqt = True
+        except ImportError:
+            has_pyqt = False
+            print("[WARNING] PyQt6 is not installed. Falling back to simple Matplotlib visualization.")
             
-            idx = np.argmin(np.abs(self.sol.t - start_s))
-            existing = out_ppb.iat[idx, col_idx]
-            evt_str = f"Injected {b['ppb']}ppb {b['target']} @ {b['start_utc']}"
-            out_ppb.iat[idx, col_idx] = (existing + " | " + evt_str) if existing else evt_str
-
-        out_ppb.to_csv(output_path)
-        print(f">>> [DEBUG] Results (including ENV observations) saved to: {output_path}")
-        return output_path
-
-    def _show_results(self, output_path):
-        print(">>> [DEBUG] Launching Interactive Results Viewer...")
-        import tkinter as tk
-        from tkinter import ttk
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-        import matplotlib.pyplot as plt
-
-        df = pd.read_csv(output_path, index_col=0)
-        time_hours = (df.index - df.index[0]) / 3600.0
-        species_list = [c for c in df.columns if c != "INJECTION_EVENT"]
-
-        root = tk.Tk()
-        root.title("SAPHIR Simulation Results Viewer")
-        root.geometry("1000x600")
-
-        left_frame = ttk.Frame(root, width=200, padding=10)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y)
-
-        ttk.Label(left_frame, text="Search Species:").pack(side=tk.TOP, anchor='w')
-        search_var = tk.StringVar()
-        search_entry = ttk.Entry(left_frame, textvariable=search_var)
-        search_entry.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
-
-        btn_frame = ttk.Frame(left_frame)
-        btn_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
-        ttk.Label(btn_frame, text="Actions (Or Double-Click list):").pack(side=tk.TOP, anchor='w')
-        ttk.Button(btn_frame, text="Replace Plot (Left Axis)", command=lambda: plot_action('replace')).pack(side=tk.TOP, fill=tk.X, pady=1)
-        ttk.Button(btn_frame, text="+ Append Left Axis", command=lambda: plot_action('add_left')).pack(side=tk.TOP, fill=tk.X, pady=1)
-        ttk.Button(btn_frame, text="+ Append Right Axis", command=lambda: plot_action('add_right')).pack(side=tk.TOP, fill=tk.X, pady=1)
-        ttk.Button(btn_frame, text="Clear Plot", command=lambda: plot_action('clear')).pack(side=tk.TOP, fill=tk.X, pady=1)
-
-        list_frame = ttk.Frame(left_frame)
-        list_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, exportselection=False)
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=listbox.yview)
-
-        def update_list(*args):
-            search_term = search_var.get().lower()
-            listbox.delete(0, tk.END)
-            for sp in species_list:
-                if search_term in sp.lower(): listbox.insert(tk.END, sp)
-
-        search_var.trace_add("write", update_list)
-        update_list()
-
-        right_frame = ttk.Frame(root)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
-        canvas = FigureCanvasTkAgg(fig, master=right_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        toolbar = NavigationToolbar2Tk(canvas, right_frame)
-        toolbar.update()
-
-        plot_state = {'left': [], 'right': []}
-
-        def redraw():
-            ax.clear()
-            if hasattr(ax, 'right_ax'):
-                ax.right_ax.remove()
-                del ax.right_ax
-
-            lines = []
-            labels = []
-            colors = plt.cm.tab10.colors
-            c_idx = 0
-
-            if plot_state['left']:
-                for sp in plot_state['left']:
-                    l, = ax.plot(time_hours, df[sp], label=sp, color=colors[c_idx % 10], linewidth=2)
-                    lines.append(l)
-                    labels.append(sp)
-                    c_idx += 1
-                ax.set_ylabel("Measured Value" if any(s.startswith("ENV_") for s in plot_state['left']) else "Concentration")
-            else:
-                ax.set_ylabel("")
-
-            if plot_state['right']:
-                ax.right_ax = ax.twinx()
-                for sp in plot_state['right']:
-                    l, = ax.right_ax.plot(time_hours, df[sp], label=sp+' (R)', color=colors[c_idx % 10], linewidth=2, linestyle='--')
-                    lines.append(l)
-                    labels.append(sp+' (R)')
-                    c_idx += 1
-                ax.right_ax.set_ylabel("Measured Value" if any(s.startswith("ENV_") for s in plot_state['right']) else "Concentration")
-
-            ax.set_xlabel("Time (Hours Since Start)")
-            ax.grid(True, linestyle='--', alpha=0.7)
-
-            if lines: ax.legend(lines, labels, loc='best')
-
-            if "INJECTION_EVENT" in df.columns:
-                inj_mask = df["INJECTION_EVENT"].fillna("").astype(str) != ""
-                trans = ax.get_xaxis_transform()
-                for inj_time_s, event_str in df.loc[inj_mask, "INJECTION_EVENT"].items():
-                    h = (inj_time_s - df.index[0]) / 3600.0
-                    ax.axvline(x=h, color='k', linestyle=':', alpha=0.6)
-                    tag = str(event_str).split(' @ ')[0] 
-                    ax.text(h, 1.02, f" {tag}", transform=trans, rotation=45, verticalalignment='bottom', horizontalalignment='left', alpha=0.8, fontsize=9)
-                    
-            ax.set_title("Simulation Results", fontsize=12, fontweight='bold', pad=60)
-            fig.tight_layout()
-            canvas.draw()
-
-        def plot_action(action):
-            selection = listbox.curselection()
-            species = listbox.get(selection[0]) if selection else None
+        if has_pyqt:
+            print(">>> [VISUALIZATION] Launching Interactive PyQt Viewer...")
+            df = pd.read_csv(out_path, index_col=0)
+            app = QApplication.instance()
+            if app is None:
+                app = QApplication(sys.argv)
+            viewer = ResultsViewer(df)
+            viewer.show()
+            app.exec()
+            return
             
-            if action == 'clear': plot_state['left'] = []; plot_state['right'] = []
-            elif not species: return
-            elif action == 'replace': plot_state['left'] = [species]; plot_state['right'] = []
-            elif action == 'add_left' and species not in plot_state['left']: plot_state['left'].append(species)
-            elif action == 'add_right' and species not in plot_state['right']: plot_state['right'].append(species)
-            redraw()
+        # Fallback to simple generic plot if PyQt is missing
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            return
+        
+        df = pd.read_csv(out_path, index_col=0)
+        t_hours = (df.index - df.index[0]) / 3600.0
+        
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        ax1.set_xlabel('Time (Hours)')
+        ax1.set_ylabel('Mixing Ratio (ppb)', color='black')
+        
+        macro_species = ['O3', 'NO', 'NO2', 'HONO', 'C2H5OH', 'HCHO']
+        for spec in macro_species:
+            if spec in df.columns:
+                ppb_vals = (df[spec] / df['M']) * 1e9
+                ax1.plot(t_hours, ppb_vals, label=f"{spec} (ppb)")
+                
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        
+        radical_species = ['OH', 'HO2', 'RO2']
+        if any(r in df.columns for r in radical_species):
+            ax2 = ax1.twinx()
+            ax2.set_ylabel('Radicals (molec/cm³)', color='red')
+            for r in radical_species:
+                if r in df.columns:
+                    ax2.plot(t_hours, df[r], label=f"{r} (molec/cm³)", linestyle='--')
+            
+        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=5)
+        plt.title('SAPHIR Scenario Simulation')
+        plt.tight_layout()
+        plt.show()
 
-        listbox.bind('<Double-1>', lambda e: plot_action('replace'))
-        default_sp = "C2H5OH" if "C2H5OH" in species_list else (species_list[0] if species_list else None)
-        if default_sp:
-            try:
-                idx = listbox.get(0, tk.END).index(default_sp)
-                listbox.selection_set(idx)
-                listbox.see(idx)
-                plot_action('replace')
-            except ValueError: pass
+try:
+    from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                                 QListWidget, QPushButton, QLabel, QComboBox, 
+                                 QSplitter, QLineEdit)
+    from PyQt6.QtCore import Qt
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+    from matplotlib.figure import Figure
+except ImportError:
+    pass
 
-        root.mainloop()
+class ResultsViewer(QMainWindow):
+    def __init__(self, df):
+        super().__init__()
+        self.df = df.copy()
+        self.setWindowTitle("Interactive SAPHIR/MCM Results Viewer")
+        self.setGeometry(50, 50, 1500, 850)
+
+        # Convert index to Hours for X-Axis
+        self.df.index = (self.df.index - self.df.index[0]) / 3600.0
+        
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QHBoxLayout(central)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_layout.addWidget(splitter)
+        
+        # --- LEFT PANEL (Controls) ---
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search variable...")
+        self.search_box.textChanged.connect(self.filter_list)
+        left_layout.addWidget(self.search_box)
+        
+        self.var_list = QListWidget()
+        self.var_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.var_list.itemDoubleClicked.connect(self.add_selected)
+        self.all_vars = sorted([c for c in self.df.columns if c != 'M'])
+        self.var_list.addItems(self.all_vars)
+        left_layout.addWidget(self.var_list)
+        
+        control_layout = QVBoxLayout()
+        control_layout.addWidget(QLabel("Target Axis:"))
+        self.axis_combo = QComboBox()
+        self.axis_combo.addItems(["Left Axis (Main)", "Right Axis (Main)", "Left Axis (Offset)", "Right Axis (Offset)"])
+        control_layout.addWidget(self.axis_combo)
+        
+        control_layout.addWidget(QLabel("Conversion (MCM Data):"))
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["Convert to ppb", "Native (molec/cm³ or SAPHIR unit)"])
+        control_layout.addWidget(self.unit_combo)
+        
+        btn_add = QPushButton("Plot Selected (Or Double-Click List)")
+        btn_add.clicked.connect(self.add_selected)
+        control_layout.addWidget(btn_add)
+        
+        btn_clear = QPushButton("Clear Canvas")
+        btn_clear.clicked.connect(self.clear_plot)
+        control_layout.addWidget(btn_clear)
+        
+        left_layout.addLayout(control_layout)
+        splitter.addWidget(left_panel)
+        
+        # --- RIGHT PANEL (Canvas) ---
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        
+        self.fig = Figure(figsize=(10, 6))
+        self.canvas = FigureCanvas(self.fig)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        
+        right_layout.addWidget(self.toolbar)
+        right_layout.addWidget(self.canvas)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([300, 1200])
+        
+        self.init_axes()
+        self._plot_defaults()
+
+    def filter_list(self, text):
+        self.var_list.clear()
+        self.var_list.addItems([v for v in self.all_vars if text.lower() in v.lower()])
+
+    def init_axes(self):
+        self.fig.clear()
+        self.ax1 = self.fig.add_subplot(111)
+        self.ax1.set_xlabel("Time (Hours)", fontweight='bold')
+        self.ax1.grid(True, linestyle='--', alpha=0.4)
+        self.ax2 = self.ax1.twinx()
+        self.ax3 = self.ax1.twinx()
+        self.ax3.spines['right'].set_position(('outward', 60))
+        self.ax4 = self.ax1.twinx()
+        self.ax4.spines['left'].set_position(('outward', 60))
+        self.ax4.yaxis.set_ticks_position('left')
+        self.ax4.yaxis.set_label_position('left')
+        
+        self.axes_map = {
+            "Left Axis (Main)": self.ax1, "Right Axis (Main)": self.ax2,
+            "Right Axis (Offset)": self.ax3, "Left Axis (Offset)": self.ax4
+        }
+        self.fig.subplots_adjust(left=0.2, right=0.8, top=0.85)
+
+    def add_selected(self):
+        selected = [item.text() for item in self.var_list.selectedItems()]
+        if not selected and self.var_list.currentItem():
+            selected = [self.var_list.currentItem().text()]
+            
+        ax_name = self.axis_combo.currentText()
+        unit = self.unit_combo.currentText()
+        
+        for var in selected:
+            self.plot_variable(var, ax_name, unit)
+        self._update_legends()
+        self.canvas.draw()
+
+    def clear_plot(self):
+        self.init_axes()
+        self.canvas.draw()
+
+    def plot_variable(self, var_name, axis_name, unit):
+        ax = self.axes_map[axis_name]
+        data = self.df[var_name].copy()
+        
+        if "ppb" in unit and not var_name.startswith("SAPHIR_") and 'M' in self.df.columns:
+            data = (data / self.df['M']) * 1e9
+            label = f"{var_name} (ppb)"
+        else:
+            label = var_name
+            
+        ax.plot(self.df.index, data, label=label, linewidth=2.0)
+        if not ax.get_ylabel(): ax.set_ylabel(axis_name, fontweight='bold')
+
+    def _update_legends(self):
+        lines, labels = [], []
+        for ax in self.axes_map.values():
+            h, l = ax.get_legend_handles_labels()
+            lines.extend(h); labels.extend(l)
+        if self.fig.legends: self.fig.legends[0].remove()
+        if lines: self.fig.legend(lines, labels, loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=6)
+
+    def _plot_defaults(self):
+        if 'C2H5OH' in self.df.columns: self.plot_variable('C2H5OH', "Left Axis (Main)", "Convert to ppb")
+        if 'NO' in self.df.columns: self.plot_variable('NO', "Right Axis (Main)", "Convert to ppb")
+        if 'NO2' in self.df.columns: self.plot_variable('NO2', "Right Axis (Main)", "Convert to ppb")
+        if 'O3' in self.df.columns: self.plot_variable('O3', "Right Axis (Offset)", "Convert to ppb")
+        if 'OH' in self.df.columns: self.plot_variable('OH', "Left Axis (Offset)", "Native")
+        if 'HO2' in self.df.columns: self.plot_variable('HO2', "Left Axis (Offset)", "Native")
+        self._update_legends()
+        self.canvas.draw()
 
 if __name__ == "__main__":
-    config_file = sys.argv[1] if len(sys.argv) > 1 else "scenario_config.json"
-    try:
-        runner = ScenarioRunner(config_file)
-        runner.run()
-    except Exception as e:
-        print(f"[ERROR] [STARTUP ERROR] Could not initialize runner: {e}")
+    if len(sys.argv) < 2:
+        print("Usage: python scenario_runner.py <path_to_scenario_config.json>")
+        sys.exit(1)
+        
+    config_path = sys.argv[1]
+    runner = ScenarioRunner(config_path)
+    runner.run()
