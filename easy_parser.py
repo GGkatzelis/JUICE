@@ -19,10 +19,14 @@ class EasyParser:
         raise FileNotFoundError(f"Include file '{filename}' not found.")
 
     def preprocess(self, filename: str) -> str:
-        path = self._find_file(filename)
-        with open(path, 'r', encoding='latin-1') as f:
-            content = f.read()
-        content = re.sub(r';.*', '', content) 
+        try:
+            path = self._find_file(filename)
+            with open(path, 'r', encoding='latin-1') as f:
+                content = f.read()
+        except FileNotFoundError:
+            print(f"[WARNING] Include file '{filename}' not found. Skipping.")
+            return ""
+        # content = re.sub(r';.*', '', content) # DEACTIVATED: Keep comments for line-by-line parsing
         def include_replacer(match):
             return self.preprocess(match.group(1).strip())
         content = re.sub(r'#include\s+["\']?([^"\'\s]+)["\']?', include_replacer, content)
@@ -42,48 +46,63 @@ class EasyParser:
              self.mech.parameters['JSCALE'] = 'JNO2 / 1.165E-02'
         
         for line in lines:
-            line = line.strip()
-            if not line or line.startswith(('*', ';', '#')): continue
+            original_line = line.strip()
+            if not original_line:
+                continue
+
+            is_commented = original_line.startswith(('*', ';', '#'))
+            
+            # Clean the line for parameter detection
+            clean_line = re.sub(r'^\s*[*;#]+\s*', '', original_line).strip()
+            
+            # Remove trailing comments for reaction parsing
+            line_for_rxn = original_line.split(';')[0].strip()
+
+            if not clean_line:
+                continue
+
+            # Handle parameter definitions (check in the cleaned line)
+            if '=' in clean_line and not clean_line.lower().startswith(('k[', 'initial', 'facs', 'files')) and '-->' not in clean_line and not clean_line.startswith('%'):
+                name = clean_line.split('=')[0].strip().upper()
+                if name and name not in RESERVED:
+                    expr = clean_line.split('=')[1].strip()
+                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)
+                    
+                    target_dict = self.mech.commented_parameters if is_commented else self.mech.parameters
+                    target_dict[name] = expr.upper()
+                continue
+            
+            # From here, we only care about non-commented lines for reactions
+            if is_commented:
+                continue
 
             # New photolysis handler
-            photo_match = re.search(r'k\[(.*?)\](?:\{J<(\d+)>)\}\s*=\s*(PHTFKT|PHOTMMSC)\((.*?)\)', line, re.I)
+            photo_match = re.search(r'k\[(.*?)\](?:\{J<(\d+)>)\}\s*=\s*(PHTFKT|PHOTMMSC)\((.*?)\)', line_for_rxn, re.I)
             if photo_match:
                 rxn_str, j_num, func, args = photo_match.groups()
                 rate_param_name = f"J{j_num}"
-                
-                # Use the first argument of PHTFKT/PHOTMMSC for scaling
                 j_arg = args.split(',')[0].strip()
                 self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
-                
                 self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
                 continue
 
             # Handle PHOTMMSC calls that don't have a J<> number
-            phot_no_j_match = re.search(r'k\[(.*?)\]\s*=\s*PHOTMMSC\((.*?)\)', line, re.I)
+            phot_no_j_match = re.search(r'k\[(.*?)\]\s*=\s*PHOTMMSC\((.*?)\)', line_for_rxn, re.I)
             if phot_no_j_match:
                 rxn_str, args = phot_no_j_match.groups()
-                # Create a unique name for the rate parameter
                 rate_param_name = f"J_{rxn_str.split('+')[0].strip()}"
                 j_arg = args.split(',')[0].strip()
                 self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
                 self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
                 continue
 
-
-            if '=' in line and not line.lower().startswith(('k[', 'initial', 'facs', 'files')):
-                name = line.split('=')[0].strip().upper()
-                if name not in RESERVED:
-                    expr = line.split('=')[1].strip()
-                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)
-                    self.mech.parameters[name] = expr.upper()
-
-            init_match = re.search(r'INITIAL\s*\[(.*?)\]\s*=\s*CONST\((.*)\)', line, re.I)
+            init_match = re.search(r'INITIAL\s*\[(.*?)\]\s*=\s*CONST\((.*)\)', line_for_rxn, re.I)
             if init_match:
                 spec, expr = init_match.groups()
                 self.mech.initial_conditions[spec.strip().upper()] = expr.strip().upper()
                 continue
 
-            rate_def = re.match(r'k\[(.*?)\]\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line, re.I)
+            rate_def = re.match(r'k\[(.*?)\]\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line_for_rxn, re.I)
             if rate_def:
                 self.rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
                 continue
@@ -96,17 +115,15 @@ class EasyParser:
                         if name not in self.mech.species: self.mech.species.append(name)
                 return parts
 
-            if '-->' in line and '=' not in line:
-                clean_line = re.split(r'[;{]', line)[0].strip()
-                left, right = clean_line.split('-->', 1)
+            if '-->' in line_for_rxn and '=' not in line_for_rxn:
+                left, right = line_for_rxn.split('-->', 1)
                 reacs = process_side(left)
                 prods = process_side(right)
-                key = clean_line.replace(' ', '').upper()
+                key = line_for_rxn.replace(' ', '').upper()
                 self.mech.reactions.append(Reaction(reacs, prods, self.rates_map.get(key, "0.0")))
 
-            elif line.startswith('%'):
-                clean_line = re.split(r'[;{]', line)[0].strip()
-                parts = clean_line.split(':', 1)
+            elif line_for_rxn.startswith('%'):
+                parts = line_for_rxn.split(':', 1)
                 if len(parts) == 2:
                     rate_expr = parts[0].replace('%', '').strip().upper()
                     rxn_part = parts[1]

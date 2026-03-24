@@ -11,6 +11,7 @@ class Reaction:
 class Mechanism:
     species: List[str] = field(default_factory=list)
     parameters: Dict[str, str] = field(default_factory=dict)
+    commented_parameters: Dict[str, str] = field(default_factory=dict)
     reactions: List[Reaction] = field(default_factory=list)
     initial_conditions: Dict[str, str] = field(default_factory=dict)
     input_vars: List[str] = field(default_factory=list)

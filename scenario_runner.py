@@ -98,6 +98,8 @@ class ScenarioRunner:
         # Sort files to ensure .rate definitions are parsed before .mech files
         mech_files = sorted(self.cfg['mechanism_files'], key=lambda x: ".rate" not in x)
         
+        active_parameters = self.cfg.get('active_parameters')
+        
         for f_name in mech_files:
             f_path = os.path.join(chem_path, f_name)
             if os.path.exists(f_path):
@@ -105,12 +107,21 @@ class ScenarioRunner:
                 self.mechanism.species.extend(m_part.species)
                 self.mechanism.reactions.extend(m_part.reactions)
                 
-                for p_name, p_expr in m_part.parameters.items():
+                # Process both active and commented parameters from the parser
+                all_params = {**m_part.parameters, **m_part.commented_parameters}
+
+                for p_name, p_expr in all_params.items():
+                    # If active_parameters list exists, only include parameters from that list
+                    if active_parameters is not None and p_name.upper() not in active_parameters:
+                        continue
+
                     p_clean = p_expr.replace('@', '**')
                     p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
                     p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
-                    try: self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
-                    except: pass
+                    try:
+                        self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
+                    except Exception as e:
+                        print(f"[WARNING] Could not compile parameter {p_name}: {e}")
                     
         for j_target, j_expr in self.cfg.get('j_scalings', {}).items():
             j_clean = j_expr.upper().replace('@', '**')

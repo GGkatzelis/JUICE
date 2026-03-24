@@ -52,7 +52,7 @@ mechanism.py: Defines the data structures (Species, Reaction).
 
 easy_parser.py: Parses dual-syntax chemistry files (Standard FACSIMILE `% k : A + B = C ;` and SAPHIR EASY `A --> B`).
 
-mechanism_solver.py: The ODE calculator (handles T, M, RH, and Artifact Equations).
+mechanism_solver.py: A legacy ODE calculator. Its core functionality has been migrated to scenario_runner.py for improved performance and dynamic scoping.
 
 saphir_gui.py: The Builder (creates the JSON Matrix).
 
@@ -93,14 +93,3 @@ Based on the recent major milestones (complete injection logic, artifact mapping
     *   Add PDF/PNG export buttons directly to the interactive Matplotlib viewer.
 3.  **Deprecate Obsolete Wrappers**:
     *   `mechanism_solver.py`'s calculate function has been fully migrated natively into `scenario_runner.py`'s ODE closure for massive dynamic scoping improvements. Legacy stubs should be safely removed.
-
-## Known Issues
-
-### Chemistry Activation Failure
-
-There is a critical issue where the chemical mechanism is not being properly activated during simulations. This is observed in scenarios involving ethanol injections, with the following symptoms:
-
-*   **Radicals are not produced**: The concentrations of key radicals, such as `OH` and `HO2`, remain at or near zero throughout the simulation.
-*   **No product formation**: Consequently, no reaction products are formed from the injected ethanol, and its concentration only decreases due to dilution.
-
-This suggests a fundamental problem in the ODE solver setup or the mechanism integration within `scenario_runner.py`. The rate evaluations might be failing, causing reaction rates to be zero.
