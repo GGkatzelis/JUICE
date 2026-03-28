@@ -41,3 +41,22 @@ KMT08 = KMT09 = KMT10 = KMT11 = KMT12 = KMT13 = KMT14 = KMT15 = KMT16 = fallback
 def KRO2(TEMP):
     """Generic RO2 + NO reaction rate"""
     return 2.9E-12 * np.exp(350 / TEMP)
+
+def COMPRC(k0_full, ki, Fc):
+    """
+    Lindemann-Hinshelwood Troe rate constant — Python equivalent of the EASY/FACSIMILE
+    COMPRC FUNCTION[].
+
+    k0_full : low-pressure limit ALREADY multiplied by M and temperature factor [s^-1 or cm3/molec/s]
+    ki      : high-pressure limit [cm3/molec/s]
+    Fc      : broadening factor (dimensionless, typically 0.3–0.85)
+
+    Formula (IUPAC): k = k0*ki/(k0+ki) * F
+      where F = Fc ^ (1 / (1 + (log10(k0/ki) / N)^2))
+      and   N = 0.75 - 1.27*log10(Fc)
+    """
+    ki_safe = np.clip(ki, 1e-300, None)
+    ratio = np.clip(k0_full / ki_safe, 1e-30, None)
+    N = 0.75 - 1.27 * np.log10(np.clip(Fc, 1e-30, None))
+    F = np.float_power(np.clip(Fc, 1e-30, None), 1.0 / (1.0 + (np.log10(ratio) / N) ** 2))
+    return k0_full * ki / (k0_full + ki_safe) * F

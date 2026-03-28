@@ -205,15 +205,26 @@ class ScenarioRunner:
                     if func_name.startswith('KMT'):
                         test_ctx[func_name.upper()] = lambda *args, f=func: f(*args, test_ctx['TEMP'], test_ctx['M'])
                     else:
-                        test_ctx[func_name.upper()] = func
-            
+                        test_ctx[func_name.upper()] = func  # COMPRC loaded as direct callable
+
+            # Seed test PHTFKT callable using SZA=45 test conditions
+            _test_cosx = max(np.cos(45.0 * 0.0174533), 0.01)
+            test_ctx['COSX']     = _test_cosx
+            test_ctx['LNO2']     = 1.165e-2
+            test_ctx['MNO2']     = 0.244
+            test_ctx['NNO2']     = -0.267
+            test_ctx['PHTFKT']   = lambda a, b, c, _c=_test_cosx: a * _c**b * np.exp(c / _c)
+            test_ctx['PHTFKT_CS']= test_ctx['PHTFKT']
+            test_ctx['AMAX']     = np.maximum
+            test_ctx['AMIN']     = np.minimum
+
             for k in self.ctx_data.keys(): test_ctx[k.upper()] = 1.0
             for s in self.solver.species: test_ctx[s] = 1.0
-            
+
             failed_vars = []
             for _ in range(2):
                 for var_name, comp_expr in self.var_assignments:
-                    try: 
+                    try:
                         test_ctx[var_name] = eval(comp_expr, globals(), test_ctx)
                     except Exception as e:
                         if var_name not in [v[0] for v in failed_vars]:
@@ -315,43 +326,84 @@ class ScenarioRunner:
             else:
                 ctx['H2O'] = 0.01 * M_now # Safe 1% Fallback
 
-            # --- THE PHOTOLYSIS AUTO-LINKER ---
-            if 'J41' not in ctx or ctx['J41'] == 0.0:
-                if 'JO1D' in ctx: ctx['J41'] = ctx['JO1D']
-            if 'J1' not in ctx or ctx['J1'] == 0.0:
-                if 'JNO2' in ctx: ctx['J1'] = ctx['JNO2']
-            if 'J3' not in ctx or ctx['J3'] == 0.0:
-                if 'JHONO' in ctx: ctx['J3'] = ctx['JHONO']
-
             ctx.update({
-                "T": T_now, "TEMP": T_now, "M": M_now, 
-                "O2": 0.2095 * M_now, 
-                "N2": 0.7809 * M_now, 
-                "np": np, "exp": np.exp, "EXP": np.exp, 
+                "T": T_now, "TEMP": T_now, "M": M_now,
+                "O2": 0.2095 * M_now,
+                "N2": 0.7809 * M_now,
+                "np": np, "exp": np.exp, "EXP": np.exp,
                 "LOG10": np.log10, "log10": np.log10,
                 "LOG": np.log, "log": np.log,
                 "COS": np.cos, "SIN": np.sin, "TAN": np.tan, "SQRT": np.sqrt
             })
-            
+
+            # Load mcm_kinetics: COMPRC gets loaded as a direct callable (no KMT wrapping).
+            # KMT lambdas are loaded but will be overwritten by COMPRC-based var_assignments
+            # which produce correct scalar values at the current T and M.
             for func_name in dir(mcm_kinetics):
                 if not func_name.startswith('_'):
                     func = getattr(mcm_kinetics, func_name)
                     if func_name.startswith('KMT'):
                         ctx[func_name.upper()] = lambda *args, f=func: f(*args, T_now, M_now)
                     else:
-                        ctx[func_name.upper()] = func
+                        ctx[func_name.upper()] = func  # COMPRC loaded here as a true callable
 
             for i, name in enumerate(self.solver.species):
                 ctx[name] = float(y[i])
 
-            for _ in range(2):
-                for var_name, comp_expr in self.var_assignments:
-                    if var_name in active_constraints:
-                        continue 
-                    try: 
-                        ctx[var_name] = eval(comp_expr, globals(), ctx)
-                    except:
-                        ctx[var_name] = 0.0
+            # --- PASS 1: Evaluate constants and COMPRC-based KMT rates ---
+            # This computes COSX, LNO2, MNO2, NNO2, JSCALE, KMT01-KMT14, KFPAN, KBPAN, etc.
+            # PHTFKT-based J-values will fail here (PHTFKT not yet callable) — that is expected.
+            for var_name, comp_expr in self.var_assignments:
+                if var_name in active_constraints:
+                    continue
+                try:
+                    ctx[var_name] = eval(comp_expr, globals(), ctx)
+                except:
+                    ctx[var_name] = 0.0
+
+            # --- BUILD PHTFKT PYTHON CALLABLE using COSX and measured JNO2 from pass 1 ---
+            _cosx = max(float(ctx.get('COSX', np.cos(float(ctx.get('SZ', 45.0)) * 0.0174533))), 0.01)
+            _jno2 = float(ctx.get('JNO2', 0.0))
+            _lno2 = float(ctx.get('LNO2', 1.165e-2))
+            _mno2 = float(ctx.get('MNO2', 0.244))
+            _nnno2 = float(ctx.get('NNO2', -0.267))
+            _hv   = float(ctx.get('HV', 0.0))
+
+            def _phtfkt(a, b, c, _c=_cosx, _j=_jno2, _l=_lno2, _m=_mno2, _n=_nnno2, _h=_hv):
+                if _h == 0 or _c <= 0:
+                    return 0.0
+                cs_j = a * _c**b * np.exp(c / _c)
+                if _j > 0:
+                    jno2_cs = _l * _c**_m * np.exp(_n / _c)
+                    scale = min(_j / jno2_cs, 1.0) if jno2_cs > 0 else 1.0
+                else:
+                    scale = 1.0
+                return cs_j * scale
+
+            ctx['PHTFKT']    = _phtfkt
+            ctx['PHTFKT_CS'] = lambda a, b, c, _c=_cosx: a * _c**b * np.exp(c / _c)
+            ctx['AMAX']      = np.maximum
+            ctx['AMIN']      = np.minimum
+
+            # --- PASS 2: Evaluate J-values using the real PHTFKT callable ---
+            for var_name, comp_expr in self.var_assignments:
+                if var_name in active_constraints:
+                    continue
+                try:
+                    ctx[var_name] = eval(comp_expr, globals(), ctx)
+                except:
+                    ctx[var_name] = 0.0
+
+            # --- PHOTOLYSIS AUTO-LINKER (runs AFTER var_assignments as fallback) ---
+            # Seeds any J-values that are still 0 from measured .enz data.
+            # MCM J-numbering: J1=JO1D (O3->O1D), J4=JNO2 (NO2->NO+O),
+            #                  J7=JHONO (HONO->OH+NO), J3=JH2O2 (H2O2->2OH)
+            if ctx.get('J1',  0.0) == 0.0 and ctx.get('JO1D',   0.0) > 0: ctx['J1']  = ctx['JO1D']
+            if ctx.get('J4',  0.0) == 0.0 and ctx.get('JNO2',   0.0) > 0: ctx['J4']  = ctx['JNO2']
+            if ctx.get('J7',  0.0) == 0.0 and ctx.get('JHONO',  0.0) > 0: ctx['J7']  = ctx['JHONO']
+            if ctx.get('J3',  0.0) == 0.0 and ctx.get('JH2O2',  0.0) > 0: ctx['J3']  = ctx['JH2O2']
+            if ctx.get('J11', 0.0) == 0.0 and ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R']
+            if ctx.get('J12', 0.0) == 0.0 and ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M']
 
             for rxn in self.mechanism.reactions:
                 try: 
