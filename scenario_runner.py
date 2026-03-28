@@ -118,6 +118,7 @@ class ScenarioRunner:
                     p_clean = p_expr.replace('@', '**')
                     p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
                     p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
+                    p_clean = p_clean.strip()
                     try:
                         self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
                     except Exception as e:
@@ -155,6 +156,33 @@ class ScenarioRunner:
             all_species.discard(bg)
 
         self.mechanism.species = sorted(list(all_species))
+
+        # Apply reaction exclusions defined in the scenario JSON
+        excluded_rxns = self.cfg.get('excluded_reactions', [])
+        if excluded_rxns:
+            def _canon(species_list):
+                result = set()
+                for s in species_list:
+                    name = s.split('*')[-1].strip().upper()
+                    if name and not name.replace('.', '').isdigit():
+                        result.add(name)
+                return frozenset(result)
+
+            exclude_keys = set()
+            for e in excluded_rxns:
+                r_tokens = [t.strip() for t in e['reactants'].split('+') if t.strip()]
+                p_tokens = [t.strip() for t in e['products'].split('+') if t.strip()]
+                exclude_keys.add((_canon(r_tokens), _canon(p_tokens)))
+
+            before = len(self.mechanism.reactions)
+            self.mechanism.reactions = [
+                rxn for rxn in self.mechanism.reactions
+                if (_canon(rxn.reactants), _canon(rxn.products)) not in exclude_keys
+            ]
+            removed = before - len(self.mechanism.reactions)
+            if removed:
+                print(f"  ... Excluded {removed} reaction(s) per scenario config.")
+
         self._add_artifacts()
 
     def _add_artifacts(self):
@@ -297,7 +325,6 @@ class ScenarioRunner:
                 burst_eval.append({'idx': self.solver.species_to_idx[target], 'mu': mu, 'sigma': sigma, 'coeff': coeff})
 
         def system_ode(t, y):
-            y = np.maximum(y, 0.0) 
             dydt = np.zeros(self.solver.num_species)
             M_now = self.get_M(t)
             T_now = self.ctx_data['TEMP'](t)
@@ -411,6 +438,8 @@ class ScenarioRunner:
                 except:
                     k = 0.0
 
+                if callable(k):
+                    k = 0.0  # KMT lambda was not overwritten by var_assignments — config error
                 if k != 0.0:
                     v = k
                     for r in rxn.reactants_parsed: v *= (y[r['idx']] ** r['coeff'])
@@ -445,7 +474,7 @@ class ScenarioRunner:
 
             return dydt
 
-        solver_method = 'BDF'
+        solver_method = 'Radau'
         step_limit = min(min_dur / 2.0, 60.0)
         
         self.t_start = self.t_span[0]
@@ -470,8 +499,9 @@ class ScenarioRunner:
     def _export_results(self):
         print("\n>>> [DATA] Exporting results to CSV...")
         
-        # Transpose sol.y so rows are time steps and columns are species
-        df = pd.DataFrame(self.sol.y.T, columns=self.solver.species, index=self.sol.t)
+        # Transpose sol.y so rows are time steps and columns are species.
+        # Clip negatives here (solver internal arithmetic can produce small negatives near 0).
+        df = pd.DataFrame(np.maximum(self.sol.y, 0.0).T, columns=self.solver.species, index=self.sol.t)
         df.index.name = "Time_s"
         
         # Calculate Air Density (M) for every time step to allow for ppb conversions later

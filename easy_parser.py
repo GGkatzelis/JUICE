@@ -66,7 +66,7 @@ class EasyParser:
                 name = clean_line.split('=')[0].strip().upper()
                 if name and name not in RESERVED:
                     expr = clean_line.split('=')[1].strip()
-                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)
+                    expr = re.sub(r'^(CONST|INPUT|FUNCTION)\(\s*(.*?)\s*\)\s*$', r'\2', expr, flags=re.I)
                     
                     target_dict = self.mech.commented_parameters if is_commented else self.mech.parameters
                     target_dict[name] = expr.upper()
