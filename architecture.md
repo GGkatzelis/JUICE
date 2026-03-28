@@ -241,7 +241,44 @@ system_ode(t, y):
 - **CONST() spaces.** EASY files frequently write `CONST( expr )` with interior spaces. The parser now strips these (`\(\s*(.*?)\s*\)\s*$`). If adding new EASY-file parsing logic, always `.strip()` extracted expressions before `compile()`.
 - **Diagnostics gap.** The pre-flight test uses `SafeDict` (returns 0.0 for unknowns), so a live lambda in `ctx` appears as 0.0 and passes the check. The actual ODE has mcm_kinetics loaded and would crash. The `callable(k)` guard in the reaction loop is the runtime safety net.
 
-## 9. Next Steps & Future Enhancements
+## 9. ⚠ CURRENT REGRESSION — NEEDS INVESTIGATION (2026-03-28)
+
+### What worked
+After **Fix 6 (Radau + remove zero-clipping)** the simulation ran cleanly. Radical timeseries (OH, HO2, RO2) were smooth, macroscopic species (O3, NO2, C2H5OH) followed physically sensible trends. This was confirmed running `scenario_phase4_full_ethanol.json`.
+
+### What is now broken
+After all subsequent changes were applied the simulation produces **nonsensical results: C2H5OH rises on injection then drops immediately to zero**. The user has not yet identified which specific change is responsible.
+
+### Changes made AFTER the confirmed-working Radau run (prime suspects)
+
+**1. `easy_parser.py` CONST regex (Fix 6, highest suspicion)**
+Old: `re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)`
+New: `re.sub(r'^(CONST|INPUT|FUNCTION)\(\s*(.*?)\s*\)\s*$', r'\2', expr, flags=re.I)`
+
+The switch from greedy `(.*)` to non-greedy `(.*?)` is the prime suspect. While tests on simple cases passed, non-greedy `.*?` combined with `\s*\)\s*$` may truncate complex nested expressions in edge cases (e.g. if a line ends with multiple `))`). For example `CONST(A*(1+B/C))` — the `.*?` might stop at the first `)` giving `A*(1+B/C` instead of `A*(1+B/C)`. This would silently produce wrong rate constants for many reactions.
+
+**Recommended first revert:** Change back to greedy `(.*)` but add `.strip()` on the result:
+```python
+expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I).strip()
+```
+This removes the leading/trailing whitespace without risking truncation of nested parens.
+
+**2. `scenario_runner.py` — `callable(k)` guard**
+`if callable(k): k = 0.0` was added in the ODE reaction loop. Before this fix KMT05 etc. were silently failing AND producing lambdas that crashed. After Fix 6, those same lambdas now silently produce `k=0` instead of crashing. The net chemistry effect is the same as before (those reactions are dead), but the crash is avoided. This guard itself is unlikely to cause the regression — the crash was happening *instead of* the guard being needed.
+
+**3. Chemistry change from CONST fix**
+Before the CONST fix, `KMT05`, `KMT06_PARAM`, `KMT11_PARAM`, `RO2` all failed to compile (IndentationError from leading space) and were NOT added to `var_assignments`. This meant: OH+CO→HO2+CO2 (rate=KMT05), HO2+HO2→H2O2 (rate involving KMT06_PARAM), OH+HNO3→NO3 (rate=KMT11_PARAM) were all effectively disabled. The "working" Radau simulation ran with these reactions dead. After the CONST fix they are enabled — this changes the OH budget significantly and could explain changed VOC oxidation rates.
+
+**4. GUI/JSON changes (low suspicion)**
+New JSON fields (`excluded_reactions`, updated `active_parameters` from the new GUI tree) would only affect results if the scenario_config.json was regenerated with the new GUI. If the same old JSON is being used, these changes have no effect on the simulation.
+
+### Recommended debugging steps for next session
+1. **Revert the easy_parser.py regex first** (greedy + `.strip()` instead of non-greedy).
+2. Re-run the Phase 4 test JSON (`scenario_phase4_full_ethanol.json`) — if this restores results, the non-greedy regex was the cause.
+3. If still broken, compare the `var_assignments` list before and after the CONST fix to see which parameters changed.
+4. Consider whether the confirmed-working run actually had correct chemistry or was it masking bugs (KMT05=0 silently).
+
+## 10. Next Steps & Future Enhancements
 
 1.  **Scenario testing completion:** Bottom-up validation Phases 0–4 are documented in `easy_functions_definitions.py`. Phase 4 (full ethanol) is confirmed working.
 2.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple `scenario_config.json` files sequentially.
