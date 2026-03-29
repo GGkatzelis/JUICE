@@ -101,7 +101,7 @@ Key fields and their consumers:
 | `burst_injections` | list of {target,ppb,start_utc,duration_s} | Gaussian pulse injected into `dydt` |
 | `custom_reactions` | list of {reactants,products,rate} | appended to `self.mechanism.reactions` |
 | `excluded_reactions` | list of {reactants,products} | filtered out of `self.mechanism.reactions` before artifacts |
-| `active_parameters` | list of parameter names | whitelist filter for EASY-file parameters in `var_assignments` |
+| `active_parameters` | list of parameter names | **DEPRECATED — no longer consumed by the runner.** Field may still exist in old JSON files but is ignored. All uncommented parameters from EASY files are now loaded unconditionally. |
 
 ## 6. Bug Fixes Applied (2026-03-28)
 
@@ -206,7 +206,7 @@ J-values still 0. Corrected mappings:
 _build_mechanism():
   1. Sort mechanism_files: all .rate files first (in JSON order), then .mech/.incl (in JSON order)
   2. Parse each file → accumulate species, reactions, parameters into self.mechanism
-  3. Apply active_parameters whitelist filter to var_assignments
+  3. ALL uncommented parameters → var_assignments (no whitelist; parser already blocks RESERVED/invalid names)
   4. Append j_scalings to var_assignments
   5. Add custom_reactions from JSON
   6. Filter excluded_reactions (frozenset matching, coefficient-agnostic)
@@ -235,52 +235,33 @@ system_ode(t, y):
 
 ## 8. Known Gotchas for Future Development
 
-- **`active_parameters` is a whitelist.** Parameters from EASY files are only loaded into `var_assignments` if they appear in this list. Add new parameters explicitly. UNSAFE parameters (COMPRC-based KMTs, FUNCTION[] templates) must never appear in this list — the GUI auto-enforces this.
+- **`active_parameters` is gone from the runner.** Parameters from EASY files are now loaded unconditionally (all uncommented entries whose names pass the parser's `^[A-Z][A-Z0-9_]*$` filter). The GUI's UNSAFE classification still prevents COMPRC-based KMTs and FUNCTION[] templates from being written into the JSON, but even if they were, the parser would not emit them as `parameters` entries because they appear in `RESERVED`. Do not reinstate a runner-level whitelist — it was the root cause of Fix 7's regression.
 - **"Last definition wins" for parameters.** `var_assignments` is a list, not a dict. If the same parameter is defined in multiple files, it gets evaluated multiple times per ODE step; the last evaluation overwrites `ctx`. File order in `mechanism_files` (after the `.rate`-first sort) determines precedence.
 - **Reactions never deduplicated.** If the same reaction appears in two loaded files it runs twice. Avoid loading overlapping chemistry files.
 - **CONST() spaces.** EASY files frequently write `CONST( expr )` with interior spaces. The parser now strips these (`\(\s*(.*?)\s*\)\s*$`). If adding new EASY-file parsing logic, always `.strip()` extracted expressions before `compile()`.
 - **Diagnostics gap.** The pre-flight test uses `SafeDict` (returns 0.0 for unknowns), so a live lambda in `ctx` appears as 0.0 and passes the check. The actual ODE has mcm_kinetics loaded and would crash. The `callable(k)` guard in the reaction loop is the runtime safety net.
 
-## 9. ⚠ CURRENT REGRESSION — NEEDS INVESTIGATION (2026-03-28)
+### Fix 7 — `active_parameters` whitelist silently excluded valid rate constants (2026-03-29)
 
-### What worked
-After **Fix 6 (Radau + remove zero-clipping)** the simulation ran cleanly. Radical timeseries (OH, HO2, RO2) were smooth, macroscopic species (O3, NO2, C2H5OH) followed physically sensible trends. This was confirmed running `scenario_phase4_full_ethanol.json`.
+**Root cause:** `scenario_runner._build_mechanism` applied an `active_parameters` whitelist: only parameters whose names appeared in `cfg['active_parameters']` were appended to `var_assignments`. Any parameter not in the list — including legitimately important rate constants parsed from EASY files — was silently dropped. This caused C2H5OH to rise on injection then immediately collapse to zero because key rate constants governing its oxidation pathway were missing from the ODE context.
 
-### What is now broken
-After all subsequent changes were applied the simulation produces **nonsensical results: C2H5OH rises on injection then drops immediately to zero**. The user has not yet identified which specific change is responsible.
+**Fix:** Removed the `active_parameters` filter loop entirely from `_build_mechanism`. All uncommented parameters whose names pass the parser's `^[A-Z][A-Z0-9_]*$` guard now flow into `var_assignments` unconditionally. The parser already excludes RESERVED words (`COMPRC`, `PHTFKT`, `DENSITY`, etc.) and malformed tokens, so the runner-level filter was redundant and harmful.
 
-### Changes made AFTER the confirmed-working Radau run (prime suspects)
+**Result (2026-03-29):** Simulation confirmed working. C2H5OH rises on injection and decays over hours as expected. Diagnostics report zero failed reactions. KMT01–KMT14 evaluate without warnings.
 
-**1. `easy_parser.py` CONST regex (Fix 6, highest suspicion)**
-Old: `re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I)`
-New: `re.sub(r'^(CONST|INPUT|FUNCTION)\(\s*(.*?)\s*\)\s*$', r'\2', expr, flags=re.I)`
+## 9. Current State (as of 2026-03-29)
 
-The switch from greedy `(.*)` to non-greedy `(.*?)` is the prime suspect. While tests on simple cases passed, non-greedy `.*?` combined with `\s*\)\s*$` may truncate complex nested expressions in edge cases (e.g. if a line ends with multiple `))`). For example `CONST(A*(1+B/C))` — the `.*?` might stop at the first `)` giving `A*(1+B/C` instead of `A*(1+B/C)`. This would silently produce wrong rate constants for many reactions.
-
-**Recommended first revert:** Change back to greedy `(.*)` but add `.strip()` on the result:
-```python
-expr = re.sub(r'^(CONST|INPUT|FUNCTION)\((.*)\)', r'\2', expr, flags=re.I).strip()
-```
-This removes the leading/trailing whitespace without risking truncation of nested parens.
-
-**2. `scenario_runner.py` — `callable(k)` guard**
-`if callable(k): k = 0.0` was added in the ODE reaction loop. Before this fix KMT05 etc. were silently failing AND producing lambdas that crashed. After Fix 6, those same lambdas now silently produce `k=0` instead of crashing. The net chemistry effect is the same as before (those reactions are dead), but the crash is avoided. This guard itself is unlikely to cause the regression — the crash was happening *instead of* the guard being needed.
-
-**3. Chemistry change from CONST fix**
-Before the CONST fix, `KMT05`, `KMT06_PARAM`, `KMT11_PARAM`, `RO2` all failed to compile (IndentationError from leading space) and were NOT added to `var_assignments`. This meant: OH+CO→HO2+CO2 (rate=KMT05), HO2+HO2→H2O2 (rate involving KMT06_PARAM), OH+HNO3→NO3 (rate=KMT11_PARAM) were all effectively disabled. The "working" Radau simulation ran with these reactions dead. After the CONST fix they are enabled — this changes the OH budget significantly and could explain changed VOC oxidation rates.
-
-**4. GUI/JSON changes (low suspicion)**
-New JSON fields (`excluded_reactions`, updated `active_parameters` from the new GUI tree) would only affect results if the scenario_config.json was regenerated with the new GUI. If the same old JSON is being used, these changes have no effect on the simulation.
-
-### Recommended debugging steps for next session
-1. **Revert the easy_parser.py regex first** (greedy + `.strip()` instead of non-greedy).
-2. Re-run the Phase 4 test JSON (`scenario_phase4_full_ethanol.json`) — if this restores results, the non-greedy regex was the cause.
-3. If still broken, compare the `var_assignments` list before and after the CONST fix to see which parameters changed.
-4. Consider whether the confirmed-working run actually had correct chemistry or was it masking bugs (KMT05=0 silently).
+All seven bug fixes are applied and the simulation is working correctly:
+- Phase 4 (full ethanol oxidation in SAPHIR): confirmed working
+- C2H5OH injection, dilution, and OH-driven oxidation all physically sensible
+- Radical timeseries (OH, HO2, RO2) smooth — no spikes
+- All KMT01–KMT14 Troe rates active and evaluating correctly
+- All photolysis J-values (J1–J51) evaluating via PHTFKT Python closure
+- Zero failed reactions in `[DIAGNOSTICS]` output
 
 ## 10. Next Steps & Future Enhancements
 
-1.  **Scenario testing completion:** Bottom-up validation Phases 0–4 are documented in `easy_functions_definitions.py`. Phase 4 (full ethanol) is confirmed working.
+1.  **GUI update:** Cosmetic/structural improvements to `saphir_gui.py` planned now that chemistry is stable.
 2.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple `scenario_config.json` files sequentially.
 3.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
 4.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.
