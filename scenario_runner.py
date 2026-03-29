@@ -116,6 +116,15 @@ class ScenarioRunner:
                     except Exception as e:
                         print(f"[WARNING] Could not compile parameter {p_name}: {e}")
                     
+        # Apply blocked_parameters: explicit suppression from GUI Chemistry Overview tab
+        blocked_params = {p.upper() for p in self.cfg.get('blocked_parameters', [])}
+        if blocked_params:
+            before = len(self.var_assignments)
+            self.var_assignments = [(n, c) for n, c in self.var_assignments if n not in blocked_params]
+            removed = before - len(self.var_assignments)
+            if removed:
+                print(f"  ... Blocked {removed} parameter(s): {', '.join(sorted(blocked_params))}")
+
         for j_target, j_expr in self.cfg.get('j_scalings', {}).items():
             j_clean = j_expr.upper().replace('@', '**')
             try: self.var_assignments.append((j_target.upper(), compile(j_clean, '<string>', 'eval')))
