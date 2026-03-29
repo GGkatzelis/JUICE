@@ -17,8 +17,8 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QSplitter,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
-    QRadioButton, QWidget, QFileDialog, QMessageBox,
-    QCheckBox, QHeaderView, QAbstractItemView, QSizePolicy,
+    QRadioButton, QFileDialog, QMessageBox, QFrame,
+    QHeaderView, QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
@@ -84,8 +84,7 @@ WIKI_CODE_TO_COL = {**WIKI_FAST_CODE_TO_COL,
                     **WIKI_SLOW_STOP_CODE}
 
 # Fast injections default to 60 s; slow ones (H2O, seed) use wiki start/stop
-FAST_INJECTION_COLS    = set(WIKI_FAST_CODE_TO_COL.values()) | {'QCl2', 'qVCP1', 'qVCP2',
-                          'qDIESEL', 'qGASOLINE', 'qCOOKING', 'qBIOGENIC', 'q_isobutane'}
+FAST_INJECTION_COLS    = set(WIKI_FAST_CODE_TO_COL.values()) | {'QCl2'}
 SLOW_INJECTION_COLS    = {'QH2O', 'Q_seed'}
 FAST_DEFAULT_DURATION  = 60  # seconds
 
@@ -100,23 +99,67 @@ ENZ_COLUMN_ORDER = [
 ]
 
 # Default injection / manual-protocol columns shown in the injections table
-# (col_name, is_fast)  — start/stop/value left blank for user to fill
+# (col_name, is_fast)  — all unchecked by default; activated when wiki-populated
 DEFAULT_MANUAL_COLS = [
-    ('QH2O',        False),
-    ('QO3',         True),
-    ('QNO',         True),
-    ('QNO2',        True),
-    ('QCO2',        True),
-    ('QCl2',        True),
-    ('Q_seed',      False),
-    ('qVCP1',       True),
-    ('qVCP2',       True),
-    ('qDIESEL',     True),
-    ('qGASOLINE',   True),
-    ('qCOOKING',    True),
-    ('qBIOGENIC',   True),
-    ('q_isobutane', True),
+    ('QH2O',   False),
+    ('QO3',    True),
+    ('QNO',    True),
+    ('QNO2',   True),
+    ('QCl2',   True),
+    ('Q_seed', False),
 ]
+
+# Known VOC compounds for wiki description parsing
+# lower-case key → (enz_column_suffix, formula, molar_mass_g_mol, liquid_density_g_mL or None)
+VOC_KNOWN = {
+    'limonene':           ('Limonene',    'C10H16', 136.23, 0.841),
+    'd-limonene':         ('Limonene',    'C10H16', 136.23, 0.841),
+    'alpha-pinene':       ('aPinene',     'C10H16', 136.23, 0.858),
+    'a-pinene':           ('aPinene',     'C10H16', 136.23, 0.858),
+    '\u03b1-pinene':      ('aPinene',     'C10H16', 136.23, 0.858),
+    'beta-pinene':        ('bPinene',     'C10H16', 136.23, 0.872),
+    'b-pinene':           ('bPinene',     'C10H16', 136.23, 0.872),
+    '\u03b2-pinene':      ('bPinene',     'C10H16', 136.23, 0.872),
+    'nopinene':           ('bPinene',     'C10H16', 136.23, 0.872),
+    'toluene':            ('Toluene',     'C7H8',    92.14, 0.867),
+    'isoprene':           ('Isoprene',    'C5H8',    68.12, 0.681),
+    'ethanol':            ('Ethanol',     'C2H6O',   46.07, 0.789),
+    'propene':            ('Propene',     'C3H6',    42.08, None),
+    'propylene':          ('Propene',     'C3H6',    42.08, None),
+    'isobutene':          ('Isobutene',   'C4H8',    56.11, 0.594),
+    'isobutylene':        ('Isobutene',   'C4H8',    56.11, 0.594),
+    'isobutane':          ('Isobutane',   'C4H10',   58.12, 0.551),
+    'hexane':             ('Hexane',      'C6H14',   86.18, 0.659),
+    'heptane':            ('Heptane',     'C7H16',  100.20, 0.684),
+    'octane':             ('Octane',      'C8H18',  114.23, 0.703),
+    'benzene':            ('Benzene',     'C6H6',    78.11, 0.879),
+    'o-xylene':           ('oXylene',     'C8H10',  106.17, 0.897),
+    'm-xylene':           ('mXylene',     'C8H10',  106.17, 0.860),
+    'p-xylene':           ('pXylene',     'C8H10',  106.17, 0.861),
+    'xylene':             ('Xylene',      'C8H10',  106.17, 0.861),
+    'acetone':            ('Acetone',     'C3H6O',   58.08, 0.791),
+    'methanol':           ('Methanol',    'CH4O',    32.04, 0.791),
+    'mvk':                ('MVK',         'C4H6O',   70.09, 0.864),
+    'methyl vinyl ketone':('MVK',         'C4H6O',   70.09, 0.864),
+    'macr':               ('MACR',        'C4H6O',   70.09, 0.847),
+    'methacrolein':       ('MACR',        'C4H6O',   70.09, 0.847),
+    'mek':                ('MEK',         'C4H8O',   72.11, 0.805),
+    'butanone':           ('MEK',         'C4H8O',   72.11, 0.805),
+    'acetaldehyde':       ('AcetAldehyde','C2H4O',   44.05, 0.788),
+    'formaldehyde':       ('HCHO',        'CH2O',    30.03, None),
+    'cyclohexene':        ('Cyclohexene', 'C6H10',   82.14, 0.811),
+    'sabinene':           ('Sabinene',    'C10H16', 136.23, 0.844),
+    'camphene':           ('Camphene',    'C10H16', 136.23, 0.842),
+    'myrcene':            ('Myrcene',     'C10H16', 136.23, 0.794),
+    'ocimene':            ('Ocimene',     'C10H16', 136.23, 0.800),
+    'linalool':           ('Linalool',    'C10H18O',154.25, 0.860),
+    '1,8-cineole':        ('Cineol',      'C10H18O',154.25, 0.924),
+    'eucalyptol':         ('Cineol',      'C10H18O',154.25, 0.924),
+    'cineol':             ('Cineol',      'C10H18O',154.25, 0.924),
+    'car-3-ene':          ('Car3ene',     'C10H16', 136.23, 0.858),
+    '3-carene':           ('Car3ene',     'C10H16', 136.23, 0.858),
+    'farnesene':          ('Farnesene',   'C15H24', 204.35, 0.841),
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -533,68 +576,79 @@ class EnzBuilderDialog(QDialog):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(8)
+        root.setSpacing(6)
 
-        # ── 1. Data source & date ─────────────────────────────────────────────
-        src_group = QGroupBox("Data Source")
+        # ── 1. Compact Experiment Setup (Data Source + Time Range in one bar) ─
+        setup_group = QGroupBox("Experiment Setup")
+        setup_outer = QHBoxLayout()
+        setup_outer.setSpacing(10)
+
+        # Left: radio-button source selectors
         src_grid = QGridLayout()
         src_grid.setColumnStretch(3, 1)
+        src_grid.setHorizontalSpacing(6)
+        src_grid.setVerticalSpacing(3)
 
         self.rb_archive = QRadioButton("Archive date:")
         self.rb_custom  = QRadioButton("Custom NC folder:")
-        self.rb_manual  = QRadioButton("All manual (no NC files)")
+        self.rb_manual  = QRadioButton("All manual (no NC)")
         self.rb_archive.setChecked(True)
         self.rb_archive.toggled.connect(self._on_source_changed)
         self.rb_custom.toggled.connect(self._on_source_changed)
         self.rb_manual.toggled.connect(self._on_source_changed)
 
         self.date_edit = QLineEdit("2024-07-09")
-        self.date_edit.setFixedWidth(110)
+        self.date_edit.setFixedWidth(100)
         self.date_edit.setPlaceholderText("YYYY-MM-DD")
 
         self.archive_root_edit = QLineEdit(SAPHIR_ARCHIVE_ROOT)
-        arc_browse = QPushButton("Browse"); arc_browse.setFixedWidth(70)
+        arc_browse = QPushButton("Browse"); arc_browse.setFixedWidth(65)
         arc_browse.clicked.connect(lambda: self._browse_dir(self.archive_root_edit))
 
         self.custom_nc_edit = QLineEdit()
         self.custom_nc_edit.setPlaceholderText(
             "Folder containing  YYYY-MM-DD.SAPHIR.*.nc  files"
         )
-        cust_browse = QPushButton("Browse"); cust_browse.setFixedWidth(70)
+        cust_browse = QPushButton("Browse"); cust_browse.setFixedWidth(65)
         cust_browse.clicked.connect(lambda: self._browse_dir(self.custom_nc_edit))
 
-        src_grid.addWidget(self.rb_archive,       0, 0)
-        src_grid.addWidget(self.date_edit,        0, 1)
+        src_grid.addWidget(self.rb_archive,         0, 0)
+        src_grid.addWidget(self.date_edit,          0, 1)
         src_grid.addWidget(QLabel("Archive root:"), 0, 2)
-        src_grid.addWidget(self.archive_root_edit, 0, 3)
-        src_grid.addWidget(arc_browse,            0, 4)
+        src_grid.addWidget(self.archive_root_edit,  0, 3)
+        src_grid.addWidget(arc_browse,              0, 4)
+        src_grid.addWidget(self.rb_custom,          1, 0)
+        src_grid.addWidget(self.custom_nc_edit,     1, 1, 1, 3)
+        src_grid.addWidget(cust_browse,             1, 4)
+        src_grid.addWidget(self.rb_manual,          2, 0, 1, 5)
+        setup_outer.addLayout(src_grid, stretch=3)
 
-        src_grid.addWidget(self.rb_custom,        1, 0)
-        src_grid.addWidget(self.custom_nc_edit,   1, 1, 1, 3)
-        src_grid.addWidget(cust_browse,           1, 4)
+        # Vertical separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #555;")
+        setup_outer.addWidget(sep)
 
-        src_grid.addWidget(self.rb_manual,        2, 0, 1, 5)
-        src_group.setLayout(src_grid)
-        root.addWidget(src_group)
+        # Right: time range (compact vertical form)
+        time_grid = QGridLayout()
+        time_grid.setVerticalSpacing(3)
+        time_grid.setHorizontalSpacing(5)
+        time_grid.addWidget(QLabel("Start (UTC):"), 0, 0)
+        self.start_edit = QLineEdit("04:00"); self.start_edit.setFixedWidth(58)
+        time_grid.addWidget(self.start_edit, 0, 1)
+        time_grid.addWidget(QLabel("End:"), 1, 0)
+        self.end_edit = QLineEdit("22:00"); self.end_edit.setFixedWidth(58)
+        time_grid.addWidget(self.end_edit, 1, 1)
+        time_grid.addWidget(QLabel("Step (s):"), 2, 0)
+        self.step_edit = QLineEdit("60"); self.step_edit.setFixedWidth(58)
+        time_grid.addWidget(self.step_edit, 2, 1)
+        setup_outer.addLayout(time_grid, stretch=0)
 
-        # ── 2. Time range ─────────────────────────────────────────────────────
-        time_group = QGroupBox("Time Range (UTC)")
-        time_hbox = QHBoxLayout()
-        time_hbox.addWidget(QLabel("Start:"))
-        self.start_edit = QLineEdit("04:00"); self.start_edit.setFixedWidth(60)
-        time_hbox.addWidget(self.start_edit)
-        time_hbox.addWidget(QLabel("  End:"))
-        self.end_edit = QLineEdit("22:00"); self.end_edit.setFixedWidth(60)
-        time_hbox.addWidget(self.end_edit)
-        time_hbox.addWidget(QLabel("  Step (s):"))
-        self.step_edit = QLineEdit("60"); self.step_edit.setFixedWidth(55)
-        time_hbox.addWidget(self.step_edit)
-        time_hbox.addStretch()
-        time_group.setLayout(time_hbox)
-        root.addWidget(time_group)
+        setup_group.setLayout(setup_outer)
+        root.addWidget(setup_group)
 
-        # ── 3. Main content: archive table (left) + manual protocol (right) ───
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # ── 2. Main content splitter (Archive left | HV+Injections right) ─────
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # ── Left: archive variables ───────────────────────────────────────────
         arc_group = QGroupBox("Archive Variables (from NC files)")
@@ -640,17 +694,15 @@ class EnzBuilderDialog(QDialog):
         arc_vbox.addWidget(self.archive_table)
         arc_vbox.addWidget(probe_btn)
         arc_group.setLayout(arc_vbox)
-        splitter.addWidget(arc_group)
+        main_splitter.addWidget(arc_group)
 
-        # ── Right: manual protocol ────────────────────────────────────────────
-        manual_widget = QWidget()
-        manual_vbox = QVBoxLayout(manual_widget)
-        manual_vbox.setContentsMargins(0, 0, 0, 0)
-        manual_vbox.setSpacing(6)
+        # ── Right: vertical splitter — HV (top, small) / Injections (bottom) ─
+        v_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Roof / HV section
+        # ── Roof / HV section ─────────────────────────────────────────────────
         hv_group = QGroupBox("Roof / UV lamp (HV)")
         hv_vbox = QVBoxLayout()
+        hv_vbox.setSpacing(4)
 
         wiki_hbox = QHBoxLayout()
         self.wiki_fetch_btn = QPushButton("Fetch from Wiki")
@@ -682,7 +734,7 @@ class EnzBuilderDialog(QDialog):
         )
         self.hv_table.setColumnWidth(0, 100)
         self.hv_table.setColumnWidth(1, 100)
-        self.hv_table.setFixedHeight(100)
+        self.hv_table.verticalHeader().setDefaultSectionSize(22)
         self._add_hv_row("09:00", "18:00", "")   # placeholder default
 
         hv_btn_hbox = QHBoxLayout()
@@ -696,32 +748,33 @@ class EnzBuilderDialog(QDialog):
         hv_vbox.addWidget(self.hv_table)
         hv_vbox.addLayout(hv_btn_hbox)
         hv_group.setLayout(hv_vbox)
-        manual_vbox.addWidget(hv_group)
+        v_splitter.addWidget(hv_group)
 
-        # Injections / boundary conditions section
+        # ── Injections / boundary conditions ─────────────────────────────────
         inj_group = QGroupBox("Injections & Boundary Conditions")
         inj_vbox = QVBoxLayout()
+        inj_vbox.setSpacing(4)
 
         hint = QLabel(
-            "Fast injections (O\u2083, NO, VOC …): 60 s default duration.  "
-            "Slow injections (H\u2082O, seed): start/stop from wiki or manual entry.  "
-            "Duration auto-calculated from Start & Stop; editing Duration updates Stop."
+            "All rows inactive until wiki-loaded or manually checked.  "
+            "Fast injections (O\u2083, NO \u2026): 60 s default.  "
+            "Slow (H\u2082O, seed): start/stop from wiki.  "
+            "VOC rows added with compound name and estimated ppb when parseable."
         )
         hint.setStyleSheet("color: #888; font-size: 10px;")
         hint.setWordWrap(True)
         inj_vbox.addWidget(hint)
 
-        # 7 columns: ☑ | Column | Start | Stop | Duration(s) | Value | Notes
         self.inj_table = QTableWidget(0, 7)
         self.inj_table.setHorizontalHeaderLabels(
-            ["☑", "Column", "Start (HH:MM)", "Stop (HH:MM)", "Duration (s)", "Value", "Notes from wiki"]
+            ["☑", "Column", "Start (HH:MM)", "Stop (HH:MM)", "Duration (s)", "Value (ppb)", "Notes from wiki"]
         )
         self.inj_table.setColumnWidth(0, 28)
-        self.inj_table.setColumnWidth(1, 105)
+        self.inj_table.setColumnWidth(1, 130)
         self.inj_table.setColumnWidth(2, 95)
         self.inj_table.setColumnWidth(3, 95)
         self.inj_table.setColumnWidth(4, 85)
-        self.inj_table.setColumnWidth(5, 65)
+        self.inj_table.setColumnWidth(5, 75)
         self.inj_table.horizontalHeader().setSectionResizeMode(
             6, QHeaderView.ResizeMode.Stretch
         )
@@ -730,7 +783,7 @@ class EnzBuilderDialog(QDialog):
 
         for col_name, is_fast in DEFAULT_MANUAL_COLS:
             dur = str(FAST_DEFAULT_DURATION) if is_fast else ""
-            self._add_inj_row(col_name, "", "", dur, "", "")
+            self._add_inj_row(col_name, "", "", dur, "", "")  # all unchecked
 
         inj_btn_hbox = QHBoxLayout()
         add_inj_btn = QPushButton("+ Add row"); add_inj_btn.setFixedWidth(80)
@@ -746,13 +799,14 @@ class EnzBuilderDialog(QDialog):
         inj_vbox.addWidget(self.inj_table)
         inj_vbox.addLayout(inj_btn_hbox)
         inj_group.setLayout(inj_vbox)
-        manual_vbox.addWidget(inj_group)
+        v_splitter.addWidget(inj_group)
 
-        splitter.addWidget(manual_widget)
-        splitter.setSizes([400, 700])
-        root.addWidget(splitter)
+        v_splitter.setSizes([140, 520])
+        main_splitter.addWidget(v_splitter)
+        main_splitter.setSizes([370, 730])
+        root.addWidget(main_splitter, stretch=1)
 
-        # ── 4. Project Root (output folder) ───────────────────────────────────
+        # ── 3. Project Root + Generate ────────────────────────────────────────
         out_group = QGroupBox("2. Project Root  —  kammer.enz will be saved here")
         out_group.setStyleSheet("QGroupBox { font-weight: bold; }")
         out_hbox = QHBoxLayout()
@@ -765,7 +819,7 @@ class EnzBuilderDialog(QDialog):
         out_hbox.addWidget(out_browse)
 
         gen_btn = QPushButton("  Generate ENZ  ")
-        gen_btn.setFixedHeight(42)
+        gen_btn.setFixedHeight(38)
         gen_btn.setStyleSheet(
             "font-weight: bold; background-color: #1e7e34; color: white; padding: 0 18px;"
         )
@@ -806,7 +860,7 @@ class EnzBuilderDialog(QDialog):
 
     # ── Injection table row management ────────────────────────────────────────
 
-    def _add_inj_row(self, col_name, start_t, stop_t, duration_s, value, notes, checked=True):
+    def _add_inj_row(self, col_name, start_t, stop_t, duration_s, value, notes, checked=False):
         """
         Add one row to the injection table.
         Columns: ☑ | Column | Start | Stop | Duration(s) | Value | Notes
@@ -889,6 +943,12 @@ class EnzBuilderDialog(QDialog):
         rows = sorted({i.row() for i in self.inj_table.selectedItems()}, reverse=True)
         for r in rows:
             self.inj_table.removeRow(r)
+
+    def _activate_inj_row(self, row):
+        """Check the checkbox in the given injection row."""
+        chk = self.inj_table.item(row, 0)
+        if chk:
+            chk.setCheckState(Qt.CheckState.Checked)
 
     # ── Helper: browse dialogs ─────────────────────────────────────────────────
 
@@ -1164,22 +1224,108 @@ class EnzBuilderDialog(QDialog):
             it.setForeground(QColor("#f0a500"))
             it.setToolTip("Enter the injection amount (e.g. ppb or AE)")
 
+    def _parse_voc_description(self, desc):
+        """
+        Parse a VOC injection wiki description line to extract:
+          - compound name → ENZ column name  (Injection_<Suffix>)
+          - chemical formula
+          - injection value converted to ppb
+            · if unit is ppb/ppm  → direct
+            · if unit is μl/ml/nl → converts using std conditions
+              (T=298 K, P=1013 hPa, V_chamber=276 m³)
+
+        Returns
+        -------
+        (col_name, formula, value_ppb_str, notes_str)
+        All strings; value_ppb_str is '' when conversion is not possible.
+        """
+        desc_lower = desc.lower()
+
+        # --- Identify compound ---
+        col_suffix  = 'VOC'
+        formula     = ''
+        molar_mass  = None
+        density     = None
+        for key, (suf, form, mw, dens) in VOC_KNOWN.items():
+            if key in desc_lower:
+                col_suffix = suf
+                formula    = form
+                molar_mass = mw
+                density    = dens
+                break
+
+        col_name = f"Injection_{col_suffix}"
+
+        # --- Identify value and unit ---
+        # Patterns ordered from most-specific to least
+        unit_patterns = [
+            (r'(\d+\.?\d*)\s*(\u03bcl|µl|ul)\b',          '\u03bcl'),
+            (r'(\d+\.?\d*)\s*(ml|milliliter)\b',            'ml'),
+            (r'(\d+\.?\d*)\s*(nl|nanoliter)\b',             'nl'),
+            (r'(\d+\.?\d*)\s*ppm\b',                        'ppm'),
+            (r'(\d+\.?\d*)\s*ppb\b',                        'ppb'),
+        ]
+
+        value_ppb_str = ''
+        notes_parts   = []
+        if formula:
+            notes_parts.append(f"Formula: {formula}")
+
+        for pattern, unit in unit_patterns:
+            m = re.search(pattern, desc_lower)
+            if not m:
+                continue
+            val = float(m.group(1))
+            if unit == 'ppb':
+                value_ppb_str = f'{val:.2f}'
+                notes_parts.append(f"{val} ppb")
+            elif unit == 'ppm':
+                value_ppb_str = f'{val * 1000:.2f}'
+                notes_parts.append(f"{val} ppm \u2192 {val * 1000:.1f} ppb")
+            elif unit in ('\u03bcl', 'ml', 'nl'):
+                factor = {'\u03bcl': 1e-3, 'ml': 1.0, 'nl': 1e-6}[unit]
+                vol_mL = val * factor
+                if molar_mass and density:
+                    # n_air (mol) at std conditions, 276 m³ chamber
+                    V_m3  = 276.0
+                    T_K   = 298.0
+                    P_Pa  = 101_300.0
+                    n_air = (P_Pa * V_m3) / (8.314 * T_K)   # ≈ 11 280 mol
+                    n_voc = (vol_mL * density) / molar_mass  # mol
+                    ppb   = (n_voc / n_air) * 1e9
+                    value_ppb_str = f'{ppb:.2f}'
+                    notes_parts.append(
+                        f"{val} {unit} \u2192 {ppb:.2f} ppb "
+                        f"(std T={T_K:.0f}K, P={P_Pa/100:.0f}hPa, V=276m\u00b3)"
+                    )
+                else:
+                    notes_parts.append(
+                        f"{val} {unit} \u2014 density/MW unknown, enter ppb manually"
+                    )
+            break   # stop at first matched unit pattern
+
+        notes_str = desc[:60]
+        if notes_parts:
+            notes_str += '  |  ' + '  |  '.join(notes_parts)
+        return col_name, formula, value_ppb_str, notes_str
+
     def _populate_from_wiki(self, events):
         """
         Parse fetched/pasted wiki events and pre-fill HV table and injection rows.
-        - Fast injections (NO, O3, VOC …): start = event time, duration = 60 s default.
-        - Slow injections (H2O, seed): start from uppercase code (H/S),
-          stop from lowercase code (h/s); duration auto-calculated.
-        All auto-filled values remain fully editable by the user.
+        - Rows that receive data are checked (activated).
+        - Fast injections (NO, O3 …): start = event time, 60 s default duration.
+        - Slow injections (H2O, seed): start from uppercase code, stop from lowercase.
+        - VOC (code X): compound name parsed, column named Injection_<Name>,
+          ppb estimated from μl/ml volume if possible.
+        All auto-filled values remain fully editable.
         """
         hv_opens  = []
         hv_closes = []
 
-        # fast: col → list of (start_t, desc)
-        fast_events = {}
-        # slow: col → list of (start_t, stop_t, notes)
-        slow_pairs  = {}
+        fast_events        = {}   # col → [(start_t, desc)]
+        slow_pairs         = {}   # col → [(start_t, stop_t, notes)]
         pending_slow_start = {}   # col → (start_t, desc)
+        voc_events         = []   # [(start_t, col_name, formula, value_ppb_str, notes)]
 
         for ev in events:
             code = ev['code']
@@ -1190,6 +1336,11 @@ class EnzBuilderDialog(QDialog):
                 hv_opens.append((t, desc))
             elif code == 'r':
                 hv_closes.append((t, desc))
+            elif code == 'X':
+                # VOC injection — parse compound name and convert value
+                col_name, formula, value_ppb_str, notes_str = \
+                    self._parse_voc_description(desc)
+                voc_events.append((t, col_name, formula, value_ppb_str, notes_str))
             elif code in WIKI_FAST_CODE_TO_COL:
                 col = WIKI_FAST_CODE_TO_COL[code]
                 fast_events.setdefault(col, []).append((t, desc))
@@ -1203,12 +1354,12 @@ class EnzBuilderDialog(QDialog):
                     notes = f"Start: {start_desc[:50]} | Stop: {desc[:50]}"
                     slow_pairs.setdefault(col, []).append((start_t, t, notes))
                 else:
-                    # Stop without matching start
                     slow_pairs.setdefault(col, []).append(("", t, f"Stop: {desc[:60]}"))
 
-        # Any slow starts without a stop (log may be incomplete)
         for col, (start_t, desc) in pending_slow_start.items():
-            slow_pairs.setdefault(col, []).append((start_t, "", f"Start: {desc[:60]} (stop not found)"))
+            slow_pairs.setdefault(col, []).append(
+                (start_t, "", f"Start: {desc[:60]} (stop not found)")
+            )
 
         # ── Update HV table ────────────────────────────────────────────────────
         if hv_opens or hv_closes:
@@ -1224,26 +1375,27 @@ class EnzBuilderDialog(QDialog):
                     notes.append(f"Close: {hv_closes[i][1][:60]}")
                 self._add_hv_row(open_t, close_t, " | ".join(notes))
 
-        # ── Fast injections: one row per event, 60 s default ──────────────────
+        # ── Fast injections ────────────────────────────────────────────────────
         for col, entries in fast_events.items():
             for start_t, desc in entries:
-                existing = self._find_inj_row(col)
                 stop_t = self._s_to_hhmm(
                     self._hhmm_to_s(start_t) + FAST_DEFAULT_DURATION
                 ) if start_t else ""
                 notes_str = desc[:80]
+                existing = self._find_inj_row(col)
                 if existing is not None and self._inj_row_is_empty(existing):
-                    # Fill the first blank row for this column
                     self._set_inj_row(existing, start_t, stop_t,
                                       str(FAST_DEFAULT_DURATION), "", notes_str)
+                    self._activate_inj_row(existing)
+                    target_row = existing
                 else:
                     self._add_inj_row(col, start_t, stop_t,
-                                      str(FAST_DEFAULT_DURATION), "", notes_str)
-                # Orange value cell = user still needs to fill in the amount
-                self._mark_value_needed(self.inj_table.rowCount() - 1
-                                        if existing is None else existing)
+                                      str(FAST_DEFAULT_DURATION), "", notes_str,
+                                      checked=True)
+                    target_row = self.inj_table.rowCount() - 1
+                self._mark_value_needed(target_row)
 
-        # ── Slow injections: paired start/stop rows ───────────────────────────
+        # ── Slow injections ────────────────────────────────────────────────────
         for col, pairs in slow_pairs.items():
             for start_t, stop_t, notes_str in pairs:
                 dur_str = ""
@@ -1255,10 +1407,24 @@ class EnzBuilderDialog(QDialog):
                 existing = self._find_inj_row(col)
                 if existing is not None and self._inj_row_is_empty(existing):
                     self._set_inj_row(existing, start_t, stop_t, dur_str, "", notes_str)
+                    self._activate_inj_row(existing)
+                    target_row = existing
                 else:
-                    self._add_inj_row(col, start_t, stop_t, dur_str, "", notes_str)
-                self._mark_value_needed(self.inj_table.rowCount() - 1
-                                        if existing is None else existing)
+                    self._add_inj_row(col, start_t, stop_t, dur_str, "", notes_str,
+                                      checked=True)
+                    target_row = self.inj_table.rowCount() - 1
+                self._mark_value_needed(target_row)
+
+        # ── VOC injections ─────────────────────────────────────────────────────
+        for start_t, col_name, _formula, value_ppb_str, notes_str in voc_events:
+            stop_t = self._s_to_hhmm(
+                self._hhmm_to_s(start_t) + FAST_DEFAULT_DURATION
+            ) if start_t else ""
+            self._add_inj_row(col_name, start_t, stop_t,
+                              str(FAST_DEFAULT_DURATION), value_ppb_str, notes_str,
+                              checked=True)
+            if not value_ppb_str:
+                self._mark_value_needed(self.inj_table.rowCount() - 1)
 
     # ── ENZ generation ─────────────────────────────────────────────────────────
 
@@ -1369,6 +1535,13 @@ class EnzBuilderDialog(QDialog):
         extra    = [c for c in column_data if c not in ENZ_COLUMN_ORDER]
         ordered  = {c: column_data[c] for c in standard + extra}
 
+        # ── Preview — user confirms before writing ─────────────────────────────
+        preview = _EnzPreviewDialog(
+            grid_s, ordered, output_path, date_str, step_s, errors, self
+        )
+        if preview.exec() != QDialog.DialogCode.Accepted:
+            return
+
         # ── Write ──────────────────────────────────────────────────────────────
         try:
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -1377,24 +1550,194 @@ class EnzBuilderDialog(QDialog):
             QMessageBox.critical(self, "Write error", str(exc))
             return
 
-        # ── Summary ────────────────────────────────────────────────────────────
-        msg = (
+        n_cols = len(ordered)
+        summary = (
             f"ENZ file written successfully.\n\n"
             f"  Path     : {output_path}\n"
             f"  Date     : {date_str}\n"
             f"  Time     : {self.start_edit.text()} – {self.end_edit.text()} UTC\n"
             f"  Timestep : {step_s} s\n"
             f"  Rows     : {len(grid_s)}\n"
-            f"  Columns  : {len(ordered) + 1}  (TIME + {len(ordered)})\n"
+            f"  Columns  : {n_cols + 1}  (TIME + {n_cols})\n"
         )
         if errors:
-            msg += (
-                f"\n⚠  {len(errors)} column(s) used fill values due to errors:\n"
+            summary += (
+                f"\n⚠  {len(errors)} column(s) used fill values:\n"
                 + "\n".join(f"    • {e}" for e in errors)
             )
-            QMessageBox.warning(self, "ENZ written (with warnings)", msg)
+            QMessageBox.warning(self, "ENZ written (with warnings)", summary)
         else:
-            QMessageBox.information(self, "ENZ written", msg)
+            QMessageBox.information(self, "ENZ written", summary)
 
         # Notify main GUI so it can auto-load this folder as Project Root (Step 2)
         self.project_root_selected.emit(project_root)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ENZ pre-save preview dialog
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _EnzPreviewDialog(QDialog):
+    """
+    4-panel matplotlib overview of the computed ENZ data shown before writing.
+    User reviews the data then clicks "Confirm & Save ENZ" or "Cancel".
+    """
+
+    def __init__(self, grid_s, column_data, output_path,
+                 date_str, step_s, errors, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ENZ Preview — Review before saving")
+        self.resize(1150, 680)
+        self._grid_s      = grid_s
+        self._col         = column_data
+        self._output_path = output_path
+        self._date_str    = date_str
+        self._step_s      = step_s
+        self._errors      = errors
+        self._build_ui()
+
+    def _build_ui(self):
+        vbox = QVBoxLayout(self)
+        vbox.setSpacing(6)
+
+        # ── Info bar ──────────────────────────────────────────────────────────
+        n_cols = len(self._col)
+        info   = (f"  Output: {self._output_path}    │    "
+                  f"Date: {self._date_str}    │    "
+                  f"Step: {self._step_s} s    │    "
+                  f"Rows: {len(self._grid_s)}    │    "
+                  f"Columns: {n_cols + 1}  (TIME + {n_cols})")
+        info_lbl = QLabel(info)
+        info_lbl.setStyleSheet("font-size: 10px; color: #aaa;")
+        vbox.addWidget(info_lbl)
+
+        if self._errors:
+            err_txt = (f"⚠  {len(self._errors)} column(s) used fill values:  "
+                       + ";  ".join(self._errors[:4])
+                       + ("  …" if len(self._errors) > 4 else ""))
+            err_lbl = QLabel(err_txt)
+            err_lbl.setStyleSheet("color: #f0a500; font-size: 10px;")
+            err_lbl.setWordWrap(True)
+            vbox.addWidget(err_lbl)
+
+        # ── Matplotlib canvas ─────────────────────────────────────────────────
+        try:
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+            from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+            from matplotlib.figure import Figure
+
+            fig    = Figure(tight_layout=True)
+            canvas = FigureCanvasQTAgg(fig)
+            tb     = NavigationToolbar2QT(canvas, self)
+            self._draw_panels(fig)
+            vbox.addWidget(tb)
+            vbox.addWidget(canvas, stretch=1)
+        except ImportError:
+            vbox.addWidget(QLabel(
+                "matplotlib not available — cannot show preview.\n"
+                "Click 'Confirm & Save ENZ' to write the file directly."
+            ))
+
+        # ── Buttons ───────────────────────────────────────────────────────────
+        btn_hbox = QHBoxLayout()
+        btn_hbox.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedWidth(90)
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("  Confirm & Save ENZ  ")
+        save_btn.setFixedHeight(34)
+        save_btn.setStyleSheet(
+            "font-weight: bold; background-color: #1e7e34; color: white; padding: 0 16px;"
+        )
+        save_btn.clicked.connect(self.accept)
+        btn_hbox.addWidget(cancel_btn)
+        btn_hbox.addWidget(save_btn)
+        vbox.addLayout(btn_hbox)
+
+    # ── Plot ──────────────────────────────────────────────────────────────────
+
+    def _draw_panels(self, fig):
+        import numpy as np
+
+        cd = self._col
+
+        # Time axis: UTC hours from midnight
+        date_obj  = datetime.strptime(self._date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        day_s     = (date_obj - ENZ_EPOCH).total_seconds()
+        t_h       = (self._grid_s - day_s) / 3600.0
+
+        axes = fig.subplots(4, 1, sharex=True)
+        axes[-1].set_xlabel("Time UTC (h)", fontsize=9)
+
+        def _hv_shade(ax):
+            """Shade background yellow when roof is open (hv=1)."""
+            if 'hv' in cd:
+                ax.fill_between(
+                    t_h, 0, 1,
+                    where=cd['hv'] > 0.5,
+                    transform=ax.get_xaxis_transform(),
+                    alpha=0.10, color='yellow', zorder=0, label='HV on'
+                )
+
+        # ── Panel 0: Temperature ──────────────────────────────────────────────
+        ax = axes[0]
+        _hv_shade(ax)
+        if 't' in cd:
+            ax.plot(t_h, cd['t'], color='#e07b39', lw=1.3, label='T (K)')
+            ax.set_ylabel('T (K)', fontsize=8, color='#e07b39')
+            ax.tick_params(axis='y', colors='#e07b39', labelsize=7)
+        if 'H2O' in cd:
+            ax2 = ax.twinx()
+            ax2.plot(t_h, cd['H2O'], color='steelblue', lw=0.9,
+                     alpha=0.7, label='H₂O (ppb)')
+            ax2.set_ylabel('H₂O (ppb)', fontsize=7, color='steelblue')
+            ax2.tick_params(axis='y', colors='steelblue', labelsize=6)
+        ax.set_title('Temperature & H₂O', fontsize=8)
+
+        # ── Panel 1: NOx + O3 ────────────────────────────────────────────────
+        ax = axes[1]
+        _hv_shade(ax)
+        _colors = {'NO': '#44aa44', 'NO2': '#dd8833', 'O3': '#9955cc'}
+        for spec, col in _colors.items():
+            if spec in cd:
+                ax.plot(t_h, cd[spec], lw=1.2, color=col, label=spec)
+        ax.set_ylabel('ppb', fontsize=8)
+        ax.set_title('NO / NO₂ / O₃', fontsize=8)
+        if any(s in cd for s in _colors):
+            ax.legend(fontsize=7, loc='upper right', framealpha=0.5)
+
+        # ── Panel 2: J-values ────────────────────────────────────────────────
+        ax = axes[2]
+        _hv_shade(ax)
+        j_cols  = [c for c in cd if c.startswith('j')]
+        ls_cycle = ['-', '--', '-.', ':', (0, (3, 1, 1, 1)), (0, (5, 2))]
+        for i, jc in enumerate(j_cols):
+            ax.plot(t_h, cd[jc], lw=0.9, ls=ls_cycle[i % len(ls_cycle)], label=jc)
+        ax.set_ylabel('J (s⁻¹)', fontsize=8)
+        ax.set_title('J-values', fontsize=8)
+        if j_cols:
+            ax.legend(fontsize=6, loc='upper right', ncol=3, framealpha=0.5)
+
+        # ── Panel 3: Injections ───────────────────────────────────────────────
+        ax = axes[3]
+        _hv_shade(ax)
+        inj_cols = [
+            c for c in cd
+            if (c.startswith('Q') or c.startswith('q') or c.startswith('Injection_'))
+            and np.any(cd[c] != 0)
+        ]
+        for i, ic in enumerate(inj_cols):
+            ax.plot(t_h, cd[ic], lw=1.2, ls=ls_cycle[i % len(ls_cycle)], label=ic)
+        ax.set_ylabel('ppb / a.u.', fontsize=8)
+        ax.set_title('Injections & Boundary Conditions', fontsize=8)
+        if inj_cols:
+            ax.legend(fontsize=7, loc='upper right', framealpha=0.5)
+        else:
+            ax.text(0.5, 0.5, 'No active injections',
+                    transform=ax.transAxes, ha='center', va='center',
+                    color='#888', fontsize=9)
+
+        for a in axes:
+            a.tick_params(labelsize=7)
+            a.grid(True, alpha=0.18, lw=0.5)
+            a.set_xlim(t_h[0], t_h[-1])
