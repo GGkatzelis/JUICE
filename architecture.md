@@ -7,7 +7,7 @@ The tool is a full-stack simulation framework replacing the legacy MCM/EASY Fort
 Decoupled three-stage workflow:
 
 - **Front-End** (`saphir_gui.py`): PyQt6 "Scenario Builder." Sole purpose is to produce `scenario_config.json`.
-- **The Matrix** (`scenario_config.json`): Single source of truth. Defines Measured (interpolated) vs. Fixed variables, scaling factors, custom/excluded reactions, and active parameters.
+- **The Matrix** (`scenario_config.json`): Single source of truth. Defines Measured (interpolated) vs. Fixed variables, scaling factors, custom/excluded/blocked reactions and parameters.
 - **Back-End Engine** (`scenario_runner.py`): Headless script that consumes the JSON, solves the stiff ODE system with `scipy.integrate.solve_ivp` (Radau method), exports CSV, and launches an interactive viewer.
 
 ## 2. Module Summary
@@ -43,48 +43,42 @@ Decoupled three-stage workflow:
 - **Zero-clipping:** removed from inside `system_ode`; applied only at CSV export via `np.maximum(self.sol.y, 0.0)`
 
 ## SAPHIR GUI (`saphir_gui.py`)
-The `saphir_gui.py` module provides a graphical user interface (GUI) for building and configuring simulation scenarios. It is built using PyQt6 and allows users to define environmental conditions, initial concentrations, chamber effects, and chemical injections, and then save this configuration to a `scenario_config.json` file.
 
-### Purpose and Workflow
-The primary goal of the GUI is to streamline the process of creating complex simulation scenarios by providing an intuitive, interactive interface. The workflow is as follows:
-1.  **Load Folder**: The user starts by selecting a root folder for the scenario, which should contain the necessary mechanism files and a SAPHIR `.enz` data file.
-2.  **Configure Scenario**: The user navigates through the tabs to define:
-    -   **Constrained Variables**: Maps model variables to `.enz` columns or fixed constants, and defines Derived Photolysis Frequencies (J-Value scaling).
-    -   **Chamber Sources**: Configures chamber-specific artifacts (light/dark emissions, Y-background) and steady Continuous Sources (e.g., mixing influxes, water impurities).
-    -   **Chamber Initialization**: Sets initial concentrations, schedules UTC-based Burst Injections, and defines Custom Reactions for ad-hoc VOC chemistry.
-3.  **Active Scenario Summary**: A sidebar console provides a real-time, highly explicit summary of the configured logic, mapped variables, and active equations.
-4.  **Generate JSON**: Once the configuration is complete, the user saves the settings to a `scenario_config.json` file, which can then be used by the main pipeline to run the simulation.
+PyQt6 scenario builder. Produces a named `<filename>.json` and can directly launch the runner.
 
-### Key Components
--   **`SaphirGUI(QMainWindow)`**: The main application window.
--   **Folder Selection**: A simple dialog to select the working directory.
--   **Sidebar**: Displays mechanism files, detects `.enz` files, calculates exact UTC Start/Stop ranges from data Epochs, and houses the Active Scenario Summary.
--   **Tabs**:
-    -   **Constrained Variables**: Tables for environment mapping and derived J-values.
-    -   **Chamber Sources**: Controls for chamber artifacts and continuous species influxes.
-    -   **Chamber Initialization**: Controls for initial conditions, burst injections, custom reactions, and excluded reactions.
-    -   **Discovered Parameters**: Searchable tree of all parameters found in the loaded chemistry files, with UNSAFE parameters automatically flagged.
--   **Active Scenario Summary**: A read-only text area that details the active state of the matrix, including any active reaction exclusions.
--   **Scientific Help**: Provides tooltips with scientific explanations for various parameters.
--   **JSON Output**: The `save_json` function serializes the configuration into a structured JSON file.
+### Workflow
+1. **Load Folder** — select scenario root containing `chemistry/` subfolder and a `.enz` file.
+2. **Configure** — four tabs (see below).
+3. **Active Scenario Summary** — sidebar console live-updates with all active settings and warnings.
+4. **Generate JSON + Run** — bottom bar: editable filename field, 💾 save button, ▶ Run button.
 
-### UNSAFE Parameter Classification (2026-03-28)
-The **Discovered Parameters** tab auto-classifies parameters from the loaded EASY files into safe and unsafe categories. Unsafe parameters are automatically unchecked and coloured red with a warning tooltip. They are never written into `active_parameters` in the JSON.
+### Tabs
 
-**UNSAFE (always blocked):** `KMT01–04`, `KMT07–10`, `KMT12–14`, `KFPAN`, `KBPAN` — COMPRC-based Troe rates handled by `mcm_kinetics.py`. `COMPRC`, `PHTFKT`, `PHTFKT_CS`, `PHOTMMSC`, `DENSITY`, `ARRH`, `AMAX`, `AMIN` — EASY `FUNCTION[...]` IDL templates that cannot be evaluated as Python callables.
+**Constrained Variables**
+- Maps model variables (TEMP, PRESS, JNO2, …) to `.enz` columns or fixed constants.
+- **J-Scalings table** (4 columns: Act / Target / Expression / Source): defines additional J-values derived from measured ones. Source column shows `"Manual"` or the chemistry filename the expression was auto-detected from. **"🔄 Sync from Files"** button scans `master_parameters` for J-named entries not already listed (skips J1–J51, env_map entries, JSCALE) and adds them with source attribution.
 
-**Why:** If these were activated they would overwrite the correct Python implementations in the ODE context with `0.0` (SafeDict fallback), silently disabling large parts of the radical chain chemistry.
+**Chamber Sources**
+- Artifact checkboxes: HONO light source (Rohrer et al.), HCHO light source, NO2 light source, Y background, wall dark HONO.
+- HONO Scaling Factor default: `"1"`.
+- Continuous Sources table for background influx rates.
 
-### Custom Reactions
-The "Custom Reactions" table in the Chamber Initialization tab allows users to add ad-hoc reactions with unknown VOC species. Each row specifies Reactants, Products, a rate expression `k` (valid Python using `T`, `M`, etc.), and a comment. Species not found in the loaded mechanism files are highlighted orange. Active rows are written to `custom_reactions` in the JSON and added to `self.mechanism.reactions` in the runner before solving.
+**Chamber Initialization**
+- Initial conditions, burst injections (auto-detected from `q*` columns in `.enz`), custom reactions.
+- **Custom Reactions**: species not in loaded mechanism highlighted orange. Written to `custom_reactions` in JSON; appended to `self.mechanism.reactions` in runner before solve.
+- **Excluded Reactions**: inline autocomplete via `ReactionCompleterDelegate` (`QStyledItemDelegate`). As you type a species name (contains-matching, case-insensitive), the reactants column suggests all matching reactant-set strings from loaded chemistry files. Selecting reactants auto-fills products if only one product set exists. Written to `excluded_reactions`; filtered from `self.mechanism.reactions` in `_build_mechanism` before artifacts, using frozenset (coefficient-agnostic, order-insensitive) matching.
 
-### Excluded Reactions (2026-03-28)
-The "Excluded Reactions" table in the Chamber Initialization tab allows users to suppress specific reactions that exist in the loaded chemistry files. Workflow:
-1. Type the Reactants and Products of the reaction to remove (e.g. `C2H5OH + OH` / `HOCH2CH2O2`).
-2. The GUI validates the entry in real time against all reactions parsed from the loaded files and shows `✓ Found (N)` or `✗ Not found`.
-3. Matching is stoichiometry-coefficient-agnostic and order-insensitive (uses frozensets of species names).
-4. Active exclusions are written to `excluded_reactions` in the JSON.
-5. `scenario_runner.py` filters out matching reactions in `_build_mechanism` **before** artifacts are added, printing how many reactions were removed.
+**Chemistry Overview** (previously "Discovered Parameters" — redesigned 2026-03-29)
+- Read-only audit tree of all parameters parsed from loaded chemistry files.
+- 4 columns: Parameter / Expression / Source File / **Status**.
+- Status values: `🟢 Active (auto-loaded)`, `⚠ Backend-managed` (UNSAFE — KMT01-14, COMPRC, PHTFKT etc.), `⚫ Commented — skipped`. No checkboxes — all loading is unconditional (Fix 7).
+- **Blocked Parameters** section: user can add specific parameter names to suppress. Written to `blocked_parameters` in JSON; runner strips those names from `var_assignments` after file parse, before j_scalings.
+
+### UNSAFE parameters (informational only)
+`KMT01–04`, `KMT07–10`, `KMT12–14`, `KFPAN`, `KBPAN`, `COMPRC`, `PHTFKT`, `PHTFKT_CS`, `PHOTMMSC`, `DENSITY`, `ARRH`, `AMAX`, `AMIN` — shown in orange in the Chemistry Overview tree. These are either handled by the Python backend directly or use EASY `FUNCTION[...]` syntax that fails to compile. Since Fix 7 loads all parameters unconditionally, they are listed as informational warnings, not blocking controls.
+
+### Run Simulation button
+"▶ Run Simulation" (bottom right, green) launches `scenario_runner.py <config.json>` as a subprocess via `subprocess.Popen`. If a JSON was just saved, offers "Run last saved" or "Browse for JSON". The GUI remains responsive while the runner window is open.
 
 ## 5. JSON Schema (`scenario_config.json`)
 
@@ -101,7 +95,8 @@ Key fields and their consumers:
 | `burst_injections` | list of {target,ppb,start_utc,duration_s} | Gaussian pulse injected into `dydt` |
 | `custom_reactions` | list of {reactants,products,rate} | appended to `self.mechanism.reactions` |
 | `excluded_reactions` | list of {reactants,products} | filtered out of `self.mechanism.reactions` before artifacts |
-| `active_parameters` | list of parameter names | **DEPRECATED — no longer consumed by the runner.** Field may still exist in old JSON files but is ignored. All uncommented parameters from EASY files are now loaded unconditionally. |
+| `active_parameters` | list of parameter names | **DEPRECATED — no longer written or consumed.** Old JSON files may still contain this field; it is silently ignored by the runner. |
+| `blocked_parameters` | list of parameter names | `_build_mechanism` — strips named parameters from `var_assignments` after file parse, before j_scalings. Safe blocklist (inverse of the old whitelist). |
 
 ## 6. Bug Fixes Applied (2026-03-28)
 
@@ -207,10 +202,11 @@ _build_mechanism():
   1. Sort mechanism_files: all .rate files first (in JSON order), then .mech/.incl (in JSON order)
   2. Parse each file → accumulate species, reactions, parameters into self.mechanism
   3. ALL uncommented parameters → var_assignments (no whitelist; parser already blocks RESERVED/invalid names)
-  4. Append j_scalings to var_assignments
-  5. Add custom_reactions from JSON
-  6. Filter excluded_reactions (frozenset matching, coefficient-agnostic)
-  7. _add_artifacts() → HONO/HCHO/Y/dark-HONO reactions appended
+  4. Apply blocked_parameters: strip named params from var_assignments (user-controlled blocklist)
+  5. Append j_scalings to var_assignments (these override file-defined values — last-write-wins)
+  6. Add custom_reactions from JSON
+  7. Filter excluded_reactions (frozenset matching, coefficient-agnostic)
+  8. _add_artifacts() → HONO/HCHO/Y/dark-HONO reactions appended
 
 system_ode(t, y):
   1. Load env_map data (TEMP, PRESS, JNO2, JO1D, JHONO, FLOW, HV, SZ, etc.)
@@ -235,7 +231,8 @@ system_ode(t, y):
 
 ## 8. Known Gotchas for Future Development
 
-- **`active_parameters` is gone from the runner.** Parameters from EASY files are now loaded unconditionally (all uncommented entries whose names pass the parser's `^[A-Z][A-Z0-9_]*$` filter). The GUI's UNSAFE classification still prevents COMPRC-based KMTs and FUNCTION[] templates from being written into the JSON, but even if they were, the parser would not emit them as `parameters` entries because they appear in `RESERVED`. Do not reinstate a runner-level whitelist — it was the root cause of Fix 7's regression.
+- **`active_parameters` is gone.** Parameters load unconditionally (parser's `^[A-Z][A-Z0-9_]*$` filter is the only gate). Do not reinstate a runner-level whitelist — it was the root cause of Fix 7's regression. Use `blocked_parameters` for targeted suppression instead.
+- **`blocked_parameters` is a blocklist (safe).** Specific names can be suppressed via the Chemistry Overview tab. Applied after file parse, before j_scalings. Empty list = no effect on existing simulations.
 - **"Last definition wins" for parameters.** `var_assignments` is a list, not a dict. If the same parameter is defined in multiple files, it gets evaluated multiple times per ODE step; the last evaluation overwrites `ctx`. File order in `mechanism_files` (after the `.rate`-first sort) determines precedence.
 - **Reactions never deduplicated.** If the same reaction appears in two loaded files it runs twice. Avoid loading overlapping chemistry files.
 - **CONST() spaces.** EASY files frequently write `CONST( expr )` with interior spaces. The parser now strips these (`\(\s*(.*?)\s*\)\s*$`). If adding new EASY-file parsing logic, always `.strip()` extracted expressions before `compile()`.
@@ -261,7 +258,7 @@ All seven bug fixes are applied and the simulation is working correctly:
 
 ## 10. Next Steps & Future Enhancements
 
-1.  **GUI update:** Cosmetic/structural improvements to `saphir_gui.py` planned now that chemistry is stable.
-2.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple `scenario_config.json` files sequentially.
+1.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
+2.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
 3.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
 4.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.
