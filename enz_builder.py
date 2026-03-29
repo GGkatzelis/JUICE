@@ -35,8 +35,8 @@ ENZ_EPOCH = datetime(2000, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 # enz_column → (nc_filename_suffix, variable_name_inside_nc, fill_value)
 # Filename in archive: Z:\...\YYYY\MM\DD\YYYY-MM-DD.<suffix>
 ARCHIVE_MAP = {
-    'dilute':    ('SAPHIR.Flux.nc',                               'TOTAL_FLOW',  0.0),
-    't':         ('SAPHIR.USA.TEMP.nc',                           'TK_M_SAPHIR', 284.0),
+    'dilute':    ('SAPHIR.collected.all_param.nc',                 'TOTAL_FLOW',  0.0),
+    't':         ('SAPHIR.collected.all_param.nc',                 'TK_M_SAPHIR', 284.0),
     'H2O':       ('SAPHIR.PICARRO_CFKADS2270.CO_CO2_CH4_H2O.nc', 'H2O',         0.0),
     'NO2':       ('SAPHIR.TR43.NO_NO2_NOx.nc',                    'NO2',         0.0),
     'NO':        ('SAPHIR.TR43.NO_NO2_NOx.nc',                    'NO',          0.0),
@@ -765,30 +765,38 @@ class EnzBuilderDialog(QDialog):
         hint.setWordWrap(True)
         inj_vbox.addWidget(hint)
 
-        self.inj_table = QTableWidget(0, 7)
-        self.inj_table.setHorizontalHeaderLabels(
-            ["☑", "Column", "Start (HH:MM)", "Stop (HH:MM)", "Duration (s)", "Value (ppb)", "Notes from wiki"]
-        )
+        # Columns: ☑(0) Name(1) Start(2) Stop(3) Dur(4) Vol.μl(5) Formula(6)
+        #          Density(7) MW(8) Value_ppb(9) Notes(10)
+        self.inj_table = QTableWidget(0, 11)
+        self.inj_table.setHorizontalHeaderLabels([
+            "☑", "Column", "Start\n(HH:MM)", "Stop\n(HH:MM)", "Dur.\n(s)",
+            "Vol.\n(μl)", "Formula", "Density\n(g/mL)", "MW\n(g/mol)",
+            "Value\n(ppb)", "Notes from wiki",
+        ])
         self.inj_table.setColumnWidth(0, 28)
         self.inj_table.setColumnWidth(1, 130)
-        self.inj_table.setColumnWidth(2, 95)
-        self.inj_table.setColumnWidth(3, 95)
-        self.inj_table.setColumnWidth(4, 85)
-        self.inj_table.setColumnWidth(5, 75)
+        self.inj_table.setColumnWidth(2, 80)
+        self.inj_table.setColumnWidth(3, 80)
+        self.inj_table.setColumnWidth(4, 60)
+        self.inj_table.setColumnWidth(5, 58)   # Vol. (μl)
+        self.inj_table.setColumnWidth(6, 68)   # Formula
+        self.inj_table.setColumnWidth(7, 68)   # Density
+        self.inj_table.setColumnWidth(8, 60)   # MW
+        self.inj_table.setColumnWidth(9, 68)   # Value (ppb)
         self.inj_table.horizontalHeader().setSectionResizeMode(
-            6, QHeaderView.ResizeMode.Stretch
+            10, QHeaderView.ResizeMode.Stretch
         )
         self.inj_table.verticalHeader().setDefaultSectionSize(24)
         self.inj_table.cellChanged.connect(self._on_inj_cell_changed)
 
         for col_name, is_fast in DEFAULT_MANUAL_COLS:
             dur = str(FAST_DEFAULT_DURATION) if is_fast else ""
-            self._add_inj_row(col_name, "", "", dur, "", "")  # all unchecked
+            self._add_inj_row(col_name, "", "", dur)  # all unchecked, no vol/formula/density/mw
 
         inj_btn_hbox = QHBoxLayout()
         add_inj_btn = QPushButton("+ Add row"); add_inj_btn.setFixedWidth(80)
         add_inj_btn.clicked.connect(
-            lambda: self._add_inj_row("", "", "", str(FAST_DEFAULT_DURATION), "", "")
+            lambda: self._add_inj_row("", "", "", str(FAST_DEFAULT_DURATION))
         )
         del_inj_btn = QPushButton("Remove"); del_inj_btn.setFixedWidth(80)
         del_inj_btn.clicked.connect(self._remove_selected_inj)
@@ -860,12 +868,15 @@ class EnzBuilderDialog(QDialog):
 
     # ── Injection table row management ────────────────────────────────────────
 
-    def _add_inj_row(self, col_name, start_t, stop_t, duration_s, value, notes, checked=False):
+    def _add_inj_row(self, col_name, start_t, stop_t, duration_s,
+                     vol_ul="", formula="", density="", mw="",
+                     value="", notes="", checked=False):
         """
-        Add one row to the injection table.
-        Columns: ☑ | Column | Start | Stop | Duration(s) | Value | Notes
-        If start_t and stop_t are both given but duration_s is empty, duration is auto-calculated.
-        If start_t and duration_s are given but stop_t is empty, stop is auto-calculated.
+        Add one row to the injection table (11 columns).
+        Cols: ☑(0) Name(1) Start(2) Stop(3) Dur(4) Vol.μl(5) Formula(6)
+              Density(7) MW(8) Value_ppb(9) Notes(10)
+        Duration is auto-calculated from Start+Stop if missing;
+        Stop is auto-calculated from Start+Duration if Stop is missing.
         """
         self._inj_table_updating = True
         try:
@@ -881,8 +892,7 @@ class EnzBuilderDialog(QDialog):
             self.inj_table.setItem(r, 3, QTableWidgetItem(stop_t))
 
             # Auto-derive duration or stop if partial info given
-            dur_str  = str(duration_s)
-            stop_str = stop_t
+            dur_str = str(duration_s)
             if start_t and stop_t and not duration_s:
                 try:
                     dur_str = str(self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t))
@@ -890,22 +900,31 @@ class EnzBuilderDialog(QDialog):
                     pass
             elif start_t and duration_s and not stop_t:
                 try:
-                    stop_str = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(duration_s))
-                    self.inj_table.item(r, 3).setText(stop_str)
+                    new_stop = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(duration_s))
+                    self.inj_table.setItem(r, 3, QTableWidgetItem(new_stop))
                 except ValueError:
                     pass
 
             self.inj_table.setItem(r, 4, QTableWidgetItem(dur_str))
-            self.inj_table.setItem(r, 5, QTableWidgetItem(str(value)))
+            self.inj_table.setItem(r, 5, QTableWidgetItem(str(vol_ul)))
+            self.inj_table.setItem(r, 6, QTableWidgetItem(str(formula)))
+            self.inj_table.setItem(r, 7, QTableWidgetItem(str(density)))
+            self.inj_table.setItem(r, 8, QTableWidgetItem(str(mw)))
+            self.inj_table.setItem(r, 9, QTableWidgetItem(str(value)))
 
-            notes_item = QTableWidgetItem(notes)
+            notes_item = QTableWidgetItem(str(notes))
             notes_item.setForeground(QColor("#aaa"))
-            self.inj_table.setItem(r, 6, notes_item)
+            self.inj_table.setItem(r, 10, notes_item)
         finally:
             self._inj_table_updating = False
 
     def _on_inj_cell_changed(self, row, col):
-        """Auto-calculate Duration from Start+Stop, or Stop from Start+Duration."""
+        """
+        Auto-calculations triggered by cell edits:
+        · Start or Stop changed  → recompute Duration
+        · Duration changed       → recompute Stop
+        · Vol (μl), Density, or MW changed → recompute Value (ppb)
+        """
         if self._inj_table_updating:
             return
         self._inj_table_updating = True
@@ -914,28 +933,45 @@ class EnzBuilderDialog(QDialog):
                 it = self.inj_table.item(row, c)
                 return it.text().strip() if it else ""
 
-            start_t = txt(2)
-            stop_t  = txt(3)
-            dur_s   = txt(4)
-
-            if col in (2, 3) and start_t and stop_t:
-                # Recalculate duration from start and stop
-                try:
-                    dur = self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t)
-                    it = self.inj_table.item(row, 4)
-                    if it:
-                        it.setText(str(dur))
-                except ValueError:
-                    pass
-            elif col == 4 and start_t and dur_s:
-                # Recalculate stop from start + duration
-                try:
-                    stop_str = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(dur_s))
-                    it = self.inj_table.item(row, 3)
-                    if it:
-                        it.setText(stop_str)
-                except ValueError:
-                    pass
+            if col in (2, 3):
+                start_t, stop_t = txt(2), txt(3)
+                if start_t and stop_t:
+                    try:
+                        dur = self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t)
+                        it  = self.inj_table.item(row, 4)
+                        if it:
+                            it.setText(str(dur))
+                    except ValueError:
+                        pass
+            elif col == 4:
+                start_t, dur_s = txt(2), txt(4)
+                if start_t and dur_s:
+                    try:
+                        new_stop = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(dur_s))
+                        it = self.inj_table.item(row, 3)
+                        if it:
+                            it.setText(new_stop)
+                    except ValueError:
+                        pass
+            elif col in (5, 7, 8):
+                # Auto-calculate ppb from Vol (μl) + Density (g/mL) + MW (g/mol)
+                vol_s, dens_s, mw_s = txt(5), txt(7), txt(8)
+                if vol_s and dens_s and mw_s:
+                    try:
+                        vol_mL = float(vol_s) * 1e-3       # μl → mL
+                        dens   = float(dens_s)
+                        mw     = float(mw_s)
+                        # n_air at standard conditions (T=298 K, P=1013 hPa, V=276 m³)
+                        n_air  = (101_300.0 * 276.0) / (8.314 * 298.0)
+                        n_voc  = (vol_mL * dens) / mw
+                        ppb    = (n_voc / n_air) * 1e9
+                        it = self.inj_table.item(row, 9)
+                        if it:
+                            it.setText(f'{ppb:.3f}')
+                        else:
+                            self.inj_table.setItem(row, 9, QTableWidgetItem(f'{ppb:.3f}'))
+                    except (ValueError, ZeroDivisionError):
+                        pass
         finally:
             self._inj_table_updating = False
 
@@ -1075,7 +1111,7 @@ class EnzBuilderDialog(QDialog):
                         if h2o_measured else "")
                 col_it.setForeground(QColor("#aaa") if h2o_measured else QColor("white"))
                 col_it.setToolTip(note)
-                notes_it = self.inj_table.item(r, 6)
+                notes_it = self.inj_table.item(r, 10)
                 if notes_it and h2o_measured and note not in notes_it.text():
                     notes_it.setText((notes_it.text() + "  " + note).strip())
 
@@ -1193,24 +1229,24 @@ class EnzBuilderDialog(QDialog):
         return None
 
     def _inj_row_is_empty(self, row):
-        """True if Start, Stop, and Value cells are all blank."""
-        for c in (2, 3, 5):
+        """True if Start, Stop, and Value (ppb) cells are all blank."""
+        for c in (2, 3, 9):
             it = self.inj_table.item(row, c)
             if it and it.text().strip():
                 return False
         return True
 
     def _set_inj_row(self, row, start_t, stop_t, dur_s, value, notes):
-        """Overwrite an existing injection row's data cells."""
+        """Overwrite an existing injection row's data cells (timing + value + notes)."""
         self._inj_table_updating = True
         try:
-            for col, val in ((2, start_t), (3, stop_t), (4, dur_s), (5, value)):
-                it = self.inj_table.item(row, col)
+            for col_idx, val in ((2, start_t), (3, stop_t), (4, dur_s), (9, value)):
+                it = self.inj_table.item(row, col_idx)
                 if it:
                     it.setText(val)
                 else:
-                    self.inj_table.setItem(row, col, QTableWidgetItem(val))
-            notes_it = self.inj_table.item(row, 6)
+                    self.inj_table.setItem(row, col_idx, QTableWidgetItem(val))
+            notes_it = self.inj_table.item(row, 10)
             if notes_it:
                 notes_it.setText(notes)
                 notes_it.setForeground(QColor("#aaa"))
@@ -1218,26 +1254,22 @@ class EnzBuilderDialog(QDialog):
             self._inj_table_updating = False
 
     def _mark_value_needed(self, row):
-        """Colour the Value cell orange to signal the user must fill in the amount."""
-        it = self.inj_table.item(row, 5)
+        """Colour the Value (ppb) cell orange to signal the user must fill in the amount."""
+        it = self.inj_table.item(row, 9)
         if it:
             it.setForeground(QColor("#f0a500"))
-            it.setToolTip("Enter the injection amount (e.g. ppb or AE)")
+            it.setToolTip("Enter the injection amount in ppb")
 
     def _parse_voc_description(self, desc):
         """
-        Parse a VOC injection wiki description line to extract:
-          - compound name → ENZ column name  (Injection_<Suffix>)
-          - chemical formula
-          - injection value converted to ppb
-            · if unit is ppb/ppm  → direct
-            · if unit is μl/ml/nl → converts using std conditions
-              (T=298 K, P=1013 hPa, V_chamber=276 m³)
+        Parse a VOC injection wiki description line.
 
         Returns
         -------
-        (col_name, formula, value_ppb_str, notes_str)
-        All strings; value_ppb_str is '' when conversion is not possible.
+        (col_name, formula, density_str, mw_str, vol_ul_str, value_ppb_str, notes_str)
+        All strings.  vol_ul_str is the raw extracted volume in μl (or '').
+        value_ppb_str is computed ppb (or '' when conversion not possible).
+        notes_str is the original wiki text + a brief conversion note.
         """
         desc_lower = desc.lower()
 
@@ -1254,22 +1286,22 @@ class EnzBuilderDialog(QDialog):
                 density    = dens
                 break
 
-        col_name = f"Injection_{col_suffix}"
+        col_name    = f"Injection_{col_suffix}"
+        density_str = f'{density:.4f}' if density is not None else ''
+        mw_str      = f'{molar_mass:.2f}' if molar_mass is not None else ''
 
-        # --- Identify value and unit ---
-        # Patterns ordered from most-specific to least
+        # --- Identify injection amount and unit ---
         unit_patterns = [
-            (r'(\d+\.?\d*)\s*(\u03bcl|µl|ul)\b',          '\u03bcl'),
-            (r'(\d+\.?\d*)\s*(ml|milliliter)\b',            'ml'),
-            (r'(\d+\.?\d*)\s*(nl|nanoliter)\b',             'nl'),
-            (r'(\d+\.?\d*)\s*ppm\b',                        'ppm'),
-            (r'(\d+\.?\d*)\s*ppb\b',                        'ppb'),
+            (r'(\d+\.?\d*)\s*(\u03bcl|µl|ul)\b',  '\u03bcl'),
+            (r'(\d+\.?\d*)\s*(ml|milliliter)\b',   'ml'),
+            (r'(\d+\.?\d*)\s*(nl|nanoliter)\b',    'nl'),
+            (r'(\d+\.?\d*)\s*ppm\b',               'ppm'),
+            (r'(\d+\.?\d*)\s*ppb\b',               'ppb'),
         ]
 
+        vol_ul_str    = ''
         value_ppb_str = ''
-        notes_parts   = []
-        if formula:
-            notes_parts.append(f"Formula: {formula}")
+        note_suffix   = ''
 
         for pattern, unit in unit_patterns:
             m = re.search(pattern, desc_lower)
@@ -1277,37 +1309,31 @@ class EnzBuilderDialog(QDialog):
                 continue
             val = float(m.group(1))
             if unit == 'ppb':
-                value_ppb_str = f'{val:.2f}'
-                notes_parts.append(f"{val} ppb")
+                value_ppb_str = f'{val:.3f}'
+                note_suffix   = f'{val} ppb (direct)'
             elif unit == 'ppm':
-                value_ppb_str = f'{val * 1000:.2f}'
-                notes_parts.append(f"{val} ppm \u2192 {val * 1000:.1f} ppb")
+                value_ppb_str = f'{val * 1000:.3f}'
+                note_suffix   = f'{val} ppm \u2192 {val * 1000:.1f} ppb'
             elif unit in ('\u03bcl', 'ml', 'nl'):
-                factor = {'\u03bcl': 1e-3, 'ml': 1.0, 'nl': 1e-6}[unit]
-                vol_mL = val * factor
+                # Convert to μl for the Vol. column
+                factor_to_ul = {'\u03bcl': 1.0, 'ml': 1000.0, 'nl': 1e-3}[unit]
+                vol_ul        = val * factor_to_ul
+                vol_ul_str    = f'{vol_ul:.4f}'
+                vol_mL        = vol_ul * 1e-3
                 if molar_mass and density:
-                    # n_air (mol) at std conditions, 276 m³ chamber
-                    V_m3  = 276.0
-                    T_K   = 298.0
-                    P_Pa  = 101_300.0
-                    n_air = (P_Pa * V_m3) / (8.314 * T_K)   # ≈ 11 280 mol
-                    n_voc = (vol_mL * density) / molar_mass  # mol
+                    n_air = (101_300.0 * 276.0) / (8.314 * 298.0)
+                    n_voc = (vol_mL * density) / molar_mass
                     ppb   = (n_voc / n_air) * 1e9
-                    value_ppb_str = f'{ppb:.2f}'
-                    notes_parts.append(
-                        f"{val} {unit} \u2192 {ppb:.2f} ppb "
-                        f"(std T={T_K:.0f}K, P={P_Pa/100:.0f}hPa, V=276m\u00b3)"
-                    )
+                    value_ppb_str = f'{ppb:.3f}'
+                    note_suffix   = (f'{val} {unit} \u2192 {ppb:.2f} ppb '
+                                     f'(std 298K/1013hPa/276m\u00b3)')
                 else:
-                    notes_parts.append(
-                        f"{val} {unit} \u2014 density/MW unknown, enter ppb manually"
-                    )
-            break   # stop at first matched unit pattern
+                    note_suffix = (f'{val} {unit} \u2014 fill Density & MW '
+                                   f'to auto-compute ppb')
+            break
 
-        notes_str = desc[:60]
-        if notes_parts:
-            notes_str += '  |  ' + '  |  '.join(notes_parts)
-        return col_name, formula, value_ppb_str, notes_str
+        notes_str = desc[:70] + (f'  |  {note_suffix}' if note_suffix else '')
+        return col_name, formula, density_str, mw_str, vol_ul_str, value_ppb_str, notes_str
 
     def _populate_from_wiki(self, events):
         """
@@ -1338,9 +1364,12 @@ class EnzBuilderDialog(QDialog):
                 hv_closes.append((t, desc))
             elif code == 'X':
                 # VOC injection — parse compound name and convert value
-                col_name, formula, value_ppb_str, notes_str = \
+                col_name, formula, density_str, mw_str, vol_ul_str, value_ppb_str, notes_str = \
                     self._parse_voc_description(desc)
-                voc_events.append((t, col_name, formula, value_ppb_str, notes_str))
+                voc_events.append(
+                    (t, col_name, formula, density_str, mw_str,
+                     vol_ul_str, value_ppb_str, notes_str)
+                )
             elif code in WIKI_FAST_CODE_TO_COL:
                 col = WIKI_FAST_CODE_TO_COL[code]
                 fast_events.setdefault(col, []).append((t, desc))
@@ -1390,8 +1419,8 @@ class EnzBuilderDialog(QDialog):
                     target_row = existing
                 else:
                     self._add_inj_row(col, start_t, stop_t,
-                                      str(FAST_DEFAULT_DURATION), "", notes_str,
-                                      checked=True)
+                                      str(FAST_DEFAULT_DURATION),
+                                      notes=notes_str, checked=True)
                     target_row = self.inj_table.rowCount() - 1
                 self._mark_value_needed(target_row)
 
@@ -1410,18 +1439,22 @@ class EnzBuilderDialog(QDialog):
                     self._activate_inj_row(existing)
                     target_row = existing
                 else:
-                    self._add_inj_row(col, start_t, stop_t, dur_str, "", notes_str,
-                                      checked=True)
+                    self._add_inj_row(col, start_t, stop_t, dur_str,
+                                      notes=notes_str, checked=True)
                     target_row = self.inj_table.rowCount() - 1
                 self._mark_value_needed(target_row)
 
         # ── VOC injections ─────────────────────────────────────────────────────
-        for start_t, col_name, _formula, value_ppb_str, notes_str in voc_events:
+        for start_t, col_name, formula, density_str, mw_str, vol_ul_str, value_ppb_str, notes_str \
+                in voc_events:
             stop_t = self._s_to_hhmm(
                 self._hhmm_to_s(start_t) + FAST_DEFAULT_DURATION
             ) if start_t else ""
             self._add_inj_row(col_name, start_t, stop_t,
-                              str(FAST_DEFAULT_DURATION), value_ppb_str, notes_str,
+                              str(FAST_DEFAULT_DURATION),
+                              vol_ul=vol_ul_str, formula=formula,
+                              density=density_str, mw=mw_str,
+                              value=value_ppb_str, notes=notes_str,
                               checked=True)
             if not value_ppb_str:
                 self._mark_value_needed(self.inj_table.rowCount() - 1)
@@ -1503,7 +1536,7 @@ class EnzBuilderDialog(QDialog):
             col_item   = self.inj_table.item(r, 1)
             start_item = self.inj_table.item(r, 2)
             stop_item  = self.inj_table.item(r, 3)
-            val_item   = self.inj_table.item(r, 5)
+            val_item   = self.inj_table.item(r, 9)   # Value (ppb) column
             if not col_item:
                 continue
             col     = col_item.text().strip()
