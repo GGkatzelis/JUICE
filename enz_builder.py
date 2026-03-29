@@ -65,16 +65,29 @@ ARCHIVE_MAP_ALTS = {
     'jHCHO_M': ['jHCHO_m', 'jhcho_m', 'JHCHO_M'],
 }
 
-# Wiki action code → default ENZ injection column
-WIKI_CODE_TO_COL = {
+# Wiki action code → ENZ injection column
+# Fast codes: single event, 60 s default duration
+WIKI_FAST_CODE_TO_COL = {
     'O': 'QO3',
     'M': 'QNO',
     'D': 'QNO2',
     'C': 'QCO2',
+    'c': 'QCO',
     'X': 'QVOC',
-    'H': 'QH2O',
-    'S': 'Q_seed',
 }
+# Slow codes: paired start (uppercase) / stop (lowercase) events
+WIKI_SLOW_START_CODE = {'H': 'QH2O', 'S': 'Q_seed'}
+WIKI_SLOW_STOP_CODE  = {'h': 'QH2O', 's': 'Q_seed'}
+# Combined map kept for backwards compat
+WIKI_CODE_TO_COL = {**WIKI_FAST_CODE_TO_COL,
+                    **WIKI_SLOW_START_CODE,
+                    **WIKI_SLOW_STOP_CODE}
+
+# Fast injections default to 60 s; slow ones (H2O, seed) use wiki start/stop
+FAST_INJECTION_COLS    = set(WIKI_FAST_CODE_TO_COL.values()) | {'QCl2', 'qVCP1', 'qVCP2',
+                          'qDIESEL', 'qGASOLINE', 'qCOOKING', 'qBIOGENIC', 'q_isobutane'}
+SLOW_INJECTION_COLS    = {'QH2O', 'Q_seed'}
+FAST_DEFAULT_DURATION  = 60  # seconds
 
 # Standard ENZ column order (TIME is first, written separately)
 ENZ_COLUMN_ORDER = [
@@ -87,20 +100,22 @@ ENZ_COLUMN_ORDER = [
 ]
 
 # Default injection / manual-protocol columns shown in the injections table
+# (col_name, is_fast)  — start/stop/value left blank for user to fill
 DEFAULT_MANUAL_COLS = [
-    ('QH2O',        '00:00,0'),
-    ('QO3',         '00:00,0'),
-    ('QNO',         '00:00,0'),
-    ('QCO2',        '00:00,0'),
-    ('QCl2',        '00:00,0'),
-    ('Q_seed',      '00:00,0'),
-    ('qVCP1',       '00:00,0'),
-    ('qVCP2',       '00:00,0'),
-    ('qDIESEL',     '00:00,0'),
-    ('qGASOLINE',   '00:00,0'),
-    ('qCOOKING',    '00:00,0'),
-    ('qBIOGENIC',   '00:00,0'),
-    ('q_isobutane', '00:00,0'),
+    ('QH2O',        False),
+    ('QO3',         True),
+    ('QNO',         True),
+    ('QNO2',        True),
+    ('QCO2',        True),
+    ('QCl2',        True),
+    ('Q_seed',      False),
+    ('qVCP1',       True),
+    ('qVCP2',       True),
+    ('qDIESEL',     True),
+    ('qGASOLINE',   True),
+    ('qCOOKING',    True),
+    ('qBIOGENIC',   True),
+    ('q_isobutane', True),
 ]
 
 
@@ -180,7 +195,10 @@ def fetch_wiki_events(date_str):
         )
 
     url = f"https://saphir.fz-juelich.de/saphirwiki/{date_str}"
-    resp = requests.get(url, timeout=15, verify=True)
+    # verify=False: FZJ uses an internal CA certificate not in the default bundle
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    resp = requests.get(url, timeout=15, verify=False)
     resp.raise_for_status()
 
     # Strip HTML tags and decode common entities
@@ -398,6 +416,40 @@ def hv_intervals_to_grid(intervals, grid_s, date_str):
     return hv
 
 
+def pulse_to_grid(pulses, grid_s, date_str):
+    """
+    Convert a list of (start_hhmm, stop_hhmm, value) injection pulse tuples
+    to a summed array on the ENZ time grid.
+
+    Each pulse contributes `value` during [start, stop); 0 outside.
+    Multiple pulses for the same column are summed (additive injections).
+
+    Parameters
+    ----------
+    pulses   : list of (start_hhmm: str, stop_hhmm: str, value: float)
+    grid_s   : np.ndarray of seconds since ENZ_EPOCH
+    date_str : str  e.g. '2024-07-09'
+    """
+    date_obj  = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+    day_s     = (date_obj - ENZ_EPOCH).total_seconds()
+    result    = np.zeros(len(grid_s))
+
+    for start_t, stop_t, val in pulses:
+        try:
+            sh, sm = map(int, start_t.strip().split(':'))
+            eh, em = map(int, stop_t.strip().split(':'))
+            t0 = day_s + sh * 3600 + sm * 60
+            t1 = day_s + eh * 3600 + em * 60
+            if t1 <= t0:
+                continue
+            mask = (grid_s >= t0) & (grid_s < t1)
+            result[mask] += float(val)
+        except (ValueError, AttributeError, TypeError):
+            continue
+
+    return result
+
+
 def write_enz(output_path, time_grid_s, column_data):
     """
     Write a SAPHIR .enz file.
@@ -472,6 +524,9 @@ class EnzBuilderDialog(QDialog):
         self.resize(1100, 750)
         self.scenario_path = scenario_path
         self._wiki_thread = None
+        self._last_pasted_wiki_text = ""   # persists across re-opens of the paste dialog
+        self._inj_table_updating   = False # re-entrance guard for cellChanged
+        self._h2o_measured         = False # set True when H2O archive file found
         self._build_ui()
 
     # ── UI construction ────────────────────────────────────────────────────────
@@ -604,9 +659,16 @@ class EnzBuilderDialog(QDialog):
             "Requires VPN connection to Forschungszentrum Jülich."
         )
         self.wiki_fetch_btn.clicked.connect(self._fetch_wiki)
+        paste_btn = QPushButton("Paste Wiki Text")
+        paste_btn.setToolTip(
+            "Manually paste the action log text from the wiki page.\n"
+            "Use this if the automatic fetch fails."
+        )
+        paste_btn.clicked.connect(self._paste_wiki_text)
         self.wiki_status_lbl = QLabel("Not fetched")
         self.wiki_status_lbl.setStyleSheet("color: #888; font-size: 10px;")
         wiki_hbox.addWidget(self.wiki_fetch_btn)
+        wiki_hbox.addWidget(paste_btn)
         wiki_hbox.addWidget(self.wiki_status_lbl)
         wiki_hbox.addStretch()
         hv_vbox.addLayout(wiki_hbox)
@@ -641,32 +703,40 @@ class EnzBuilderDialog(QDialog):
         inj_vbox = QVBoxLayout()
 
         hint = QLabel(
-            "Format: HH:MM,value;HH:MM,value   "
-            "(step function — value holds until next entry)"
+            "Fast injections (O\u2083, NO, VOC …): 60 s default duration.  "
+            "Slow injections (H\u2082O, seed): start/stop from wiki or manual entry.  "
+            "Duration auto-calculated from Start & Stop; editing Duration updates Stop."
         )
         hint.setStyleSheet("color: #888; font-size: 10px;")
+        hint.setWordWrap(True)
         inj_vbox.addWidget(hint)
 
-        self.inj_table = QTableWidget(0, 4)
+        # 7 columns: ☑ | Column | Start | Stop | Duration(s) | Value | Notes
+        self.inj_table = QTableWidget(0, 7)
         self.inj_table.setHorizontalHeaderLabels(
-            ["☑", "Column", "Time-series  (HH:MM,val; ...)", "Notes from wiki"]
+            ["☑", "Column", "Start (HH:MM)", "Stop (HH:MM)", "Duration (s)", "Value", "Notes from wiki"]
         )
         self.inj_table.setColumnWidth(0, 28)
-        self.inj_table.setColumnWidth(1, 115)
+        self.inj_table.setColumnWidth(1, 105)
+        self.inj_table.setColumnWidth(2, 95)
+        self.inj_table.setColumnWidth(3, 95)
+        self.inj_table.setColumnWidth(4, 85)
+        self.inj_table.setColumnWidth(5, 65)
         self.inj_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
-        )
-        self.inj_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
+            6, QHeaderView.ResizeMode.Stretch
         )
         self.inj_table.verticalHeader().setDefaultSectionSize(24)
+        self.inj_table.cellChanged.connect(self._on_inj_cell_changed)
 
-        for col, series in DEFAULT_MANUAL_COLS:
-            self._add_inj_row(col, series, "")
+        for col_name, is_fast in DEFAULT_MANUAL_COLS:
+            dur = str(FAST_DEFAULT_DURATION) if is_fast else ""
+            self._add_inj_row(col_name, "", "", dur, "", "")
 
         inj_btn_hbox = QHBoxLayout()
         add_inj_btn = QPushButton("+ Add row"); add_inj_btn.setFixedWidth(80)
-        add_inj_btn.clicked.connect(lambda: self._add_inj_row("", "00:00,0", ""))
+        add_inj_btn.clicked.connect(
+            lambda: self._add_inj_row("", "", "", str(FAST_DEFAULT_DURATION), "", "")
+        )
         del_inj_btn = QPushButton("Remove"); del_inj_btn.setFixedWidth(80)
         del_inj_btn.clicked.connect(self._remove_selected_inj)
         inj_btn_hbox.addWidget(add_inj_btn)
@@ -722,21 +792,98 @@ class EnzBuilderDialog(QDialog):
         for r in rows:
             self.hv_table.removeRow(r)
 
-    def _add_inj_row(self, col_name, series, notes, checked=True):
-        r = self.inj_table.rowCount()
-        self.inj_table.insertRow(r)
+    # ── Static time helpers ────────────────────────────────────────────────────
 
-        chk = QTableWidgetItem()
-        chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-        chk.setCheckState(
-            Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        )
-        self.inj_table.setItem(r, 0, chk)
-        self.inj_table.setItem(r, 1, QTableWidgetItem(col_name))
-        self.inj_table.setItem(r, 2, QTableWidgetItem(series))
-        notes_item = QTableWidgetItem(notes)
-        notes_item.setForeground(QColor("#aaa"))
-        self.inj_table.setItem(r, 3, notes_item)
+    @staticmethod
+    def _hhmm_to_s(hhmm):
+        h, m = map(int, hhmm.strip().split(':'))
+        return h * 3600 + m * 60
+
+    @staticmethod
+    def _s_to_hhmm(secs):
+        secs = max(0, int(secs))
+        return f"{secs // 3600:02d}:{(secs % 3600) // 60:02d}"
+
+    # ── Injection table row management ────────────────────────────────────────
+
+    def _add_inj_row(self, col_name, start_t, stop_t, duration_s, value, notes, checked=True):
+        """
+        Add one row to the injection table.
+        Columns: ☑ | Column | Start | Stop | Duration(s) | Value | Notes
+        If start_t and stop_t are both given but duration_s is empty, duration is auto-calculated.
+        If start_t and duration_s are given but stop_t is empty, stop is auto-calculated.
+        """
+        self._inj_table_updating = True
+        try:
+            r = self.inj_table.rowCount()
+            self.inj_table.insertRow(r)
+
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            chk.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            self.inj_table.setItem(r, 0, chk)
+            self.inj_table.setItem(r, 1, QTableWidgetItem(col_name))
+            self.inj_table.setItem(r, 2, QTableWidgetItem(start_t))
+            self.inj_table.setItem(r, 3, QTableWidgetItem(stop_t))
+
+            # Auto-derive duration or stop if partial info given
+            dur_str  = str(duration_s)
+            stop_str = stop_t
+            if start_t and stop_t and not duration_s:
+                try:
+                    dur_str = str(self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t))
+                except ValueError:
+                    pass
+            elif start_t and duration_s and not stop_t:
+                try:
+                    stop_str = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(duration_s))
+                    self.inj_table.item(r, 3).setText(stop_str)
+                except ValueError:
+                    pass
+
+            self.inj_table.setItem(r, 4, QTableWidgetItem(dur_str))
+            self.inj_table.setItem(r, 5, QTableWidgetItem(str(value)))
+
+            notes_item = QTableWidgetItem(notes)
+            notes_item.setForeground(QColor("#aaa"))
+            self.inj_table.setItem(r, 6, notes_item)
+        finally:
+            self._inj_table_updating = False
+
+    def _on_inj_cell_changed(self, row, col):
+        """Auto-calculate Duration from Start+Stop, or Stop from Start+Duration."""
+        if self._inj_table_updating:
+            return
+        self._inj_table_updating = True
+        try:
+            def txt(c):
+                it = self.inj_table.item(row, c)
+                return it.text().strip() if it else ""
+
+            start_t = txt(2)
+            stop_t  = txt(3)
+            dur_s   = txt(4)
+
+            if col in (2, 3) and start_t and stop_t:
+                # Recalculate duration from start and stop
+                try:
+                    dur = self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t)
+                    it = self.inj_table.item(row, 4)
+                    if it:
+                        it.setText(str(dur))
+                except ValueError:
+                    pass
+            elif col == 4 and start_t and dur_s:
+                # Recalculate stop from start + duration
+                try:
+                    stop_str = self._s_to_hhmm(self._hhmm_to_s(start_t) + int(dur_s))
+                    it = self.inj_table.item(row, 3)
+                    if it:
+                        it.setText(stop_str)
+                except ValueError:
+                    pass
+        finally:
+            self._inj_table_updating = False
 
     def _remove_selected_inj(self):
         rows = sorted({i.row() for i in self.inj_table.selectedItems()}, reverse=True)
@@ -852,11 +999,33 @@ class EnzBuilderDialog(QDialog):
                 dot.setForeground(QColor("#e05252"))
                 dot.setToolTip(f"Error reading file:\n{exc}")
 
+        # ── H2O measurement flag ───────────────────────────────────────────────
+        h2o_row_idx = next((i for i, col in enumerate(ARCHIVE_MAP) if col == 'H2O'), None)
+        h2o_measured = False
+        if h2o_row_idx is not None:
+            dot = self.archive_table.item(h2o_row_idx, 0)
+            h2o_measured = (dot is not None
+                            and dot.foreground().color().name() == '#4caf50')
+        self._h2o_measured = h2o_measured
+
+        for r in range(self.inj_table.rowCount()):
+            col_it = self.inj_table.item(r, 1)
+            if col_it and col_it.text() == 'QH2O':
+                note = ("⚠ H\u2082O measured — injection timescale for reference/plotting only"
+                        if h2o_measured else "")
+                col_it.setForeground(QColor("#aaa") if h2o_measured else QColor("white"))
+                col_it.setToolTip(note)
+                notes_it = self.inj_table.item(r, 6)
+                if notes_it and h2o_measured and note not in notes_it.text():
+                    notes_it.setText((notes_it.text() + "  " + note).strip())
+
         QMessageBox.information(
             self, "Probe complete",
             "● Green  = file & variable found\n"
             "● Orange = file found but variable name mismatch (edit the NC variable column)\n"
             "● Red    = file not found"
+            + ("\n\nℹ H\u2082O measurement found — QH2O injection rows are reference/plotting only."
+               if h2o_measured else "")
         )
 
     # ── Wiki fetch ─────────────────────────────────────────────────────────────
@@ -894,35 +1063,156 @@ class EnzBuilderDialog(QDialog):
         QMessageBox.warning(
             self, "Wiki fetch failed",
             f"Could not fetch wiki page.\n\n{msg}\n\n"
-            "Make sure you are connected to the Forschungszentrum Jülich VPN."
+            "Make sure you are connected to the Forschungszentrum Jülich VPN.\n\n"
+            "Alternatively, open the wiki page in a browser, copy the action log "
+            "text, and use 'Paste Wiki Text'."
         )
+
+    def _paste_wiki_text(self):
+        """Open a text input where the user can paste the wiki action log manually."""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Paste Wiki Action Log")
+        dlg.resize(600, 400)
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel(
+            "Open the wiki page in your browser, copy the action log text,\n"
+            "and paste it below. Lines not matching  HH:MM <code>  are ignored."
+        ))
+        text_edit = QPlainTextEdit()
+        text_edit.setPlaceholderText(
+            "06:45 $ F.R. STATUS: Roof closed\n"
+            "09:00 R F.R. CHANGE: open roof\n"
+            "14:30 r F.R. CHANGE: close roof\n"
+            "08:30 M M.S. CHANGE: NO injection ..."
+        )
+        if self._last_pasted_wiki_text:
+            text_edit.setPlainText(self._last_pasted_wiki_text)
+        vbox.addWidget(text_edit)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        vbox.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        raw_text = text_edit.toPlainText()
+        if not raw_text.strip():
+            return
+
+        self._last_pasted_wiki_text = raw_text   # remember for next re-open
+
+        # Re-use the same regex parser as fetch_wiki_events
+        pattern = re.compile(r'^\s*(\d{2}:\d{2})\s+([A-Za-z$])\b(.*)', re.MULTILINE)
+        events = []
+        for m in pattern.finditer(raw_text):
+            desc = re.sub(r'\s{2,}', ' ', m.group(3).strip())
+            events.append({'time': m.group(1), 'code': m.group(2), 'description': desc})
+
+        if not events:
+            QMessageBox.warning(self, "No events found",
+                                "No lines matching  HH:MM <code>  were found in the pasted text.")
+            return
+
+        self.wiki_status_lbl.setText(f"Parsed {len(events)} events from pasted text — review below")
+        self.wiki_status_lbl.setStyleSheet("color: #4caf50;")
+        self._populate_from_wiki(events)
+
+    # ── Injection table helpers ────────────────────────────────────────────────
+
+    def _find_inj_row(self, col_name):
+        """Return the first row index whose Column cell matches col_name, or None."""
+        for r in range(self.inj_table.rowCount()):
+            it = self.inj_table.item(r, 1)
+            if it and it.text() == col_name:
+                return r
+        return None
+
+    def _inj_row_is_empty(self, row):
+        """True if Start, Stop, and Value cells are all blank."""
+        for c in (2, 3, 5):
+            it = self.inj_table.item(row, c)
+            if it and it.text().strip():
+                return False
+        return True
+
+    def _set_inj_row(self, row, start_t, stop_t, dur_s, value, notes):
+        """Overwrite an existing injection row's data cells."""
+        self._inj_table_updating = True
+        try:
+            for col, val in ((2, start_t), (3, stop_t), (4, dur_s), (5, value)):
+                it = self.inj_table.item(row, col)
+                if it:
+                    it.setText(val)
+                else:
+                    self.inj_table.setItem(row, col, QTableWidgetItem(val))
+            notes_it = self.inj_table.item(row, 6)
+            if notes_it:
+                notes_it.setText(notes)
+                notes_it.setForeground(QColor("#aaa"))
+        finally:
+            self._inj_table_updating = False
+
+    def _mark_value_needed(self, row):
+        """Colour the Value cell orange to signal the user must fill in the amount."""
+        it = self.inj_table.item(row, 5)
+        if it:
+            it.setForeground(QColor("#f0a500"))
+            it.setToolTip("Enter the injection amount (e.g. ppb or AE)")
 
     def _populate_from_wiki(self, events):
         """
-        Parse fetched wiki events and pre-fill HV table and injection rows.
+        Parse fetched/pasted wiki events and pre-fill HV table and injection rows.
+        - Fast injections (NO, O3, VOC …): start = event time, duration = 60 s default.
+        - Slow injections (H2O, seed): start from uppercase code (H/S),
+          stop from lowercase code (h/s); duration auto-calculated.
         All auto-filled values remain fully editable by the user.
         """
         hv_opens  = []
         hv_closes = []
-        injections = {}   # col_name → list of (time_str, description)
+
+        # fast: col → list of (start_t, desc)
+        fast_events = {}
+        # slow: col → list of (start_t, stop_t, notes)
+        slow_pairs  = {}
+        pending_slow_start = {}   # col → (start_t, desc)
 
         for ev in events:
             code = ev['code']
             t    = ev['time']
             desc = ev['description']
 
-            if code == 'R':                      # Roof open
+            if code == 'R':
                 hv_opens.append((t, desc))
-            elif code == 'r':                    # Roof close
+            elif code == 'r':
                 hv_closes.append((t, desc))
-            elif code in WIKI_CODE_TO_COL:
-                col = WIKI_CODE_TO_COL[code]
-                injections.setdefault(col, []).append((t, desc))
+            elif code in WIKI_FAST_CODE_TO_COL:
+                col = WIKI_FAST_CODE_TO_COL[code]
+                fast_events.setdefault(col, []).append((t, desc))
+            elif code in WIKI_SLOW_START_CODE:
+                col = WIKI_SLOW_START_CODE[code]
+                pending_slow_start[col] = (t, desc)
+            elif code in WIKI_SLOW_STOP_CODE:
+                col = WIKI_SLOW_STOP_CODE[code]
+                if col in pending_slow_start:
+                    start_t, start_desc = pending_slow_start.pop(col)
+                    notes = f"Start: {start_desc[:50]} | Stop: {desc[:50]}"
+                    slow_pairs.setdefault(col, []).append((start_t, t, notes))
+                else:
+                    # Stop without matching start
+                    slow_pairs.setdefault(col, []).append(("", t, f"Stop: {desc[:60]}"))
+
+        # Any slow starts without a stop (log may be incomplete)
+        for col, (start_t, desc) in pending_slow_start.items():
+            slow_pairs.setdefault(col, []).append((start_t, "", f"Start: {desc[:60]} (stop not found)"))
 
         # ── Update HV table ────────────────────────────────────────────────────
         if hv_opens or hv_closes:
             self.hv_table.setRowCount(0)
-            # Pair opens and closes in order
             n_pairs = max(len(hv_opens), len(hv_closes))
             for i in range(n_pairs):
                 open_t  = hv_opens[i][0]  if i < len(hv_opens)  else ""
@@ -934,40 +1224,41 @@ class EnzBuilderDialog(QDialog):
                     notes.append(f"Close: {hv_closes[i][1][:60]}")
                 self._add_hv_row(open_t, close_t, " | ".join(notes))
 
-        # ── Update injection rows ──────────────────────────────────────────────
-        for col, entries in injections.items():
-            # Find existing row for this column (if any)
-            existing_row = None
-            for r in range(self.inj_table.rowCount()):
-                item = self.inj_table.item(r, 1)
-                if item and item.text() == col:
-                    existing_row = r
-                    break
+        # ── Fast injections: one row per event, 60 s default ──────────────────
+        for col, entries in fast_events.items():
+            for start_t, desc in entries:
+                existing = self._find_inj_row(col)
+                stop_t = self._s_to_hhmm(
+                    self._hhmm_to_s(start_t) + FAST_DEFAULT_DURATION
+                ) if start_t else ""
+                notes_str = desc[:80]
+                if existing is not None and self._inj_row_is_empty(existing):
+                    # Fill the first blank row for this column
+                    self._set_inj_row(existing, start_t, stop_t,
+                                      str(FAST_DEFAULT_DURATION), "", notes_str)
+                else:
+                    self._add_inj_row(col, start_t, stop_t,
+                                      str(FAST_DEFAULT_DURATION), "", notes_str)
+                # Orange value cell = user still needs to fill in the amount
+                self._mark_value_needed(self.inj_table.rowCount() - 1
+                                        if existing is None else existing)
 
-            # Build notes string from wiki descriptions
-            notes_str = " | ".join(f"{t}: {d[:50]}" for t, d in entries)
-
-            # Build a time-series hint: just set the times, user fills values
-            # Format: first entry time with placeholder value 0 (user edits)
-            hint_series = ";".join(f"{t},?" for t, _ in entries)
-
-            if existing_row is not None:
-                # Update notes column; mark series as needing user input
-                series_item = self.inj_table.item(existing_row, 2)
-                if series_item and series_item.text().strip() in ('00:00,0', ''):
-                    series_item.setText(hint_series)
-                    series_item.setForeground(QColor("#f0a500"))  # orange = needs value
-                notes_item = self.inj_table.item(existing_row, 3)
-                if notes_item:
-                    notes_item.setText(notes_str)
-            else:
-                # Add new row for this column
-                self._add_inj_row(col, hint_series, notes_str)
-                # Colour the series orange to indicate values need filling
-                r = self.inj_table.rowCount() - 1
-                ser_item = self.inj_table.item(r, 2)
-                if ser_item:
-                    ser_item.setForeground(QColor("#f0a500"))
+        # ── Slow injections: paired start/stop rows ───────────────────────────
+        for col, pairs in slow_pairs.items():
+            for start_t, stop_t, notes_str in pairs:
+                dur_str = ""
+                if start_t and stop_t:
+                    try:
+                        dur_str = str(self._hhmm_to_s(stop_t) - self._hhmm_to_s(start_t))
+                    except ValueError:
+                        pass
+                existing = self._find_inj_row(col)
+                if existing is not None and self._inj_row_is_empty(existing):
+                    self._set_inj_row(existing, start_t, stop_t, dur_str, "", notes_str)
+                else:
+                    self._add_inj_row(col, start_t, stop_t, dur_str, "", notes_str)
+                self._mark_value_needed(self.inj_table.rowCount() - 1
+                                        if existing is None else existing)
 
     # ── ENZ generation ─────────────────────────────────────────────────────────
 
@@ -1037,26 +1328,40 @@ class EnzBuilderDialog(QDialog):
                 column_data[col] = np.full(len(grid_s), fill)
 
         # ── Manual injection columns (from table) ──────────────────────────────
+        # Collect (start, stop, value) pulses grouped by column name
+        pulses_by_col = {}
         for r in range(self.inj_table.rowCount()):
-            chk_item = self.inj_table.item(r, 0)
+            chk_item   = self.inj_table.item(r, 0)
             if chk_item and chk_item.checkState() != Qt.CheckState.Checked:
                 continue
-            col_item = self.inj_table.item(r, 1)
-            ser_item = self.inj_table.item(r, 2)
+            col_item   = self.inj_table.item(r, 1)
+            start_item = self.inj_table.item(r, 2)
+            stop_item  = self.inj_table.item(r, 3)
+            val_item   = self.inj_table.item(r, 5)
             if not col_item:
                 continue
-            col    = col_item.text().strip()
-            series = ser_item.text().strip() if ser_item else "00:00,0"
+            col     = col_item.text().strip()
+            start_t = start_item.text().strip() if start_item else ""
+            stop_t  = stop_item.text().strip()  if stop_item  else ""
+            val_str = val_item.text().strip()   if val_item   else "0"
             if not col:
                 continue
-            # Skip if the series still contains placeholder '?'
-            if '?' in series:
-                errors.append(
-                    f"{col}: time-series contains '?' placeholders — fill in values before generating."
-                )
-                column_data[col] = np.zeros(len(grid_s))
+            if not start_t or not stop_t:
+                if col not in column_data:
+                    errors.append(f"{col}: missing Start or Stop — row skipped (set to 0).")
+                    column_data.setdefault(col, np.zeros(len(grid_s)))
                 continue
-            column_data[col] = step_to_grid(series, grid_s, date_str)
+            try:
+                val = float(val_str) if val_str else 0.0
+            except ValueError:
+                errors.append(f"{col}: non-numeric value '{val_str}' — treated as 0.")
+                val = 0.0
+            pulses_by_col.setdefault(col, []).append((start_t, stop_t, val))
+
+        for col, pulses in pulses_by_col.items():
+            arr = pulse_to_grid(pulses, grid_s, date_str)
+            # Add on top of archive data if present (e.g. QH2O reference on H2O)
+            column_data[col] = column_data.get(col, np.zeros(len(grid_s))) + arr
 
         # ── Assemble in ENZ column order ───────────────────────────────────────
         # Collect any extra columns not in the standard order
