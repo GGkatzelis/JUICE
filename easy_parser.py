@@ -64,7 +64,7 @@ class EasyParser:
             # Handle parameter definitions (check in the cleaned line)
             if '=' in clean_line and not clean_line.lower().startswith(('k[', 'initial', 'facs', 'files')) and '-->' not in clean_line and not clean_line.startswith('%'):
                 name = clean_line.split('=')[0].strip().upper()
-                if name and name not in RESERVED:
+                if name and name not in RESERVED and re.match(r'^[A-Z][A-Z0-9_]*$', name):
                     expr = clean_line.split('=')[1].strip()
                     expr = re.sub(r'^(CONST|INPUT|FUNCTION)\(\s*(.*?)\s*\)\s*$', r'\2', expr, flags=re.I)
                     

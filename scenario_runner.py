@@ -98,23 +98,15 @@ class ScenarioRunner:
         # Sort files to ensure .rate definitions are parsed before .mech files
         mech_files = sorted(self.cfg['mechanism_files'], key=lambda x: ".rate" not in x)
         
-        active_parameters = self.cfg.get('active_parameters')
-        
         for f_name in mech_files:
             f_path = os.path.join(chem_path, f_name)
             if os.path.exists(f_path):
                 m_part = parser.parse(f_path)
                 self.mechanism.species.extend(m_part.species)
                 self.mechanism.reactions.extend(m_part.reactions)
-                
-                # Process both active and commented parameters from the parser
-                all_params = {**m_part.parameters, **m_part.commented_parameters}
 
-                for p_name, p_expr in all_params.items():
-                    # If active_parameters list exists, only include parameters from that list
-                    if active_parameters is not None and p_name.upper() not in active_parameters:
-                        continue
-
+                # Only use uncommented parameters — the parser already filters invalid names
+                for p_name, p_expr in m_part.parameters.items():
                     p_clean = p_expr.replace('@', '**')
                     p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
                     p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
