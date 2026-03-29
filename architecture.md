@@ -256,9 +256,22 @@ All seven bug fixes are applied and the simulation is working correctly:
 - All photolysis J-values (J1–J51) evaluating via PHTFKT Python closure
 - Zero failed reactions in `[DIAGNOSTICS]` output
 
+### GUI Enhancements (as of 2026-03-29)
+
+- **Logo Integration:** The FZ-Jülich logo has been added to the top application bar for branding and a more professional appearance.
+
+- **Chamber Initialization Refinements:** The "Chamber Initialization" tab and related logic have been significantly overhauled for better automation and accuracy:
+    - **Dynamic Burst Injections:** The "Burst Injections" table is no longer pre-populated with default O3/NO injections. It is now dynamically filled by detecting columns prefixed with `Injection_` in the loaded `.enz` file.
+    - **Concentration-from-data:** The ppb value for these dynamic injections is now taken directly from the value in the `Injection_*` column at the point of injection, rather than using a hardcoded default.
+    - **H2O Injection Guard:** The GUI now prevents an H2O injection from being added to the "Burst Injections" table if H2O is already configured as a constrained environmental variable, avoiding conflicting definitions.
+    - **Automatic Initial Conditions:** The "Initial Conditions" table is now automatically populated from the first row of the loaded `.enz` file when a project folder is loaded, streamlining setup.
+
+- **Derived Photolysis Order:** To improve readability, the default manual photolysis scaling rules (e.g., for JCL2) are now programmatically added to the *end* of the "Derived Photolysis Frequencies" list, after any J-values that have been automatically synchronized from the loaded chemistry files.
+
 ## 10. Next Steps & Future Enhancements
 
-1.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
-2.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
-3.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
-4.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.
+1.  **Debug Injection Behavior:** A new high-priority bug has been observed where injected species (e.g., from large ethanol injections) have their concentrations drop to zero almost immediately after the injection event in the simulation output. This needs to be investigated, as it may be related to recent changes in how parameters or reactions are handled by the ODE solver.
+2.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
+3.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
+4.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
+5.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.

@@ -68,32 +68,32 @@ ARCHIVE_MAP_ALTS = {
 # Wiki action code → ENZ injection column
 # Fast codes: single event, 60 s default duration
 WIKI_FAST_CODE_TO_COL = {
-    'O': 'QO3',
-    'M': 'QNO',
-    'D': 'QNO2',
-    'C': 'QCO2',
-    'c': 'QCO',
-    'X': 'QVOC',
+    'O': 'O3',
+    'M': 'NO',
+    'D': 'NO2',
+    'C': 'CO2',
+    'c': 'CO',
+    'X': 'VOC',
 }
 # Slow codes: paired start (uppercase) / stop (lowercase) events
-WIKI_SLOW_START_CODE = {'H': 'QH2O', 'S': 'Q_seed'}
-WIKI_SLOW_STOP_CODE  = {'h': 'QH2O', 's': 'Q_seed'}
+WIKI_SLOW_START_CODE = {'H': 'H2O', 'S': 'seed'}
+WIKI_SLOW_STOP_CODE  = {'h': 'H2O', 's': 'seed'}
 # Combined map kept for backwards compat
 WIKI_CODE_TO_COL = {**WIKI_FAST_CODE_TO_COL,
                     **WIKI_SLOW_START_CODE,
                     **WIKI_SLOW_STOP_CODE}
 
 # Fast injections default to 60 s; slow ones (H2O, seed) use wiki start/stop
-FAST_INJECTION_COLS    = set(WIKI_FAST_CODE_TO_COL.values()) | {'QCl2'}
-SLOW_INJECTION_COLS    = {'QH2O', 'Q_seed'}
+FAST_INJECTION_COLS    = set(WIKI_FAST_CODE_TO_COL.values()) | {'Cl2'}
+SLOW_INJECTION_COLS    = {'H2O', 'seed'}
 FAST_DEFAULT_DURATION  = 60  # seconds
 
 # Standard ENZ column order (TIME is first, written separately)
 ENZ_COLUMN_ORDER = [
     'sz', 'hv', 'dilute', 't', 'H2O',
-    'QH2O', 'qVCP1', 'qVCP2', 'qDIESEL', 'qGASOLINE',
-    'qCOOKING', 'qBIOGENIC', 'q_isobutane',
-    'QO3', 'QCO2', 'QCl2', 'QNO', 'Q_seed',
+    'Injection_H2O', 'Injection_VCP1', 'Injection_VCP2', 'Injection_DIESEL', 'Injection_GASOLINE',
+    'Injection_COOKING', 'Injection_BIOGENIC', 'Injection_isobutane',
+    'Injection_O3', 'Injection_CO2', 'Injection_Cl2', 'Injection_NO', 'Injection_seed',
     'NO2', 'NO', 'O3',
     'jO1D', 'jNO2', 'jHONO', 'jH2O2', 'jHCHO_r', 'jHCHO_m',
 ]
@@ -101,12 +101,12 @@ ENZ_COLUMN_ORDER = [
 # Default injection / manual-protocol columns shown in the injections table
 # (col_name, is_fast)  — all unchecked by default; activated when wiki-populated
 DEFAULT_MANUAL_COLS = [
-    ('QH2O',   False),
-    ('QO3',    True),
-    ('QNO',    True),
-    ('QNO2',   True),
-    ('QCl2',   True),
-    ('Q_seed', False),
+    ('H2O',   False),
+    ('O3',    True),
+    ('NO',    True),
+    ('NO2',   True),
+    ('Cl2',   True),
+    ('seed', False),
 ]
 
 # Known VOC compounds for wiki description parsing
@@ -1106,7 +1106,7 @@ class EnzBuilderDialog(QDialog):
 
         for r in range(self.inj_table.rowCount()):
             col_it = self.inj_table.item(r, 1)
-            if col_it and col_it.text() == 'QH2O':
+            if col_it and col_it.text() == 'H2O':
                 note = ("⚠ H\u2082O measured — injection timescale for reference/plotting only"
                         if h2o_measured else "")
                 col_it.setForeground(QColor("#aaa") if h2o_measured else QColor("white"))
@@ -1286,7 +1286,7 @@ class EnzBuilderDialog(QDialog):
                 density    = dens
                 break
 
-        col_name    = f"Injection_{col_suffix}"
+        col_name    = col_suffix
         density_str = f'{density:.4f}' if density is not None else ''
         mw_str      = f'{molar_mass:.2f}' if molar_mass is not None else ''
 
@@ -1545,17 +1545,24 @@ class EnzBuilderDialog(QDialog):
             val_str = val_item.text().strip()   if val_item   else "0"
             if not col:
                 continue
+            
+            # Prepend "Injection_" to the column name for the ENZ file
+            full_col_name = f"Injection_{col}"
+
             if not start_t or not stop_t:
-                if col not in column_data:
-                    errors.append(f"{col}: missing Start or Stop — row skipped (set to 0).")
-                    column_data.setdefault(col, np.zeros(len(grid_s)))
+                if full_col_name not in column_data:
+                    errors.append(f"{full_col_name}: missing Start or Stop — row skipped (set to 0).")
+                    column_data.setdefault(full_col_name, np.zeros(len(grid_s)))
                 continue
             try:
-                val = float(val_str) if val_str else 0.0
+                if col in ('H2O', 'seed'):
+                    val = 1.0
+                else:
+                    val = float(val_str) if val_str else 0.0
             except ValueError:
-                errors.append(f"{col}: non-numeric value '{val_str}' — treated as 0.")
+                errors.append(f"{full_col_name}: non-numeric value '{val_str}' — treated as 0.")
                 val = 0.0
-            pulses_by_col.setdefault(col, []).append((start_t, stop_t, val))
+            pulses_by_col.setdefault(full_col_name, []).append((start_t, stop_t, val))
 
         for col, pulses in pulses_by_col.items():
             arr = pulse_to_grid(pulses, grid_s, date_str)
@@ -1756,7 +1763,7 @@ class _EnzPreviewDialog(QDialog):
         _hv_shade(ax)
         inj_cols = [
             c for c in cd
-            if (c.startswith('Q') or c.startswith('q') or c.startswith('Injection_'))
+            if c.startswith('Injection_')
             and np.any(cd[c] != 0)
         ]
         for i, ic in enumerate(inj_cols):
