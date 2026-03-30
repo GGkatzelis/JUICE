@@ -450,7 +450,7 @@ class ScenarioRunner:
             # Seeds any J-values that are still 0 from measured .enz data.
             # MCM J-numbering: J1=JO1D (O3->O1D), J4=JNO2 (NO2->NO+O),
             #                  J7=JHONO (HONO->OH+NO), J3=JH2O2 (H2O2->2OH)
-            if ctx.get('J1',  0.0) == 0.0 and ctx.get('JO1D',   0.0) > 0: ctx['J1']  = ctx['JO1D']
+            if ctx.get('JO1D', 0.0) > 0: ctx['J1'] = ctx['JO1D']   # measured always beats PHTFKT for O1D
             if ctx.get('J4',  0.0) == 0.0 and ctx.get('JNO2',   0.0) > 0: ctx['J4']  = ctx['JNO2']
             if ctx.get('J7',  0.0) == 0.0 and ctx.get('JHONO',  0.0) > 0: ctx['J7']  = ctx['JHONO']
             if ctx.get('J3',  0.0) == 0.0 and ctx.get('JH2O2',  0.0) > 0: ctx['J3']  = ctx['JH2O2']
