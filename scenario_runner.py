@@ -73,6 +73,12 @@ class ScenarioRunner:
         for raw_header, interp_func in providers.items():
             self.ctx_data[raw_header.upper()] = interp_func
 
+        # The ENZ 'dilute' column is raw flow in L/min. Mechanism .dil files use
+        # CONST(DILUTE) as a rate constant (s⁻¹), which would be ~10⁶× too large.
+        # The runner already applies correct dilution analytically (dydt -= y * k_dil),
+        # so disable the legacy mechanism dil reactions by setting DILUTE = 0.
+        self.ctx_data['DILUTE'] = lambda t: 0.0
+
         for internal_key, mapping in self.cfg['env_map'].items():
             if mapping['type'] == "SAPHIR File":
                 file_header = mapping['value'].lower()
