@@ -543,6 +543,20 @@ class ScenarioRunner:
                 except Exception:
                     pass
 
+        # Evaluate diagnostic var_assignments (e.g. RO2 = sum of RO2 radicals) that are
+        # not ODE species but are defined as expressions over species that ARE in df.
+        _derived_ctx = {col: df[col].values for col in df.columns}
+        _derived_ctx['np'] = np
+        for var_name, compiled_expr in self.var_assignments:
+            if var_name in df.columns:
+                continue  # already a species column
+            try:
+                result = eval(compiled_expr, globals(), _derived_ctx)
+                if isinstance(result, np.ndarray) and result.shape == (len(df),):
+                    df[var_name] = np.maximum(result, 0.0)
+            except Exception:
+                pass
+
         out_path = os.path.join(self.root, "simulation_results.csv")
         df.to_csv(out_path)
         
