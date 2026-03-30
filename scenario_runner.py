@@ -48,14 +48,16 @@ class ScenarioRunner:
 
     def run(self):
         try:
+            _run_start = time.time()
             print("\n>>> Starting SAPHIR Simulation Pipeline")
             print("-" * 40)
             self._setup_environment()
             self._build_mechanism()
             self._solve()
             out_path = self._export_results()
+            _elapsed = time.time() - _run_start
             print("-" * 40)
-            print(">>> All steps completed successfully.")
+            print(f">>> All steps completed successfully.  Total time: {_elapsed//60:.0f}m {_elapsed%60:.1f}s")
             self._show_results(out_path)
         except Exception as e:
             print(f"\n[ERROR] [CRITICAL ERROR] Simulation failed!")
@@ -164,7 +166,7 @@ class ScenarioRunner:
 
         self.mechanism.species = sorted(list(all_species))
 
-        # Apply reaction exclusions defined in the scenario JSON
+        # Apply reaction exclusions / rate overrides defined in the scenario JSON
         excluded_rxns = self.cfg.get('excluded_reactions', [])
         if excluded_rxns:
             def _canon(species_list):
@@ -176,10 +178,14 @@ class ScenarioRunner:
                 return frozenset(result)
 
             exclude_keys = set()
+            rate_overrides = []  # list of (r_canon, p_canon, new_rate_str)
             for e in excluded_rxns:
-                r_tokens = [t.strip() for t in e['reactants'].split('+') if t.strip()]
-                p_tokens = [t.strip() for t in e['products'].split('+') if t.strip()]
-                exclude_keys.add((_canon(r_tokens), _canon(p_tokens)))
+                r_canon = _canon([t.strip() for t in e['reactants'].split('+') if t.strip()])
+                p_canon = _canon([t.strip() for t in e['products'].split('+') if t.strip()])
+                if e.get('action', 'Remove') == 'Modify Rate' and e.get('rate', '').strip():
+                    rate_overrides.append((r_canon, p_canon, e['rate'].strip()))
+                else:
+                    exclude_keys.add((r_canon, p_canon))
 
             before = len(self.mechanism.reactions)
             self.mechanism.reactions = [
@@ -189,6 +195,17 @@ class ScenarioRunner:
             removed = before - len(self.mechanism.reactions)
             if removed:
                 print(f"  ... Excluded {removed} reaction(s) per scenario config.")
+
+            # Patch rate expressions — safe_expr is compiled afterwards so this takes effect
+            modified = 0
+            for rxn in self.mechanism.reactions:
+                rxn_key = (_canon(rxn.reactants), _canon(rxn.products))
+                for r_canon, p_canon, new_rate in rate_overrides:
+                    if rxn_key == (r_canon, p_canon):
+                        rxn.rate_expression = new_rate
+                        modified += 1
+            if modified:
+                print(f"  ... Modified rate for {modified} reaction(s) per scenario config.")
 
         self._add_artifacts()
 
@@ -213,7 +230,6 @@ class ScenarioRunner:
         y0 = np.zeros(self.solver.num_species)
         
         saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
-        actual_start_utc = saphir_base_date + pd.to_timedelta(self.t_span[0], unit='s')
 
         for spec, ppb in self.cfg.get('initials', {}).items():
             if not ppb: continue
@@ -326,7 +342,7 @@ class ScenarioRunner:
             if target in self.solver.species_to_idx:
                 target_utc = pd.to_datetime(b['start_utc'], dayfirst=True)
                 start_s = (target_utc - saphir_base_date).total_seconds()
-                dur = float(b.get('duration_s', 60))
+                dur = float(eval(str(b.get('duration_s', 60))))
                 min_dur = min(min_dur, dur)
                 mu = start_s + (dur / 2.0)
                 sigma = dur / 6.0 
