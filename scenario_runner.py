@@ -204,7 +204,9 @@ class ScenarioRunner:
                 y_rate = f"({self.cfg['artifacts']['y_eqn']}) * 1e-9 * M * 2.4e-13" 
                 self.mechanism.reactions.append(Reaction(['OH'], ["HO2"], y_rate))
             if self.cfg['artifacts'].get('wall_active', True):
-                self.mechanism.reactions.append(Reaction(["H2O"], ["HONO"], str(self.cfg['artifacts']['dark_hono'])))
+                # dark_hono expression is a direct production rate in molec cm⁻³ s⁻¹.
+                # H2O dependence (if any) must be explicit in the expression itself.
+                self.mechanism.reactions.append(Reaction([], ["HONO"], str(self.cfg['artifacts']['dark_hono'])))
 
     def _solve(self):
         self.solver = MechanismSolver(self.mechanism, self.cfg['env_map'])
