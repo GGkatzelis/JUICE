@@ -265,6 +265,11 @@ All seven bug fixes are applied and the simulation is working correctly:
   - `BudgetEngine`: vectorized process analysis; mirrors runner's var_assignments/artifact logic; H2O unit auto-detection; O1D PSS reconstruction; two-pass vectorized eval; minor pathway grouping
   - `ResultsViewer`: two-tab layout (Timeseries + Process Analysis); single-click species → budget plot; auto-loads scenario_config.json from CSV path; stacked production/destruction chart
 
+**Reactivity Analysis (added 2026-03-31):**
+- `BudgetEngine._prepare_ctx(df)`: extracted shared helper — builds vec ctx, runs two-pass var_assignments, photolysis auto-linker, and O1D PSS. Called by both `compute` and `compute_reactivity`.
+- `BudgetEngine.compute_reactivity(radical, df)` → `{label: np.array}` (s⁻¹): for each reaction consuming `radical`, contribution = k × Π[co-reactants] (one instance of radical excluded from product). Covers OH, O3, NO3 (or any species).
+- `ResultsViewer` Tab 2 "Reactivity": dropdown (OH/O3/NO3) + "Compute Reactivity" button → stacked area of contributions + total k (black dashed) + HV shading + time-average bar chart. Same layout as Process Analysis. Fully post-facto — no ODE changes needed.
+
 **Fix 8 — dark_hono H2O unit mismatch (2026-03-31):**
 FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACSIMILE defines `H2O = 1e-2 × M × VMR`. Python's ODE context uses `H2O = VMR × M` (100× larger). The expression `"1e-12 * H2O"` therefore ran 100× too fast, causing ~10× offset in simulated HONO concentration (photolytic source moderated the ratio). Fixed by changing the default expression to `"1e-14 * H2O"` in `saphir_gui.py` (line 717) and `scenario_config.json`. The ODE physics (H2O conversion, kinetics, dilution) are correct — only the coefficient in this user-configurable artifact expression was wrong.
 
@@ -282,7 +287,8 @@ FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACS
 
 ## 10. Next Steps & Future Enhancements
 
-1.  **Fix O1D budget discrepancy vs FACSIMILE** — HONO budget was traced to dark_hono H2O factor (Fix 8, now resolved). O1D budget root cause not yet identified — use `Python_vs_FACSIMILE.py` + BudgetEngine process analysis to continue.
+1.  **Validate Reactivity tab** — `compute_reactivity` added to `BudgetEngine` and "Reactivity" tab added to `ResultsViewer`. Needs testing vs measured k_OH from SAPHIR OH-reactometer and vs FACSIMILE production/destruction budgets.
+2.  **Fix O1D budget discrepancy vs FACSIMILE** — HONO budget was traced to dark_hono H2O factor (Fix 8, now resolved). O1D budget root cause not yet identified — use `Python_vs_FACSIMILE.py` + BudgetEngine process analysis to continue.
 2.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
 3.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
 4.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
