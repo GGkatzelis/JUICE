@@ -30,6 +30,7 @@ try:
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
     from matplotlib.figure import Figure
+    from matplotlib.ticker import FuncFormatter
     HAS_PYQT = True
 except ImportError:
     HAS_PYQT = False
@@ -44,6 +45,14 @@ except ImportError:
 
 # Seconds from Unix epoch (1970-01-01) to SAPHIR NC epoch (2000-01-01)
 _NC_EPOCH_OFFSET = 946684800.0
+
+
+def _fmt_hhmm(h, _pos):
+    """Matplotlib tick formatter: decimal hours → HH:MM."""
+    total_min = int(round(h * 60))
+    hh = (total_min // 60) % 24
+    mm = total_min % 60
+    return f"{hh:02d}:{mm:02d}"
 
 # ── colour palettes ───────────────────────────────────────────────────────────
 _PROD_COLORS = ['#2ca02c', '#98df8a', '#17becf', '#9edae5', '#1f77b4',
@@ -604,8 +613,13 @@ class ResultsViewer(QMainWindow):
         self.active_lines = {}
         self.csv_path = csv_path
 
-        # Store Unix t0 BEFORE converting index to hours (needed for NC time alignment)
-        self._t0_unix = float(self.df.index[0])
+        # The CSV index is in SAPHIR epoch (seconds since 2000-01-01), matching the ENZ
+        # file header "TIME / SEC SINCE 1.1.2000 00:00:00".  NC archive files use the
+        # same epoch.  Convert to true Unix epoch (seconds since 1970-01-01) once here
+        # so that _t0_unix / _midnight_unix are consistent with datetime.utcfromtimestamp
+        # and the NC time formula  t_hours = (t_nc + _NC_EPOCH_OFFSET - _midnight_unix) / 3600.
+        self._t0_unix = float(self.df.index[0]) + _NC_EPOCH_OFFSET  # SAPHIR → Unix
+        self._midnight_unix = self._t0_unix - (self._t0_unix % 86400)
         self._last_nc_dir = None
 
         # Instrument data loaded from NC files: display_key -> {t, v, nc_file, nc_var, mcm_match}
@@ -614,8 +628,9 @@ class ResultsViewer(QMainWindow):
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
 
-        # Convert index to hours for X-axis
-        self.df.index = (self.df.index - self.df.index[0]) / 3600.0
+        # Convert MCM index from SAPHIR epoch (sec since 2000-01-01) to hours since
+        # UTC midnight of the experiment day, same reference as NC instrument data.
+        self.df.index = ((self.df.index.astype(float) + _NC_EPOCH_OFFSET) - self._midnight_unix) / 3600.0
 
         self.budget_engine = BudgetEngine() if HAS_BUDGET else None
         self._config_label_text = "No config loaded"
@@ -1060,7 +1075,7 @@ class ResultsViewer(QMainWindow):
 
             try:
                 t_nc = np.ma.filled(ds.variables['time'][:], np.nan).astype(float)
-                t_hours = (t_nc + _NC_EPOCH_OFFSET - self._t0_unix) / 3600.0
+                t_hours = (t_nc + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
             except Exception as e:
                 print(f"[NC Loader] Cannot read time from {fname}: {e}")
                 ds.close()
@@ -1235,7 +1250,7 @@ class ResultsViewer(QMainWindow):
             major_dest['Other destruction'] = other_dest
 
         gs = self.pa_fig.add_gridspec(1, 2, width_ratios=[3, 1], wspace=0.35,
-                                      left=0.07, right=0.97, top=0.88, bottom=0.12)
+                                      left=0.07, right=0.97, top=0.88, bottom=0.08)
         ax_ts  = self.pa_fig.add_subplot(gs[0, 0])
         ax_bar = self.pa_fig.add_subplot(gs[0, 1])
 
@@ -1271,38 +1286,89 @@ class ResultsViewer(QMainWindow):
                    label='Net dC/dt', zorder=5)
         ax_ts.axhline(0, color='black', linewidth=0.6, alpha=0.4)
 
-        ax_ts.set_xlabel("Time (Hours)", fontweight='bold')
+        # Shade the destruction region (below zero) with a light red tint.
+        # Save and restore y-limits so the span's infinite extent doesn't
+        # override the data-driven autoscale.
+        _ylim = ax_ts.get_ylim()
+        ax_ts.axhspan(_ylim[0], 0, color='#ffdddd', alpha=0.25, zorder=0, linewidth=0)
+        ax_ts.set_ylim(_ylim)
+
+        ax_ts.set_xlabel("Time of Day (UTC)", fontweight='bold')
+        ax_ts.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
         ax_ts.set_ylabel("Flux (ppb hr⁻¹)", fontweight='bold')
         ax_ts.set_title(f"Process Analysis: {species}", fontweight='bold')
         ax_ts.grid(True, linestyle='--', alpha=0.35)
 
         handles, labels = ax_ts.get_legend_handles_labels()
         if handles:
-            ax_ts.legend(handles, labels, loc='upper center',
-                         bbox_to_anchor=(0.5, -0.14), ncol=3, fontsize=7, framealpha=0.7)
+            ax_ts.legend(handles, labels, loc='upper left',
+                         fontsize=7, framealpha=0.75, ncol=2)
+
+        # ── Bar chart: all positive, destruction at bottom, production at top ──
+        # Destruction: sorted ascending → smallest at bottom, largest just below middle
+        dest_sorted = sorted(major_dest.items(), key=lambda x: np.nanmean(x[1]))
+        # Production: sorted descending → largest just above middle, smallest at top
+        prod_sorted = sorted(major_prod.items(), key=lambda x: -np.nanmean(x[1]))
 
         bar_labels, bar_vals, bar_colors = [], [], []
-        for lbl, arr in sorted(major_prod.items(), key=lambda x: np.nanmean(x[1])):
+        n_dest = len(dest_sorted)
+
+        for lbl, arr in dest_sorted:
             bar_labels.append(lbl)
-            bar_vals.append(np.nanmean(arr))
-            bar_colors.append(_PROD_COLORS[prod_labels.index(lbl) % len(_PROD_COLORS)]
-                               if lbl in prod_labels else _PROD_COLORS[-1])
-        for lbl, arr in sorted(major_dest.items(), key=lambda x: -np.nanmean(x[1])):
+            bar_vals.append(np.nanmean(arr))          # positive (absolute)
+            idx = next((i for i, k in enumerate(dest_labels) if k == lbl), 0)
+            bar_colors.append(_DEST_COLORS[idx % len(_DEST_COLORS)])
+
+        for lbl, arr in prod_sorted:
             bar_labels.append(lbl)
-            bar_vals.append(-np.nanmean(arr))
-            bar_colors.append(_DEST_COLORS[dest_labels.index(lbl) % len(_DEST_COLORS)]
-                               if lbl in dest_labels else _DEST_COLORS[-1])
+            bar_vals.append(np.nanmean(arr))          # positive
+            idx = next((i for i, k in enumerate(prod_labels) if k == lbl), 0)
+            bar_colors.append(_PROD_COLORS[idx % len(_PROD_COLORS)])
 
         y_pos = np.arange(len(bar_labels))
         if len(bar_labels) > 0:
+            # Shade destruction rows (bottom block) with a light red background
+            if n_dest > 0:
+                ax_bar.axhspan(-0.5, n_dest - 0.5, color='#ffe8e8', alpha=0.6,
+                               zorder=0, linewidth=0)
+            # Shade production rows (top block) with a light green background
+            if len(prod_sorted) > 0:
+                ax_bar.axhspan(n_dest - 0.5, len(bar_labels) - 0.5,
+                               color='#e8f5e8', alpha=0.6, zorder=0, linewidth=0)
+
             ax_bar.barh(y_pos, bar_vals, color=bar_colors, alpha=0.85,
                         edgecolor='white', linewidth=0.5)
             ax_bar.set_yticks(y_pos)
             ax_bar.set_yticklabels(bar_labels, fontsize=7)
-            ax_bar.axvline(0, color='black', linewidth=0.8)
-            ax_bar.set_xlabel("Mean flux\n(ppb hr⁻¹)", fontsize=8)
+
+            # Divider line between destruction and production blocks
+            if n_dest > 0 and len(prod_sorted) > 0:
+                ax_bar.axhline(n_dest - 0.5, color='#888888', linewidth=1.2,
+                               linestyle='-', zorder=3)
+
+            ax_bar.set_xlabel("|Mean flux|\n(ppb hr⁻¹)", fontsize=8)
             ax_bar.set_title("Time-average", fontsize=9)
             ax_bar.grid(True, axis='x', linestyle='--', alpha=0.35)
+
+            # Section labels anchored just above/below the divider line
+            if n_dest > 0 and len(prod_sorted) > 0:
+                # Mixed transform: x in axes fraction, y in data coordinates
+                ax_bar.annotate("PROD", xy=(0.98, n_dest - 0.35),
+                                xycoords=('axes fraction', 'data'),
+                                fontsize=7.5, color='#27ae60', fontweight='bold',
+                                ha='right', va='bottom')
+                ax_bar.annotate("DEST", xy=(0.98, n_dest - 0.65),
+                                xycoords=('axes fraction', 'data'),
+                                fontsize=7.5, color='#c0392b', fontweight='bold',
+                                ha='right', va='top')
+            elif n_dest == 0 and len(prod_sorted) > 0:
+                ax_bar.annotate("PROD", xy=(0.98, 0.98), xycoords='axes fraction',
+                                fontsize=7.5, color='#27ae60', fontweight='bold',
+                                ha='right', va='top')
+            elif len(prod_sorted) == 0 and n_dest > 0:
+                ax_bar.annotate("DEST", xy=(0.98, 0.02), xycoords='axes fraction',
+                                fontsize=7.5, color='#c0392b', fontweight='bold',
+                                ha='right', va='bottom')
 
         self.pa_canvas.draw()
 
@@ -1311,7 +1377,8 @@ class ResultsViewer(QMainWindow):
         self._color_index = 0
         self.fig.clear()
         self.ax1 = self.fig.add_subplot(111)
-        self.ax1.set_xlabel("Time (Hours)", fontweight='bold')
+        self.ax1.set_xlabel("Time of Day (UTC)", fontweight='bold')
+        self.ax1.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
         self.ax1.grid(True, linestyle='--', alpha=0.4)
         self.ax2 = self.ax1.twinx()
         self.ax3 = self.ax1.twinx()
@@ -1411,7 +1478,7 @@ class ResultsViewer(QMainWindow):
                 raise ValueError("No 'time' variable found")
 
             t_nc = np.ma.filled(ds.variables['time'][:], np.nan).astype(float)
-            t_hours = (t_nc + _NC_EPOCH_OFFSET - self._t0_unix) / 3600.0
+            t_hours = (t_nc + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
 
             # Prefer a variable whose name contains kOH / k_OH; fall back to first primary var
             koh_var = None
@@ -1557,7 +1624,8 @@ class ResultsViewer(QMainWindow):
                            ls='-', marker='o', markersize=2, alpha=0.85,
                            label='Measured k_OH (SAPHIR)', zorder=6)
 
-        ax_ts.set_xlabel("Time (Hours)", fontweight='bold')
+        ax_ts.set_xlabel("Time of Day (UTC)", fontweight='bold')
+        ax_ts.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
         ax_ts.set_ylabel(f"k_{radical} (s⁻¹)", fontweight='bold')
         ax_ts.set_title(f"Total {radical} Reactivity", fontweight='bold')
         ax_ts.grid(True, linestyle='--', alpha=0.35)
@@ -1650,10 +1718,12 @@ def show_results(out_path):
 
     print("[WARNING] PyQt6 is not installed. Falling back to simple Matplotlib visualization.")
     df = pd.read_csv(out_path, index_col=0)
-    t_hours = (df.index - df.index[0]) / 3600.0
+    midnight_unix = df.index[0] - (df.index[0] % 86400)
+    t_hours = (df.index - midnight_unix) / 3600.0
 
     fig, ax1 = plt.subplots(figsize=(12, 6))
-    ax1.set_xlabel('Time (Hours)')
+    ax1.set_xlabel('Time of Day (UTC)')
+    ax1.xaxis.set_major_formatter(plt.FuncFormatter(_fmt_hhmm))
     ax1.set_ylabel('Mixing Ratio (ppb)', color='black')
 
     for spec in ['O3', 'NO', 'NO2', 'HONO', 'C2H5OH', 'HCHO']:
