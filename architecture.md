@@ -285,10 +285,18 @@ FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACS
 
 - **Derived Photolysis Order:** To improve readability, the default manual photolysis scaling rules (e.g., for JCL2) are now programmatically added to the *end* of the "Derived Photolysis Frequencies" list, after any J-values that have been automatically synchronized from the loaded chemistry files.
 
+**Fix 9 — FACSIMILE comparison files have ENZ column name mismatch (2026-03-31):**
+`case1` and `case2` FACSIMILE EASY files read `input(qVCP2)` for VOC injection and `input(QNO)` for NO injection, but the actual `kammer.enz` has columns `Injection_Ethanol` and `Injection_NO` — no match. FACSIMILE's `INITIAL[*]=CONST(1.)` sets all uninitialized species to 1, so `qVOC` and `qNO` stay at 1 throughout the run, creating continuous ethanol (591 ppb/min) and NO (~7 ppb/min) injection for 18 hours. This drives a chemical blow-up at ~hour 5.5 (NO2 → 1.6e11, HONO → 1.6e10). The 11× HONO and 2× OH discrepancy seen in comparisons is entirely from this FACSIMILE bug, not a Python model deficiency. In the pre-blow-up period (hours 0–5.5), HONO agrees to within 3% and the Python model is correct.
+
+**Fix 10 — Reactivity tab: measured k_OH overlay (2026-03-31):**
+`ResultsViewer` Reactivity tab now has a "Load Measured k_OH" button that loads a two-column CSV/TXT file (time + k_OH in s⁻¹) and overlays it as a red line on the reactivity timeseries. Also auto-detects columns matching `kOH`/`K_OH`/`SAPHIR_KOH` in `self.df`. Active only when radical=OH.
+
 ## 10. Next Steps & Future Enhancements
 
-1.  **Validate Reactivity tab** — `compute_reactivity` added to `BudgetEngine` and "Reactivity" tab added to `ResultsViewer`. Needs testing vs measured k_OH from SAPHIR OH-reactometer and vs FACSIMILE production/destruction budgets.
-2.  **Fix O1D budget discrepancy vs FACSIMILE** — HONO budget was traced to dark_hono H2O factor (Fix 8, now resolved). O1D budget root cause not yet identified — use `Python_vs_FACSIMILE.py` + BudgetEngine process analysis to continue.
+1.  **Overlay measured k_OH** — Load actual SAPHIR CRM k_OH measurement file and overlay on Reactivity tab. Likely in the SAPHIR archive NC file (variable TBD). Check if archive has `kOH` or `OH_reactivity` variable for 09.07.2024.
+2.  **Fix FACSIMILE comparison references** — case1/case2 EASY files need correct column names (`qVCP2`→`Injection_Ethanol`, `QNO`→`Injection_NO`) or a corrected ENZ file with those names. Until fixed, FACSIMILE comparison is not valid beyond t < 5.5h. Confirm with Franz whether a corrected FACSIMILE run can be produced.
+3.  **Simple CONST scenario** — [scenario_config - Simple Scenario 1.json](MCM_tested_scenarios/ethanol_scenario/scenario_config%20-%20Simple%20Scenario%201.json) — awaiting colleague confirmation on whether species should be held constant or evolved freely.
+4.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes.
 2.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
 3.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
 4.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
