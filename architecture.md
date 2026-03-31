@@ -21,7 +21,7 @@ Decoupled three-stage workflow:
 | `saphir_gui.py` | GUI scenario builder |
 | `scenario_runner.py` | ODE executor |
 | `mechanism_solver.py` | Legacy stub — core logic fully migrated to `scenario_runner.py` |
-| `check_results.py` | Interactive results viewer + process analysis engine (launched by runner) |
+| `results_viewer.py` | Interactive results viewer + process analysis engine (launched by runner) |
 | `Python_vs_FACSIMILE.py` | Standalone two-tab comparison GUI: timeseries overlay + slope matrix vs FACSIMILE `.cs` output |
 
 ## 3. Core Physics
@@ -261,14 +261,25 @@ All seven bug fixes are applied and the simulation is working correctly:
 **New tools added (2026-03-31):**
 - `Python_vs_FACSIMILE.py`: standalone comparison GUI (timeseries + slope matrix)
 - Franz's FACSIMILE reference output in `MCM_tested_scenarios/ethanol_scenario/MCM output/case1,case2/`
-- `check_results.py` massively expanded:
+- `results_viewer.py` (renamed from `check_results.py`) massively expanded:
   - `BudgetEngine`: vectorized process analysis; mirrors runner's var_assignments/artifact logic; H2O unit auto-detection; O1D PSS reconstruction; two-pass vectorized eval; minor pathway grouping
-  - `ResultsViewer`: two-tab layout (Timeseries + Process Analysis); single-click species → budget plot; auto-loads scenario_config.json from CSV path; stacked production/destruction chart
+  - `ResultsViewer`: three-folder QTreeWidget left panel (MCM Output / SAPHIR Environment / SAPHIR Instruments); single-click species → budget plot; auto-loads scenario_config.json from CSV path; stacked production/destruction chart
 
 **Reactivity Analysis (added 2026-03-31):**
 - `BudgetEngine._prepare_ctx(df)`: extracted shared helper — builds vec ctx, runs two-pass var_assignments, photolysis auto-linker, and O1D PSS. Called by both `compute` and `compute_reactivity`.
 - `BudgetEngine.compute_reactivity(radical, df)` → `{label: np.array}` (s⁻¹): for each reaction consuming `radical`, contribution = k × Π[co-reactants] (one instance of radical excluded from product). Covers OH, O3, NO3 (or any species).
 - `ResultsViewer` Tab 2 "Reactivity": dropdown (OH/O3/NO3) + "Compute Reactivity" button → stacked area of contributions + total k (black dashed) + HV shading + time-average bar chart. Same layout as Process Analysis. Fully post-facto — no ODE changes needed.
+
+**SAPHIR NC Instrument Loading (added 2026-04-01):**
+- `results_viewer.py` replaces `check_results.py` (import updated in `scenario_runner.py`).
+- Left panel is now a 3-folder `QTreeWidget`: **MCM Output** (modelled species), **SAPHIR Environment** (`SAPHIR_*` columns from the ENZ/CSV), **SAPHIR Instruments** (loaded from NC files).
+- "Load SAPHIR NC Data" button: infers experiment date from the CSV timestamp (`t0_unix` → UTC → `Z:/IEK8-SAPHIR/data/YYYY/MM/DD`), shows an editable confirmation dialog, then lists all `.nc` files in a checkable selector (`_NcFileSelector`).
+- NC time axis: `"Seconds since 2000-01-01 00:00:00 UTC"` → converted via `_NC_EPOCH_OFFSET = 946684800` to Unix, then to hours relative to simulation start. No interpolation — instrument data is plotted on its own native time grid.
+- `_MatchDialog`: 5-column table (NC File | NC Variable | Units | MCM Match | Load) with auto-suggested MCM match (exact → SAPHIR_-prefixed fallback). User can edit the match column and choose which variables to load.
+- Instrument data stored in `self._inst_data[nc_basename/nc_var]` — NOT injected into `self.df` to keep the budget engine clean.
+- Single-click on instrument node → "Instrument data" info panel in Process Analysis tab (no budget available). Double-click → plots on chosen axis via `_plot_instrument`.
+- `_auto_measured_koh_from_df` extended to also scan `self._inst_data` for kOH variables.
+- Reactivity tab: "Load Measured k_OH (.csv/.txt)" replaced by **"Load k_OH (NC file)"** which opens `Z:/IEK8-SAPHIR/data` (or last used NC dir) and reads `kOH` variable from the selected file.
 
 **Fix 8 — dark_hono H2O unit mismatch (2026-03-31):**
 FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACSIMILE defines `H2O = 1e-2 × M × VMR`. Python's ODE context uses `H2O = VMR × M` (100× larger). The expression `"1e-12 * H2O"` therefore ran 100× too fast, causing ~10× offset in simulated HONO concentration (photolytic source moderated the ratio). Fixed by changing the default expression to `"1e-14 * H2O"` in `saphir_gui.py` (line 717) and `scenario_config.json`. The ODE physics (H2O conversion, kinetics, dilution) are correct — only the coefficient in this user-configurable artifact expression was wrong.

@@ -587,7 +587,7 @@ class ScenarioRunner:
         return out_path
 
     def _show_results(self, out_path):
-        from check_results import show_results
+        from results_viewer import show_results
         show_results(out_path)
 
 if __name__ == "__main__":
