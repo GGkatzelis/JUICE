@@ -31,6 +31,9 @@ try:
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
     from matplotlib.figure import Figure
     from matplotlib.ticker import FuncFormatter
+    import matplotlib.patches as mpatches
+    import matplotlib.cm as _mcm
+    from matplotlib.colors import TwoSlopeNorm
     HAS_PYQT = True
 except ImportError:
     HAS_PYQT = False
@@ -656,7 +659,6 @@ class ResultsViewer(QMainWindow):
         self.var_tree = QTreeWidget()
         self.var_tree.setHeaderHidden(True)
         self.var_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.var_tree.itemClicked.connect(self._on_tree_single_click)
         self.var_tree.itemDoubleClicked.connect(self._on_tree_double_click)
         left_layout.addWidget(self.var_tree)
 
@@ -701,7 +703,7 @@ class ResultsViewer(QMainWindow):
         self.unit_combo.addItems(["Convert to ppb", "Native (molec/cm³ or SAPHIR unit)"])
         control_layout.addWidget(self.unit_combo)
 
-        btn_add = QPushButton("Plot Selected (Or Double-Click List)")
+        btn_add = QPushButton("Plot Selected")
         btn_add.clicked.connect(self.add_selected)
         control_layout.addWidget(btn_add)
 
@@ -780,6 +782,9 @@ class ResultsViewer(QMainWindow):
         rx_layout.addWidget(self.rx_canvas)
         self.right_tabs.addTab(rx_widget, "Reactivity")
 
+        # Tab 3 – Comparison
+        self._build_comparison_tab()
+
         splitter.addWidget(right_panel)
         splitter.setSizes([300, 1300])
 
@@ -795,14 +800,29 @@ class ResultsViewer(QMainWindow):
         self._mcm_folder.takeChildren()
         self._saphir_folder.takeChildren()
 
+        mcm_active, mcm_empty = [], []
         for col in sorted(self.df.columns):
             if col == 'M':
                 continue
-            item = QTreeWidgetItem([col])
             if col.upper().startswith('SAPHIR_'):
+                item = QTreeWidgetItem([col])
                 self._saphir_folder.addChild(item)
             else:
-                self._mcm_folder.addChild(item)
+                vals = self.df[col].values
+                has_data = np.nanmax(np.abs(vals)) > 0 if len(vals) > 0 else False
+                if has_data:
+                    mcm_active.append(col)
+                else:
+                    mcm_empty.append(col)
+
+        for col in mcm_active:
+            self._mcm_folder.addChild(QTreeWidgetItem([col]))
+
+        for col in mcm_empty:
+            item = QTreeWidgetItem([col])
+            item.setForeground(0, QColor('#aaaaaa'))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self._mcm_folder.addChild(item)
 
     def _get_or_create_inst_subfolder(self, nc_basename):
         """Find or create a sub-folder under SAPHIR Instruments for nc_basename."""
@@ -841,10 +861,18 @@ class ResultsViewer(QMainWindow):
             self._update_budget(item.text(0))
 
     def _on_tree_double_click(self, item, _column):
-        """Double click on a leaf: plot it."""
+        """Double-click: context-aware action based on the active right tab.
+        - Timeseries tab  → plot the species on the timeseries canvas.
+        - Process Analysis tab → run the budget for this species.
+        - Other tabs → no-op.
+        """
         if item.childCount() != 0:
             return  # folder node
-        self.add_selected()
+        active = self.right_tabs.currentIndex()
+        if active == 0:          # Timeseries
+            self.add_selected()
+        elif active == 1:        # Process Analysis
+            self._update_budget(item.text(0))
 
     # ── Search / filter ───────────────────────────────────────────────────────
     def filter_list(self, text):
@@ -854,7 +882,8 @@ class ResultsViewer(QMainWindow):
             any_visible = False
             for i in range(folder.childCount()):
                 child = folder.child(i)
-                visible = (not text_low) or (text_low in child.text(0).lower())
+                enabled = bool(child.flags() & Qt.ItemFlag.ItemIsEnabled)
+                visible = enabled and ((not text_low) or (text_low in child.text(0).lower()))
                 child.setHidden(not visible)
                 if visible:
                     any_visible = True
@@ -1250,7 +1279,7 @@ class ResultsViewer(QMainWindow):
             major_dest['Other destruction'] = other_dest
 
         gs = self.pa_fig.add_gridspec(1, 2, width_ratios=[3, 1], wspace=0.35,
-                                      left=0.07, right=0.97, top=0.88, bottom=0.08)
+                                      left=0.07, right=0.93, top=0.88, bottom=0.08)
         ax_ts  = self.pa_fig.add_subplot(gs[0, 0])
         ax_bar = self.pa_fig.add_subplot(gs[0, 1])
 
@@ -1302,7 +1331,9 @@ class ResultsViewer(QMainWindow):
         handles, labels = ax_ts.get_legend_handles_labels()
         if handles:
             ax_ts.legend(handles, labels, loc='upper left',
-                         fontsize=7, framealpha=0.75, ncol=2)
+                         fontsize=7, framealpha=0.75, ncol=1,
+                         handlelength=1.2, handleheight=0.8,
+                         borderpad=0.5, labelspacing=0.3)
 
         # ── Bar chart: all positive, destruction at bottom, production at top ──
         # Destruction: sorted ascending → smallest at bottom, largest just below middle
@@ -1350,25 +1381,25 @@ class ResultsViewer(QMainWindow):
             ax_bar.set_title("Time-average", fontsize=9)
             ax_bar.grid(True, axis='x', linestyle='--', alpha=0.35)
 
-            # Section labels anchored just above/below the divider line
-            if n_dest > 0 and len(prod_sorted) > 0:
-                # Mixed transform: x in axes fraction, y in data coordinates
-                ax_bar.annotate("PROD", xy=(0.98, n_dest - 0.35),
-                                xycoords=('axes fraction', 'data'),
-                                fontsize=7.5, color='#27ae60', fontweight='bold',
-                                ha='right', va='bottom')
-                ax_bar.annotate("DEST", xy=(0.98, n_dest - 0.65),
-                                xycoords=('axes fraction', 'data'),
+            # Section labels outside the axes box, centred on each block.
+            # y in axes-fraction: each bar occupies 1 data unit, axis spans
+            # from -0.5 to len(bar_labels)-0.5, so fraction = (y+0.5)/n_total
+            n_total = len(bar_labels)
+            n_prod  = len(prod_sorted)
+            if n_dest > 0:
+                dest_frac = n_dest / (2.0 * n_total)
+                ax_bar.annotate("DEST", xy=(1.04, dest_frac),
+                                xycoords='axes fraction',
                                 fontsize=7.5, color='#c0392b', fontweight='bold',
-                                ha='right', va='top')
-            elif n_dest == 0 and len(prod_sorted) > 0:
-                ax_bar.annotate("PROD", xy=(0.98, 0.98), xycoords='axes fraction',
+                                ha='center', va='center', rotation=90,
+                                clip_on=False)
+            if n_prod > 0:
+                prod_frac = (n_dest + n_prod / 2.0) / n_total
+                ax_bar.annotate("PROD", xy=(1.04, prod_frac),
+                                xycoords='axes fraction',
                                 fontsize=7.5, color='#27ae60', fontweight='bold',
-                                ha='right', va='top')
-            elif len(prod_sorted) == 0 and n_dest > 0:
-                ax_bar.annotate("DEST", xy=(0.98, 0.02), xycoords='axes fraction',
-                                fontsize=7.5, color='#c0392b', fontweight='bold',
-                                ha='right', va='bottom')
+                                ha='center', va='center', rotation=90,
+                                clip_on=False)
 
         self.pa_canvas.draw()
 
@@ -1649,6 +1680,382 @@ class ResultsViewer(QMainWindow):
             ax_bar.grid(True, axis='x', linestyle='--', alpha=0.35)
 
         self.rx_canvas.draw()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Comparison tab  (Tab 3)
+    # ─────────────────────────────────────────────────────────────────────────
+    _NOISE_EXCEPTIONS = {'OH', 'HO2', 'NO3', 'O1D', 'CH3O', 'C2H5O', 'HCO', 'CHO'}
+
+    def _build_comparison_tab(self):
+        """Build the Comparison tab: reference loader + slope matrix + detail panel."""
+        # State
+        self._cmp_df_ref        = None
+        self._cmp_ref_label     = ""
+        self._cmp_slope_results = {}
+        self._cmp_slope_box_map = []
+
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+
+        # ── Reference source bar ─────────────────────────────────────────────
+        src_row = QHBoxLayout()
+        src_row.addWidget(QLabel("Reference:"))
+        self._cmp_src_combo = QComboBox()
+        self._cmp_src_combo.addItems([
+            "FACSIMILE output (.cs)",
+            "Previous simulation (.csv)",
+            "Loaded SAPHIR instruments (NC)",
+        ])
+        src_row.addWidget(self._cmp_src_combo)
+        load_btn = QPushButton("Load Reference…")
+        load_btn.clicked.connect(self._cmp_load_reference)
+        src_row.addWidget(load_btn)
+
+        src_row.addSpacing(12)
+        src_row.addWidget(QLabel("Noise threshold:"))
+        self._cmp_noise_input = QLineEdit("1e-6")
+        self._cmp_noise_input.setMaximumWidth(70)
+        src_row.addWidget(self._cmp_noise_input)
+        btn_slopes = QPushButton("Compute Slopes")
+        btn_slopes.clicked.connect(self._cmp_compute_slopes)
+        src_row.addWidget(btn_slopes)
+
+        self._cmp_ref_lbl = QLabel("No reference loaded")
+        self._cmp_ref_lbl.setStyleSheet("color: #666; font-style: italic;")
+        src_row.addWidget(self._cmp_ref_lbl, stretch=1)
+        outer_layout.addLayout(src_row)
+
+        # ── Splitter: 1/3 matrix | 2/3 detail ────────────────────────────────
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        self._cmp_slope_fig = Figure()
+        self._cmp_slope_canvas = FigureCanvas(self._cmp_slope_fig)
+        self._cmp_slope_canvas.mpl_connect('button_press_event', self._cmp_on_slope_click)
+        ll.addWidget(NavigationToolbar(self._cmp_slope_canvas, self))
+        ll.addWidget(self._cmp_slope_canvas)
+        splitter.addWidget(left)
+
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        self._cmp_detail_fig = Figure()
+        self._cmp_detail_canvas = FigureCanvas(self._cmp_detail_fig)
+        rl.addWidget(NavigationToolbar(self._cmp_detail_canvas, self))
+        rl.addWidget(self._cmp_detail_canvas)
+        splitter.addWidget(right)
+
+        splitter.setSizes([500, 1000])   # ~1:2 initial split
+        outer_layout.addWidget(splitter, 1)  # stretch=1: splitter takes all remaining space
+
+        self.right_tabs.addTab(outer, "Comparison")
+
+    # ── Reference loading ─────────────────────────────────────────────────────
+    def _cmp_load_reference(self):
+        src = self._cmp_src_combo.currentText()
+
+        if src.startswith("FACSIMILE"):
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load FACSIMILE Output", "", "CS Files (*.cs);;All Files (*)")
+            if not path:
+                return
+            try:
+                df = self._cmp_parse_facsimile(path)
+                self._cmp_df_ref    = df
+                self._cmp_ref_label = os.path.basename(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Load Error", str(e))
+                return
+
+        elif src.startswith("Previous simulation"):
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Previous Simulation CSV", "", "CSV Files (*.csv)")
+            if not path:
+                return
+            try:
+                df = pd.read_csv(path, index_col=0)
+                # Same SAPHIR-epoch → hours-since-midnight conversion as main CSV
+                t_unix = df.index.astype(float) + _NC_EPOCH_OFFSET
+                df.index = (t_unix - self._midnight_unix) / 3600.0
+                self._cmp_df_ref    = df
+                self._cmp_ref_label = os.path.basename(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Load Error", str(e))
+                return
+
+        else:  # SAPHIR Instruments (already loaded NC data)
+            if not self._inst_data:
+                QMessageBox.information(self, "No Instruments Loaded",
+                                        "Load SAPHIR NC data first (left panel button).")
+                return
+            # Build a DataFrame from _inst_data on a shared time grid
+            t_min = min(d['t'].min() for d in self._inst_data.values())
+            t_max = max(d['t'].max() for d in self._inst_data.values())
+            common_t = np.linspace(t_min, t_max, 500)
+            rows = {'__t__': common_t}
+            for key, data in self._inst_data.items():
+                col = data.get('nc_var', key)
+                rows[col] = np.interp(common_t, data['t'], data['v'],
+                                      left=np.nan, right=np.nan)
+            df = pd.DataFrame(rows).set_index('__t__')
+            df.index.name = 'Time_hours'
+            self._cmp_df_ref    = df
+            self._cmp_ref_label = "Loaded SAPHIR instruments"
+
+        self._cmp_ref_lbl.setText(f"Ref: {self._cmp_ref_label}")
+        self._cmp_ref_lbl.setStyleSheet("color: black; font-style: normal;")
+
+    def _cmp_parse_facsimile(self, path):
+        """Parse a FACSIMILE .cs file; align to hours-since-midnight of this experiment."""
+        col_names = {}
+        data_lines = []
+        with open(path, 'r') as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith('COLUMN'):
+                    m = re.match(r'COLUMN\s+(\d+)=(.+)', s)
+                    if m:
+                        idx  = int(m.group(1))
+                        name = m.group(2).split('<')[0].strip()
+                        col_names[idx] = 'TIME' if idx == 1 else name
+                elif s and s[0].isdigit():
+                    # Fix missing-E scientific notation: 3.84-116 → 3.84E-116
+                    fixed = re.sub(r'(\d)([-+])(\d)', r'\1E\2\3', s)
+                    data_lines.append(fixed)
+
+        if not col_names or not data_lines:
+            raise ValueError("No column definitions or data rows found in FACSIMILE file.")
+
+        n_cols  = max(col_names.keys())
+        headers = [col_names.get(i, f'COL{i}') for i in range(1, n_cols + 1)]
+        rows    = [list(map(float, ln.split())) for ln in data_lines]
+        df      = pd.DataFrame(rows, columns=headers[:len(rows[0])])
+
+        # TIME column is SAPHIR epoch (sec since 2000-01-01) — same as ENZ/CSV
+        midnight_saphir = self._midnight_unix - _NC_EPOCH_OFFSET
+        df.index = (df['TIME'] - midnight_saphir) / 3600.0
+        df.index.name = 'Time_hours'
+        df = df.drop(columns=['TIME'])
+        return df
+
+    # ── Slope analysis ────────────────────────────────────────────────────────
+    def _cmp_compute_slopes(self):
+        if self._cmp_df_ref is None:
+            QMessageBox.information(self, "No Reference", "Load a reference dataset first.")
+            return
+        try:
+            threshold = float(self._cmp_noise_input.text())
+        except ValueError:
+            threshold = 1e-6
+
+        mcm_cols = set(self.df.columns) - {'M'}
+        ref_cols = set(self._cmp_df_ref.columns) - {'M'}
+        common   = sorted(mcm_cols & ref_cols)
+        if not common:
+            QMessageBox.warning(self, "No Common Species",
+                                "No overlapping species found between MCM and reference.")
+            return
+
+        t_min = max(self.df.index.min(), self._cmp_df_ref.index.min())
+        t_max = min(self.df.index.max(), self._cmp_df_ref.index.max())
+        n_pts = min(500, len(self.df))
+        common_t = np.linspace(t_min, t_max, n_pts)
+
+        def interp(df, col):
+            s = df[col].dropna()
+            return np.interp(common_t, s.index.values.astype(float), s.values)
+
+        # Global noise scale: 99th percentile across all common species
+        py_scale = float(np.nanpercentile(
+            np.abs(self.df[common].select_dtypes(include='number').values), 99))
+        ref_scale = float(np.nanpercentile(
+            np.abs(self._cmp_df_ref[common].select_dtypes(include='number').values), 99))
+        py_scale  = py_scale  if py_scale  > 0 else 1.0
+        ref_scale = ref_scale if ref_scale > 0 else 1.0
+
+        self._cmp_slope_results = {}
+        for sp in common:
+            py_s  = interp(self.df, sp)
+            ref_s = interp(self._cmp_df_ref, sp)
+
+            if sp not in self._NOISE_EXCEPTIONS:
+                if (np.nanmax(np.abs(py_s))  < threshold * py_scale and
+                        np.nanmax(np.abs(ref_s)) < threshold * ref_scale):
+                    continue
+
+            mask = np.isfinite(py_s) & np.isfinite(ref_s)
+            if mask.sum() < 5:
+                continue
+            px, rx = py_s[mask], ref_s[mask]
+            if np.ptp(rx) == 0 and np.ptp(px) == 0:
+                continue
+
+            if np.ptp(rx) > 0:
+                slope, intercept = np.polyfit(rx, px, 1)
+                y_pred = slope * rx + intercept
+                ss_res = np.sum((px - y_pred) ** 2)
+                ss_tot = np.sum((px - px.mean()) ** 2)
+                r2 = float(max(0.0, 1 - ss_res / ss_tot)) if ss_tot > 0 else 0.0
+            else:
+                slope     = float(px.mean() / rx.mean()) if rx.mean() != 0 else np.nan
+                intercept = 0.0
+                r2        = float('nan')
+
+            if not np.isfinite(slope):
+                continue
+
+            self._cmp_slope_results[sp] = {
+                'slope': slope, 'intercept': intercept, 'r2': r2,
+                'py': px, 'ref': rx, 'common_t': common_t[mask],
+            }
+
+        print(f"[Comparison] {len(self._cmp_slope_results)} species passed noise filter.")
+        self._cmp_draw_slope_matrix()
+
+    def _cmp_draw_slope_matrix(self):
+        self._cmp_slope_fig.clear()
+        ax = self._cmp_slope_fig.add_subplot(111)
+        ax.axis('off')
+
+        species_list = sorted(self._cmp_slope_results.keys())
+        n = len(species_list)
+        if n == 0:
+            ax.text(0.5, 0.5, "No significant species found.\nTry lowering the noise threshold.",
+                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+            self._cmp_slope_canvas.draw()
+            return
+
+        # Choose a column count that gives a compact grid close to the canvas aspect.
+        # Prefer slightly more columns than rows so the grid fills a landscape panel.
+        ncols = max(1, min(14, int(np.ceil(np.sqrt(n * 1.6)))))
+        nrows = int(np.ceil(n / ncols))
+
+        # Fixed data-unit box size — the axes auto-stretches to fill the canvas
+        # (no set_aspect('equal')), so the visual box size is determined by
+        # ncols/nrows vs. canvas size, not by these data-unit values.
+        box_w, box_h, pad = 1.0, 0.75, 0.08
+
+        # Font size based on grid density: more boxes → smaller text
+        density = max(ncols, nrows)
+        fsize_name = max(4.0, min(9.0, 72.0 / density))
+        fsize_val  = max(3.5, min(7.5, 60.0 / density))
+
+        slopes = np.array([self._cmp_slope_results[s]['slope'] for s in species_list])
+        s5, s95 = np.percentile(slopes, 5), np.percentile(slopes, 95)
+        vmin = min(s5, 0.75); vmax = max(s95, 1.25)
+        if vmin >= 1.0: vmin = 0.5
+        if vmax <= 1.0: vmax = 1.5
+        norm = TwoSlopeNorm(vcenter=1.0, vmin=vmin, vmax=vmax)
+        cmap = _mcm.RdBu_r
+
+        self._cmp_slope_box_map = []
+        for i, sp in enumerate(species_list):
+            row = i // ncols; col = i % ncols
+            x = col * (box_w + pad)
+            y = (nrows - 1 - row) * (box_h + pad)
+            slope = self._cmp_slope_results[sp]['slope']
+            r2    = self._cmp_slope_results[sp]['r2']
+            rgba  = cmap(norm(float(np.clip(slope, vmin, vmax))))
+            rect  = mpatches.FancyBboxPatch((x, y), box_w, box_h,
+                        boxstyle="round,pad=0.02",
+                        facecolor=rgba, edgecolor='#333', linewidth=0.5)
+            ax.add_patch(rect)
+            lum = 0.299*rgba[0] + 0.587*rgba[1] + 0.114*rgba[2]
+            tc  = 'black' if lum > 0.45 else 'white'
+            ax.text(x + box_w/2, y + box_h*0.67, sp,
+                    ha='center', va='center', fontsize=fsize_name, fontweight='bold', color=tc)
+            r2_str = f"R²={r2:.2f}" if np.isfinite(r2) else ""
+            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}  {r2_str}",
+                    ha='center', va='center', fontsize=fsize_val, color=tc)
+            self._cmp_slope_box_map.append((x, y, x+box_w, y+box_h, sp))
+
+        # Tight limits — no extra whitespace around the grid
+        ax.set_xlim(-pad/2, ncols*(box_w+pad) - pad/2)
+        ax.set_ylim(-pad/2, nrows*(box_h+pad) - pad/2)
+
+        sm = _mcm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+        self._cmp_slope_fig.colorbar(sm, ax=ax, orientation='horizontal',
+                                     fraction=0.03, pad=0.01,
+                                     label=f'Slope  (MCM / {self._cmp_ref_label})')
+        self._cmp_slope_fig.tight_layout(pad=0.3)
+        self._cmp_slope_canvas.draw()
+
+    def _cmp_on_slope_click(self, event):
+        if event.inaxes is None or event.xdata is None:
+            return
+        x, y = event.xdata, event.ydata
+        for (x1, y1, x2, y2, sp) in self._cmp_slope_box_map:
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                self._cmp_update_detail(sp)
+                self._cmp_draw_slope_matrix()
+                ax = self._cmp_slope_fig.axes[0]
+                for (bx1, by1, bx2, by2, bsp) in self._cmp_slope_box_map:
+                    if bsp == sp:
+                        ax.add_patch(mpatches.FancyBboxPatch(
+                            (bx1, by1), bx2-bx1, by2-by1,
+                            boxstyle="round,pad=0.02",
+                            facecolor='none', edgecolor='gold', linewidth=2.0))
+                        break
+                self._cmp_slope_canvas.draw()
+                break
+
+    def _cmp_update_detail(self, sp):
+        data = self._cmp_slope_results.get(sp)
+        if data is None:
+            return
+        slope, intercept, r2 = data['slope'], data['intercept'], data['r2']
+        py_vals, ref_vals, common_t = data['py'], data['ref'], data['common_t']
+
+        self._cmp_detail_fig.clear()
+
+        # ── Scatter / correlation ─────────────────────────────────────────────
+        ax_s = self._cmp_detail_fig.add_subplot(211)
+        ax_s.scatter(ref_vals, py_vals, alpha=0.5, s=8, color='steelblue', zorder=3)
+        x_line = np.array([ref_vals.min(), ref_vals.max()])
+        ax_s.plot(x_line, slope*x_line + intercept, 'r-', lw=1.5,
+                  label=f'fit: y={slope:.3f}·x + {intercept:.3e}', zorder=4)
+        ax_s.plot(x_line, x_line, 'k--', lw=1.0, alpha=0.5, label='1:1', zorder=4)
+        ax_s.set_xlabel(f"{sp}  [{self._cmp_ref_label}]", fontsize=9)
+        ax_s.set_ylabel(f"{sp}  [MCM]", fontsize=9)
+        r2_str = f"R²={r2:.3f}" if np.isfinite(r2) else "R²=n/a"
+        ax_s.set_title(f"{sp}   slope={slope:.3f}   {r2_str}", fontweight='bold', fontsize=10)
+        ax_s.legend(loc='upper left', fontsize=7)
+        ax_s.grid(True, ls='--', alpha=0.35)
+
+        # ── Timeseries ────────────────────────────────────────────────────────
+        ax_t = self._cmp_detail_fig.add_subplot(212)
+        hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
+        if hv_col is not None:
+            hv_interp = np.interp(common_t, self.df.index.values.astype(float),
+                                  self.df[hv_col].values.astype(float),
+                                  left=0.0, right=0.0)
+            open_mask = hv_interp > 0.5
+            transitions = np.diff(open_mask.astype(int))
+            starts = list(np.where(transitions == 1)[0] + 1)
+            ends   = list(np.where(transitions == -1)[0] + 1)
+            if open_mask[0]:  starts = [0] + starts
+            if open_mask[-1]: ends   = ends + [len(common_t)-1]
+            first = True
+            for si, ei in zip(starts, ends):
+                ax_t.axvspan(common_t[si], common_t[ei], alpha=0.18, color='gold',
+                             label='Roof open' if first else '', zorder=0)
+                first = False
+
+        ax_t.plot(common_t, py_vals,  label=f"{sp} MCM",
+                  lw=1.5, color='steelblue', zorder=2)
+        ax_t.plot(common_t, ref_vals, label=f"{sp} {self._cmp_ref_label}",
+                  lw=1.5, color='darkorange', ls='--', zorder=2)
+        ax_t.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+        ax_t.set_xlabel("Time of Day (UTC)", fontsize=9)
+        ax_t.set_ylabel(sp, fontsize=9)
+        ax_t.legend(loc='upper right', fontsize=7)
+        ax_t.grid(True, ls='--', alpha=0.35)
+
+        self._cmp_detail_fig.tight_layout(pad=0.8)
+        self._cmp_detail_canvas.draw()
 
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
