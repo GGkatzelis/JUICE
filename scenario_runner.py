@@ -344,10 +344,28 @@ class ScenarioRunner:
                 start_s = (target_utc - saphir_base_date).total_seconds()
                 dur = float(eval(str(b.get('duration_s', 60))))
                 min_dur = min(min_dur, dur)
-                mu = start_s + (dur / 2.0)
-                sigma = dur / 6.0 
-                coeff = (float(b['ppb']) * 1e-9 * self.get_M(start_s)) / (sigma * np.sqrt(2 * np.pi))
-                burst_eval.append({'idx': self.solver.species_to_idx[target], 'mu': mu, 'sigma': sigma, 'coeff': coeff})
+                total_conc = float(b['ppb']) * 1e-9 * self.get_M(start_s)  # molec/cm³
+                profile = b.get('profile', 'Gaussian')
+                try:
+                    t90_frac = max(0.01, min(0.99, float(b.get('t90_frac', 0.5))))
+                except (ValueError, TypeError):
+                    t90_frac = 0.5
+                if profile == 'Saturating':
+                    lam = np.log(10.0) / (t90_frac * dur)
+                    norm = (1.0 - np.exp(-lam * dur)) / lam
+                    coeff = total_conc / norm
+                    burst_eval.append({'profile': 'saturating', 'idx': self.solver.species_to_idx[target],
+                                       'start_s': start_s, 'dur': dur, 'lam': lam, 'coeff': coeff})
+                else:  # Gaussian (default)
+                    # t90_frac > 0.5: use it to set σ (z₉₀ = 1.2816); otherwise fall back to dur/6
+                    if t90_frac > 0.5:
+                        sigma = dur * (t90_frac - 0.5) / 1.2816
+                    else:
+                        sigma = dur / 6.0
+                    mu = start_s + (dur / 2.0)
+                    coeff = total_conc / (sigma * np.sqrt(2 * np.pi))
+                    burst_eval.append({'profile': 'gaussian', 'idx': self.solver.species_to_idx[target],
+                                       'mu': mu, 'sigma': sigma, 'coeff': coeff})
 
         def system_ode(t, y):
             dydt = np.zeros(self.solver.num_species)
@@ -480,7 +498,12 @@ class ScenarioRunner:
                 dydt[s['idx']] += eval(s['code'], globals(), ctx)
 
             for b in burst_eval:
-                dydt[b['idx']] += b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
+                if b['profile'] == 'saturating':
+                    dt = t - b['start_s']
+                    if 0.0 <= dt <= b['dur']:
+                        dydt[b['idx']] += b['coeff'] * np.exp(-b['lam'] * dt)
+                else:  # gaussian
+                    dydt[b['idx']] += b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
             
             self.eval_count += 1
             if self.eval_count % 500 == 0 or t > self.last_progress_print_time + 300:

@@ -102,7 +102,7 @@ class EasyParser:
                 self.mech.initial_conditions[spec.strip().upper()] = expr.strip().upper()
                 continue
 
-            rate_def = re.match(r'k\[(.*?)\]\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line_for_rxn, re.I)
+            rate_def = re.match(r'k\[(.*?)\](?:\{[^}]*\})?\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line_for_rxn, re.I)
             if rate_def:
                 self.rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
                 continue

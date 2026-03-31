@@ -21,6 +21,8 @@ Decoupled three-stage workflow:
 | `saphir_gui.py` | GUI scenario builder |
 | `scenario_runner.py` | ODE executor |
 | `mechanism_solver.py` | Legacy stub — core logic fully migrated to `scenario_runner.py` |
+| `check_results.py` | Interactive results viewer + process analysis engine (launched by runner) |
+| `Python_vs_FACSIMILE.py` | Standalone two-tab comparison GUI: timeseries overlay + slope matrix vs FACSIMILE `.cs` output |
 
 ## 3. Core Physics
 
@@ -32,7 +34,7 @@ Decoupled three-stage workflow:
 - Photolytic HONO wall source: `4.7e13 × (1 + (RH/11.6)²) × exp(−3950/T) × JNO2 × HV`
 - Photolytic HCHO wall source: `2.8e6 × HV`
 - Missing OH reactivity Y: virtual species, `Y + OH → HO2`
-- Dark thermal HONO: `H2O → HONO` at constant rate
+- Dark thermal HONO: zeroth-order `→ HONO` at rate `1e-14 × H2O` (molec cm⁻³ s⁻¹). The coefficient is `1e-14` not `1e-12` because FACSIMILE's formula buries a `1e-2` factor inside its H2O definition (`H2O_FACSIMILE = 1e-2 × M × VMR`), while Python's ODE context has `H2O = VMR × M` — 100× larger. Using `1e-12` would produce a dark source ~100× too strong.
 
 **Units:** K for temperature, hPa for pressure, s⁻¹ for J-values, molec/cm³ for concentrations.
 
@@ -246,7 +248,7 @@ system_ode(t, y):
 
 **Result (2026-03-29):** Simulation confirmed working. C2H5OH rises on injection and decays over hours as expected. Diagnostics report zero failed reactions. KMT01–KMT14 evaluate without warnings.
 
-## 9. Current State (as of 2026-03-29)
+## 9. Current State (as of 2026-03-31)
 
 All seven bug fixes are applied and the simulation is working correctly:
 - Phase 4 (full ethanol oxidation in SAPHIR): confirmed working
@@ -255,6 +257,16 @@ All seven bug fixes are applied and the simulation is working correctly:
 - All KMT01–KMT14 Troe rates active and evaluating correctly
 - All photolysis J-values (J1–J51) evaluating via PHTFKT Python closure
 - Zero failed reactions in `[DIAGNOSTICS]` output
+
+**New tools added (2026-03-31):**
+- `Python_vs_FACSIMILE.py`: standalone comparison GUI (timeseries + slope matrix)
+- Franz's FACSIMILE reference output in `MCM_tested_scenarios/ethanol_scenario/MCM output/case1,case2/`
+- `check_results.py` massively expanded:
+  - `BudgetEngine`: vectorized process analysis; mirrors runner's var_assignments/artifact logic; H2O unit auto-detection; O1D PSS reconstruction; two-pass vectorized eval; minor pathway grouping
+  - `ResultsViewer`: two-tab layout (Timeseries + Process Analysis); single-click species → budget plot; auto-loads scenario_config.json from CSV path; stacked production/destruction chart
+
+**Fix 8 — dark_hono H2O unit mismatch (2026-03-31):**
+FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACSIMILE defines `H2O = 1e-2 × M × VMR`. Python's ODE context uses `H2O = VMR × M` (100× larger). The expression `"1e-12 * H2O"` therefore ran 100× too fast, causing ~10× offset in simulated HONO concentration (photolytic source moderated the ratio). Fixed by changing the default expression to `"1e-14 * H2O"` in `saphir_gui.py` (line 717) and `scenario_config.json`. The ODE physics (H2O conversion, kinetics, dilution) are correct — only the coefficient in this user-configurable artifact expression was wrong.
 
 ### GUI Enhancements (as of 2026-03-29)
 
@@ -270,7 +282,7 @@ All seven bug fixes are applied and the simulation is working correctly:
 
 ## 10. Next Steps & Future Enhancements
 
-1.  **Debug Injection Behavior:** A new high-priority bug has been observed where injected species (e.g., from large ethanol injections) have their concentrations drop to zero almost immediately after the injection event in the simulation output. This needs to be investigated, as it may be related to recent changes in how parameters or reactions are handled by the ODE solver.
+1.  **Fix O1D budget discrepancy vs FACSIMILE** — HONO budget was traced to dark_hono H2O factor (Fix 8, now resolved). O1D budget root cause not yet identified — use `Python_vs_FACSIMILE.py` + BudgetEngine process analysis to continue.
 2.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
 3.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
 4.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
