@@ -26,7 +26,7 @@ try:
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
                                  QInputDialog, QMessageBox, QAbstractItemView)
     from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QColor
+    from PyQt6.QtGui import QColor, QIcon
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
     from matplotlib.figure import Figure
@@ -739,6 +739,9 @@ class ResultsViewer(QMainWindow):
 
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
+        _icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Jülich logo ICE-3.png")
+        if os.path.exists(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
 
         # Convert MCM index from SAPHIR epoch (sec since 2000-01-01) to hours since
         # UTC midnight of the experiment day, same reference as NC instrument data.
@@ -1814,12 +1817,18 @@ class ResultsViewer(QMainWindow):
     _NOISE_EXCEPTIONS = {'OH', 'HO2', 'NO3', 'O1D', 'CH3O', 'C2H5O', 'HCO', 'CHO'}
 
     def _build_comparison_tab(self):
-        """Build the Comparison tab: reference loader + slope matrix + detail panel."""
+        """Build the Comparison tab: reference loader + slope matrix + two timeseries panels."""
         # State
         self._cmp_df_ref        = None
         self._cmp_ref_label     = ""
         self._cmp_slope_results = {}
         self._cmp_slope_box_map = []
+        self._cmp_selected      = [None, None]   # species selected per slot
+        self._cmp_ts_data       = [None, None]   # (py, ref, common_t, sp) per slot
+        self._cmp_crosshair     = [
+            {'vline': None, 'text': None},
+            {'vline': None, 'text': None},
+        ]
 
         outer = QWidget()
         outer_layout = QVBoxLayout(outer)
@@ -1866,17 +1875,54 @@ class ResultsViewer(QMainWindow):
         ll.addWidget(self._cmp_slope_canvas)
         splitter.addWidget(left)
 
+        # ── Right panel: two stacked timeseries slots ─────────────────────────
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
-        self._cmp_detail_fig = Figure()
-        self._cmp_detail_canvas = FigureCanvas(self._cmp_detail_fig)
-        rl.addWidget(NavigationToolbar(self._cmp_detail_canvas, self))
-        rl.addWidget(self._cmp_detail_canvas)
+
+        right_vsplit = QSplitter(Qt.Orientation.Vertical)
+
+        self._cmp_ts_figs     = []
+        self._cmp_ts_canvases = []
+        self._cmp_ts_combos   = []
+
+        for slot in range(2):
+            slot_widget = QWidget()
+            slot_layout = QVBoxLayout(slot_widget)
+            slot_layout.setContentsMargins(2, 2, 2, 2)
+            slot_layout.setSpacing(2)
+
+            ctrl = QHBoxLayout()
+            lbl_txt = "Left-click a box to select:" if slot == 0 else "Right-click a box to select:"
+            ctrl.addWidget(QLabel(lbl_txt))
+            combo = QComboBox()
+            combo.setMinimumWidth(120)
+            s = slot
+            combo.currentTextChanged.connect(
+                lambda sp, s=s: self._cmp_draw_timeseries(s, sp) if sp else None)
+            self._cmp_ts_combos.append(combo)
+            ctrl.addWidget(combo, stretch=1)
+            slot_layout.addLayout(ctrl)
+
+            fig = Figure()
+            canvas = FigureCanvas(fig)
+            self._cmp_ts_figs.append(fig)
+            self._cmp_ts_canvases.append(canvas)
+            slot_layout.addWidget(NavigationToolbar(canvas, self))
+            slot_layout.addWidget(canvas, stretch=1)
+
+            canvas.mpl_connect('motion_notify_event',
+                               lambda ev, s=s: self._cmp_on_mouse_move(ev, s))
+            canvas.mpl_connect('axes_leave_event',
+                               lambda ev, s=s: self._cmp_clear_crosshair(s))
+
+            right_vsplit.addWidget(slot_widget)
+
+        rl.addWidget(right_vsplit, stretch=1)
         splitter.addWidget(right)
 
-        splitter.setSizes([500, 1000])   # ~1:2 initial split
-        outer_layout.addWidget(splitter, 1)  # stretch=1: splitter takes all remaining space
+        splitter.setSizes([500, 1000])
+        outer_layout.addWidget(splitter, 1)
 
         self.right_tabs.addTab(outer, "Comparison")
 
@@ -2020,26 +2066,46 @@ class ResultsViewer(QMainWindow):
             if np.ptp(rx) == 0 and np.ptp(px) == 0:
                 continue
 
-            if np.ptp(rx) > 0:
-                slope, intercept = np.polyfit(rx, px, 1)
-                y_pred = slope * rx + intercept
-                ss_res = np.sum((px - y_pred) ** 2)
-                ss_tot = np.sum((px - px.mean()) ** 2)
-                r2 = float(max(0.0, 1 - ss_res / ss_tot)) if ss_tot > 0 else 0.0
+            # Robust slope: median of point-wise ratios where ref exceeds noise floor.
+            # This avoids the polyfit being dominated by a single outlier.
+            noise_floor = threshold * ref_scale
+            ratio_mask = (rx > noise_floor) & (px > 0)
+            if ratio_mask.sum() >= 3:
+                slope = float(np.median(px[ratio_mask] / rx[ratio_mask]))
+            elif rx.mean() > 0:
+                slope = float(px.mean() / rx.mean())
             else:
-                slope     = float(px.mean() / rx.mean()) if rx.mean() != 0 else np.nan
-                intercept = 0.0
-                r2        = float('nan')
+                slope = np.nan
 
             if not np.isfinite(slope):
                 continue
 
+            # theta: angle of the mean ratio line from the x-axis (degrees).
+            # 45° = perfect 1:1, >45° MCM overestimates, <45° underestimates.
+            theta = float(np.degrees(np.arctan(slope)))
+
             self._cmp_slope_results[sp] = {
-                'slope': slope, 'intercept': intercept, 'r2': r2,
+                'slope': slope, 'theta': theta,
                 'py': px, 'ref': rx, 'common_t': common_t[mask],
             }
 
         print(f"[Comparison] {len(self._cmp_slope_results)} species passed noise filter.")
+
+        # Populate species combos with the result set (block signals to avoid spurious draws)
+        species_list = sorted(self._cmp_slope_results.keys())
+        for slot, combo in enumerate(self._cmp_ts_combos):
+            prev = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(species_list)
+            if prev in species_list:
+                combo.setCurrentText(prev)
+            combo.blockSignals(False)
+            # Redraw whatever is currently selected
+            sp = combo.currentText()
+            if sp:
+                self._cmp_draw_timeseries(slot, sp)
+
         self._cmp_draw_slope_matrix()
 
     def _cmp_draw_slope_matrix(self):
@@ -2084,18 +2150,25 @@ class ResultsViewer(QMainWindow):
             x = col * (box_w + pad)
             y = (nrows - 1 - row) * (box_h + pad)
             slope = self._cmp_slope_results[sp]['slope']
-            r2    = self._cmp_slope_results[sp]['r2']
+            theta = self._cmp_slope_results[sp]['theta']
             rgba  = cmap(norm(float(np.clip(slope, vmin, vmax))))
+            # Highlight border if this species is selected in either slot
+            edge_color = '#333'
+            edge_lw    = 0.5
+            if sp == self._cmp_selected[0]:
+                edge_color, edge_lw = 'steelblue', 2.0
+            elif sp == self._cmp_selected[1]:
+                edge_color, edge_lw = 'darkorange', 2.0
             rect  = mpatches.FancyBboxPatch((x, y), box_w, box_h,
                         boxstyle="round,pad=0.02",
-                        facecolor=rgba, edgecolor='#333', linewidth=0.5)
+                        facecolor=rgba, edgecolor=edge_color, linewidth=edge_lw)
             ax.add_patch(rect)
             lum = 0.299*rgba[0] + 0.587*rgba[1] + 0.114*rgba[2]
             tc  = 'black' if lum > 0.45 else 'white'
             ax.text(x + box_w/2, y + box_h*0.67, sp,
                     ha='center', va='center', fontsize=fsize_name, fontweight='bold', color=tc)
-            r2_str = f"R²={r2:.2f}" if np.isfinite(r2) else ""
-            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}  {r2_str}",
+            theta_str = f"θ={theta:.0f}°" if np.isfinite(theta) else ""
+            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}  {theta_str}",
                     ha='center', va='center', fontsize=fsize_val, color=tc)
             self._cmp_slope_box_map.append((x, y, x+box_w, y+box_h, sp))
 
@@ -2114,46 +2187,39 @@ class ResultsViewer(QMainWindow):
         if event.inaxes is None or event.xdata is None:
             return
         x, y = event.xdata, event.ydata
+        # Left click (button 1) → slot 0 (top panel); right click (button 3) → slot 1 (bottom)
+        slot = 0 if event.button == 1 else (1 if event.button == 3 else None)
+        if slot is None:
+            return
         for (x1, y1, x2, y2, sp) in self._cmp_slope_box_map:
             if x1 <= x <= x2 and y1 <= y <= y2:
-                self._cmp_update_detail(sp)
+                self._cmp_selected[slot] = sp
+                combo = self._cmp_ts_combos[slot]
+                combo.blockSignals(True)
+                combo.setCurrentText(sp)
+                combo.blockSignals(False)
+                self._cmp_draw_timeseries(slot, sp)
                 self._cmp_draw_slope_matrix()
-                ax = self._cmp_slope_fig.axes[0]
-                for (bx1, by1, bx2, by2, bsp) in self._cmp_slope_box_map:
-                    if bsp == sp:
-                        ax.add_patch(mpatches.FancyBboxPatch(
-                            (bx1, by1), bx2-bx1, by2-by1,
-                            boxstyle="round,pad=0.02",
-                            facecolor='none', edgecolor='gold', linewidth=2.0))
-                        break
-                self._cmp_slope_canvas.draw()
                 break
 
-    def _cmp_update_detail(self, sp):
+    def _cmp_draw_timeseries(self, slot, sp):
+        """Draw a single timeseries panel for the given slot (0=top, 1=bottom)."""
         data = self._cmp_slope_results.get(sp)
         if data is None:
             return
-        slope, intercept, r2 = data['slope'], data['intercept'], data['r2']
+        slope, theta = data['slope'], data['theta']
         py_vals, ref_vals, common_t = data['py'], data['ref'], data['common_t']
 
-        self._cmp_detail_fig.clear()
+        # Store for crosshair lookups
+        self._cmp_ts_data[slot] = (py_vals, ref_vals, common_t, sp)
+        # Clear any stale crosshair artists before redrawing
+        self._cmp_crosshair[slot] = {'vline': None, 'text': None}
 
-        # ── Scatter / correlation ─────────────────────────────────────────────
-        ax_s = self._cmp_detail_fig.add_subplot(211)
-        ax_s.scatter(ref_vals, py_vals, alpha=0.5, s=8, color='steelblue', zorder=3)
-        x_line = np.array([ref_vals.min(), ref_vals.max()])
-        ax_s.plot(x_line, slope*x_line + intercept, 'r-', lw=1.5,
-                  label=f'fit: y={slope:.3f}·x + {intercept:.3e}', zorder=4)
-        ax_s.plot(x_line, x_line, 'k--', lw=1.0, alpha=0.5, label='1:1', zorder=4)
-        ax_s.set_xlabel(f"{sp}  [{self._cmp_ref_label}]", fontsize=9)
-        ax_s.set_ylabel(f"{sp}  [MCM]", fontsize=9)
-        r2_str = f"R²={r2:.3f}" if np.isfinite(r2) else "R²=n/a"
-        ax_s.set_title(f"{sp}   slope={slope:.3f}   {r2_str}", fontweight='bold', fontsize=10)
-        ax_s.legend(loc='upper left', fontsize=7)
-        ax_s.grid(True, ls='--', alpha=0.35)
+        fig    = self._cmp_ts_figs[slot]
+        canvas = self._cmp_ts_canvases[slot]
+        fig.clear()
+        ax = fig.add_subplot(111)
 
-        # ── Timeseries ────────────────────────────────────────────────────────
-        ax_t = self._cmp_detail_fig.add_subplot(212)
         hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
         if hv_col is not None:
             hv_interp = np.interp(common_t, self.df.index.values.astype(float),
@@ -2164,25 +2230,77 @@ class ResultsViewer(QMainWindow):
             starts = list(np.where(transitions == 1)[0] + 1)
             ends   = list(np.where(transitions == -1)[0] + 1)
             if open_mask[0]:  starts = [0] + starts
-            if open_mask[-1]: ends   = ends + [len(common_t)-1]
+            if open_mask[-1]: ends   = ends + [len(common_t) - 1]
             first = True
             for si, ei in zip(starts, ends):
-                ax_t.axvspan(common_t[si], common_t[ei], alpha=0.18, color='gold',
-                             label='Roof open' if first else '', zorder=0)
+                ax.axvspan(common_t[si], common_t[ei], alpha=0.18, color='gold',
+                           label='Roof open' if first else '', zorder=0)
                 first = False
 
-        ax_t.plot(common_t, py_vals,  label=f"{sp} MCM",
-                  lw=1.5, color='steelblue', zorder=2)
-        ax_t.plot(common_t, ref_vals, label=f"{sp} {self._cmp_ref_label}",
-                  lw=1.5, color='darkorange', ls='--', zorder=2)
-        ax_t.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
-        ax_t.set_xlabel("Time of Day (UTC)", fontsize=9)
-        ax_t.set_ylabel(sp, fontsize=9)
-        ax_t.legend(loc='upper right', fontsize=7)
-        ax_t.grid(True, ls='--', alpha=0.35)
+        theta_str = f"θ={theta:.0f}°" if np.isfinite(theta) else ""
+        ax.plot(common_t, py_vals,  label=f"{sp} MCM",
+                lw=1.5, color='steelblue', zorder=2)
+        ax.plot(common_t, ref_vals, label=f"{sp} {self._cmp_ref_label}",
+                lw=1.5, color='darkorange', ls='--', zorder=2)
+        ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+        ax.set_xlabel("Time of Day (UTC)", fontsize=9)
+        ax.set_ylabel(sp, fontsize=9)
+        ax.set_title(f"{sp}   m={slope:.3f}   {theta_str}", fontweight='bold', fontsize=10)
+        ax.legend(loc='upper right', fontsize=7)
+        ax.grid(True, ls='--', alpha=0.35)
 
-        self._cmp_detail_fig.tight_layout(pad=0.8)
-        self._cmp_detail_canvas.draw()
+        fig.tight_layout(pad=0.8)
+        canvas.draw()
+
+    # ── Crosshair cursor ─────────────────────────────────────────────────────
+
+    def _cmp_on_mouse_move(self, event, slot):
+        if event.inaxes is None:
+            self._cmp_clear_crosshair(slot)
+            return
+        ax     = event.inaxes
+        canvas = self._cmp_ts_canvases[slot]
+        ch     = self._cmp_crosshair[slot]
+        x      = event.xdata
+
+        # Remove previous artists
+        if ch['vline'] is not None:
+            try: ch['vline'].remove()
+            except Exception: pass
+        if ch['text'] is not None:
+            try: ch['text'].remove()
+            except Exception: pass
+
+        ch['vline'] = ax.axvline(x, color='gray', lw=0.8, ls='--', zorder=10)
+
+        data = self._cmp_ts_data[slot]
+        if data is not None:
+            py_vals, ref_vals, common_t, sp = data
+            py_at  = float(np.interp(x, common_t, py_vals))
+            ref_at = float(np.interp(x, common_t, ref_vals))
+            h, rem = divmod(max(0, int(x * 3600)), 3600)
+            m      = rem // 60
+            txt    = f"{h:02d}:{m:02d}   MCM={py_at:.3g}   Ref={ref_at:.3g}"
+            ch['text'] = ax.text(
+                0.02, 0.98, txt, transform=ax.transAxes,
+                va='top', ha='left', fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85),
+                zorder=11)
+
+        canvas.draw_idle()
+
+    def _cmp_clear_crosshair(self, slot):
+        ch     = self._cmp_crosshair[slot]
+        canvas = self._cmp_ts_canvases[slot]
+        if ch['vline'] is not None:
+            try: ch['vline'].remove()
+            except Exception: pass
+            ch['vline'] = None
+        if ch['text'] is not None:
+            try: ch['text'].remove()
+            except Exception: pass
+            ch['text'] = None
+        canvas.draw_idle()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Carbon Budget tab  (Tab 4)

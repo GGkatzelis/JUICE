@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd 
 from scipy.integrate import solve_ivp
 from scipy.sparse import lil_matrix
+from scipy.interpolate import interp1d
 import sys
 import re
 import warnings
@@ -85,11 +86,31 @@ class ScenarioRunner:
         for internal_key, mapping in self.cfg['env_map'].items():
             if mapping['type'] == "SAPHIR File":
                 file_header = mapping['value'].lower()
-                if file_header in providers:
-                    self.ctx_data[internal_key] = providers[file_header]
-                else:
+                if file_header not in providers:
                     actual_header = next((h for h in headers if h.lower() == file_header), None)
-                    if actual_header: self.ctx_data[internal_key] = providers[actual_header]
+                    if actual_header: file_header = actual_header
+                if file_header in providers:
+                    raw_interp = providers[file_header]
+                    # For H2O: determine unit scaling once from the full-timeseries maximum,
+                    # then build a pre-corrected interpolation so the per-timestep code never
+                    # sees the ambiguous 0.02–1.0 grey zone.
+                    if internal_key.upper() == 'H2O':
+                        t_arr = np.linspace(t_min, t_max, 500)
+                        raw_vals = raw_interp(t_arr)
+                        peak = float(np.nanmax(np.abs(raw_vals)))
+                        if peak > 1.0:
+                            # Stored as percentage (e.g. 1.27 for 1.27%) — divide once here
+                            scale = 1.0 / 100.0
+                        else:
+                            # Stored as VMR fraction (e.g. 0.0127)
+                            scale = 1.0
+                        corrected_vals = np.where(raw_vals < 0.02, 0.0, raw_vals * scale)
+                        self.ctx_data[internal_key] = interp1d(t_arr, corrected_vals,
+                                                               fill_value="extrapolate")
+                        print(f"  [ENV] H2O unit auto-detected: {'percentage /100' if scale < 1 else 'VMR fraction'}, "
+                              f"peak={peak:.4g}, noise floor < 0.02 zeroed.")
+                    else:
+                        self.ctx_data[internal_key] = raw_interp
             else:
                 val = float(mapping['value'])
                 self.ctx_data[internal_key] = lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v
@@ -218,8 +239,7 @@ class ScenarioRunner:
             if self.cfg['artifacts'].get('hcho_active', True):
                 self.mechanism.reactions.append(Reaction([], ["HCHO"], f"{self.cfg['artifacts']['hcho_eqn']}"))
             if self.cfg['artifacts'].get('y_active', True):
-                if 'Y' not in self.mechanism.species: self.mechanism.species.append('Y')
-                y_rate = f"({self.cfg['artifacts']['y_eqn']}) * 1e-9 * M * 2.4e-13" 
+                y_rate = f"({self.cfg['artifacts']['y_eqn']}) * 1e-9 * M * 2.4e-13"
                 self.mechanism.reactions.append(Reaction(['OH'], ["HO2"], y_rate))
             if self.cfg['artifacts'].get('wall_active', True):
                 # dark_hono expression is a direct production rate in molec cm⁻³ s⁻¹.
@@ -391,16 +411,21 @@ class ScenarioRunner:
                 press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
                 ctx['H2O'] = (ctx['RH'] / 100.0) * (p_sat / press) 
                 
-            if 'H2O' in ctx and ctx['H2O'] > 0:
-                if ctx['H2O'] > 1.0: ctx['H2O'] = ctx['H2O'] / 100.0 # Fix percentage data
-                ctx['H2O'] = ctx['H2O'] * M_now
-                # Back-compute RH (%) from H2O VMR so artifact expressions (e.g. HONO wall source) work correctly
+            if 'H2O' in ctx:
+                # ctx['H2O'] is already a corrected VMR fraction (scaled + noise-floored at setup).
+                h2o_vmr = ctx['H2O']
+                ctx['H2O'] = h2o_vmr * M_now
+                # Back-compute RH (%) from H2O VMR so artifact expressions work correctly
                 if 'RH' not in ctx:
-                    p_sat = np.exp(21.36469 - 5339.66 / T_now)
-                    press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
-                    ctx['RH'] = (ctx['H2O'] / M_now) * press / p_sat * 100.0
+                    if h2o_vmr > 0:
+                        p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                        press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                        ctx['RH'] = h2o_vmr * press / p_sat * 100.0
+                    else:
+                        ctx['RH'] = 0.0
             else:
-                ctx['H2O'] = 0.01 * M_now # Safe 1% Fallback
+                # No H2O channel at all — use 1% fallback so kinetics don't crash
+                ctx['H2O'] = 0.01 * M_now
 
             ctx.update({
                 "T": T_now, "TEMP": T_now, "M": M_now,
@@ -425,6 +450,28 @@ class ScenarioRunner:
 
             for i, name in enumerate(self.solver.species):
                 ctx[name] = float(y[i])
+
+            # Re-apply constrained env_map species AFTER the species loop so that
+            # measured values (e.g. H2O, NO, NO2) always override the ODE state in
+            # rate expressions.  The ODE may track these as species internally, but
+            # for chemistry evaluation the measurement must win.
+            for k in active_constraints:
+                try:
+                    ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t))
+                except Exception:
+                    pass
+            # Re-run the water block so H2O molec/cm³ and RH are consistent with
+            # the restored measured H2O VMR.
+            if 'H2O' in active_constraints:
+                # ctx['H2O'] re-read from the pre-corrected interpolation — already a VMR fraction.
+                h2o_vmr = ctx['H2O']
+                ctx['H2O'] = h2o_vmr * M_now
+                if h2o_vmr > 0:
+                    p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                    press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                    ctx['RH'] = h2o_vmr * press / p_sat * 100.0
+                else:
+                    ctx['RH'] = 0.0
 
             # --- PASS 1: Evaluate constants and COMPRC-based KMT rates ---
             # This computes COSX, LNO2, MNO2, NNO2, JSCALE, KMT01-KMT14, KFPAN, KBPAN, etc.
@@ -633,6 +680,14 @@ class ScenarioRunner:
                 result = eval(compiled_expr, globals(), _derived_ctx)
                 if isinstance(result, np.ndarray) and result.shape == (len(df),):
                     df[var_name] = np.maximum(result, 0.0)
+            except Exception:
+                pass
+
+        # Y background: diagnostic column showing background VOC concentration (molec/cm³)
+        if self.cfg.get('artifacts', {}).get('y_active', False):
+            try:
+                y_eqn = str(self.cfg['artifacts']['y_eqn'])
+                df['Y'] = eval(y_eqn, {"__builtins__": None}, {"M": df['M'].values}) * 1e-9 * df['M'].values
             except Exception:
                 pass
 
