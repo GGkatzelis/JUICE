@@ -63,6 +63,112 @@ _PROD_COLORS = ['#2ca02c', '#98df8a', '#17becf', '#9edae5', '#1f77b4',
 _DEST_COLORS = ['#d62728', '#ff9896', '#ff7f0e', '#ffbb78', '#9467bd',
                 '#c49c94', '#8c564b', '#c7c7c7', '#e377c2', '#7f7f7f']
 
+# ── Carbon budget helpers ─────────────────────────────────────────────────────
+# Lookup table for MCM species whose names are NOT condensed molecular formulas.
+# Maps uppercase species name → integer carbon count.
+_MCM_CARBON_LOOKUP = {
+    # Isoprene and its common MCM fragments
+    'ISOP': 5, 'ISOPD': 5, 'ISOPB': 5,
+    # Monoterpenes (C10)
+    'APINENE': 10, 'BPINENE': 10, 'LIMONENE': 10, 'MYRCENE': 10,
+    'SABINENE': 10, 'D3CARENE': 10, 'TERPINOLENE': 10, 'CAMPHENE': 10,
+    # Aromatics (no 'C' prefix in name → regex would return 0)
+    'BENZENE': 6, 'TOLUENE': 7,
+    'OXYLENE': 8, 'MXYLENE': 8, 'PXYLENE': 8, 'EBENZ': 8,
+    # Common 4-carbon abbreviations
+    'MEK': 4, 'MVK': 4, 'MACR': 4,
+}
+
+# Ordered list of classes for the "Grouped" stackplot (bottom → top).
+# Dominant, slow-decaying groups at the bottom for visual stability.
+_CB_CLASS_ORDER = [
+    'Parent VOC', 'Aldehydes', 'Ketones', 'Carboxylic Acids',
+    'Hydroperoxides', 'Alcohols', 'Peroxy Radicals', 'Acyl Peroxy',
+    'Org. Nitrates', 'PANs', 'CO', 'Other',
+]
+_CB_CLASS_COLORS = {
+    'Parent VOC':       '#1f77b4',
+    'Aldehydes':        '#ff7f0e',
+    'Ketones':          '#bcbd22',
+    'Carboxylic Acids': '#2ca02c',
+    'Hydroperoxides':   '#17becf',
+    'Alcohols':         '#aec7e8',
+    'Peroxy Radicals':  '#9467bd',
+    'Acyl Peroxy':      '#c5b0d5',
+    'Org. Nitrates':    '#ff9896',
+    'PANs':             '#d62728',
+    'CO':               '#8c564b',
+    'Other':            '#c7c7c7',
+}
+
+
+def _carbon_count(name):
+    """Return the number of carbon atoms in a MCM species name.
+
+    Strategy:
+    1. Check _MCM_CARBON_LOOKUP for abbreviated names (TOLUENE, ISOP, …).
+    2. Apply a regex on the condensed-formula name: each occurrence of
+       'C' (not followed by 'l' for chlorine) contributes 1 carbon;
+       'Cn' (C followed by a digit) contributes n carbons.
+    Returns 0 for inorganic/unrecognised species.
+    """
+    upper = name.upper()
+    if upper in _MCM_CARBON_LOOKUP:
+        return _MCM_CARBON_LOOKUP[upper]
+    total = 0
+    for m in re.finditer(r'C(?!l)(\d*)', name):
+        n = m.group(1)
+        total += int(n) if n else 1
+    return total
+
+
+def _carbon_class(name, parent_voc=None):
+    """Classify an MCM species into a chemical class for carbon budget grouping.
+
+    Priority order avoids mis-classification of complex species (e.g. acyl
+    peroxy before generic peroxy, peracids before hydroperoxides).
+    """
+    n = name.upper()
+    # Parent VOC (injected organic precursors from config)
+    if parent_voc and n in parent_voc:
+        return 'Parent VOC'
+    # Simple C1 inorganic
+    if n == 'CO':
+        return 'CO'
+    if n == 'CO2':
+        return 'Other'          # rarely appears in MCM CSV
+    # PAN family: peroxyacyl nitrates (e.g. CH3CO3NO2, MPAN)
+    if n.endswith('CO3NO2') or n in ('PAN', 'MPAN', 'APAN', 'GPAN', 'PBZN'):
+        return 'PANs'
+    # Organic nitrates / organic peroxy nitrates
+    if ('NO3' in n and n != 'NO3') or 'ONO2' in n:
+        return 'Org. Nitrates'
+    # Peracids (–C(=O)OOH written as CO3H in MCM)
+    if n.endswith('CO3H'):
+        return 'Hydroperoxides'
+    # Acyl peroxy radicals (RC(=O)OO• → ends in CO3)
+    if n.endswith('CO3'):
+        return 'Acyl Peroxy'
+    # Alkyl/other peroxy radicals (RO2)
+    if (n.endswith('O2') and n != 'CO2') or n.endswith('OO'):
+        return 'Peroxy Radicals'
+    # Hydroperoxides (ROOH)
+    if n.endswith('OOH'):
+        return 'Hydroperoxides'
+    # Carboxylic acids (RCOOH)
+    if n.endswith('CO2H') or n.endswith('COOH') or n == 'HCOOH':
+        return 'Carboxylic Acids'
+    # Aldehydes (RCHO)
+    if n.endswith('CHO') or n == 'HCHO':
+        return 'Aldehydes'
+    # Ketones / other C=O species (CO still in name after above filters)
+    if 'CO' in n:
+        return 'Ketones'
+    # Alcohols (ROH, after OOH/CO2H/COOH already caught above)
+    if n.endswith('OH'):
+        return 'Alcohols'
+    return 'Other'
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BudgetEngine
@@ -757,8 +863,10 @@ class ResultsViewer(QMainWindow):
         # Tab 2 – Reactivity
         rx_widget = QWidget()
         rx_layout = QVBoxLayout(rx_widget)
-        rx_layout.setContentsMargins(4, 4, 4, 0)
+        rx_layout.setContentsMargins(2, 2, 2, 0)
+        rx_layout.setSpacing(2)
         rx_ctrl = QHBoxLayout()
+        rx_ctrl.setContentsMargins(0, 0, 0, 0)
         rx_ctrl.addWidget(QLabel("Radical:"))
         self.rx_combo = QComboBox()
         self.rx_combo.addItems(["OH", "O3", "NO3"])
@@ -773,17 +881,20 @@ class ResultsViewer(QMainWindow):
         self.rx_meas_label.setStyleSheet("color: #555; font-size: 10px;")
         rx_ctrl.addWidget(self.rx_meas_label)
         rx_ctrl.addStretch()
-        rx_layout.addLayout(rx_ctrl)
+        rx_layout.addLayout(rx_ctrl, 0)
         self._measured_koh = None
         self.rx_fig = Figure(figsize=(12, 6))
         self.rx_canvas = FigureCanvas(self.rx_fig)
         self.rx_toolbar = NavigationToolbar(self.rx_canvas, self)
-        rx_layout.addWidget(self.rx_toolbar)
-        rx_layout.addWidget(self.rx_canvas)
+        rx_layout.addWidget(self.rx_toolbar, 0)
+        rx_layout.addWidget(self.rx_canvas, 1)
         self.right_tabs.addTab(rx_widget, "Reactivity")
 
         # Tab 3 – Comparison
         self._build_comparison_tab()
+
+        # Tab 4 – Carbon Budget
+        self._build_carbon_tab()
 
         splitter.addWidget(right_panel)
         splitter.setSizes([300, 1300])
@@ -986,14 +1097,26 @@ class ResultsViewer(QMainWindow):
         item.setForeground(QColor(color))
         self.active_list.addItem(item)
 
+        # Auto-overlay matching SAPHIR observation as bullets (same colour).
+        # _plot_instrument handles active_list insertion internally.
+        for display_key, inst in self._inst_data.items():
+            if inst.get('mcm_match', '').upper() == var_name.upper():
+                self._plot_instrument(display_key, axis_name, color=color)
+                break
+
     # ── Instrument data plotting ──────────────────────────────────────────────
-    def _plot_instrument(self, display_key, axis_name):
-        """Plot a variable from self._inst_data on its own native time grid."""
+    def _plot_instrument(self, display_key, axis_name, color=None):
+        """Plot a variable from self._inst_data as filled circles (observations).
+
+        When *color* is supplied the instrument shares the model's colour so
+        the pair is visually linked.  A new palette colour is allocated only
+        when plotting an instrument that has no model counterpart on the canvas.
+        """
         data = self._inst_data[display_key]
         nc_var  = data['nc_var']
         nc_file = data['nc_file']
 
-        label = f"{nc_file} / {nc_var}"
+        label = f"{nc_var} (obs)"
         list_label = f"{label} [{axis_name}]"
 
         for i in range(self.active_list.count()):
@@ -1001,16 +1124,17 @@ class ResultsViewer(QMainWindow):
                 return
 
         ax = self.axes_map[axis_name]
-        color = self._PALETTE[self._color_index % len(self._PALETTE)]
-        self._color_index += 1
+        if color is None:
+            color = self._PALETTE[self._color_index % len(self._PALETTE)]
+            self._color_index += 1
 
         t = data['t']
         v = data['v']
 
-        # Mask fill values / NaN
         mask = np.isfinite(v)
-        line, = ax.plot(t[mask], v[mask], label=label, linewidth=1.5, color=color,
-                        marker='o', markersize=2, alpha=0.85, linestyle='-')
+        line, = ax.plot(t[mask], v[mask], label=label, color=color,
+                        marker='o', markersize=4, alpha=0.65,
+                        linestyle='none', linewidth=0)
 
         self.active_lines[list_label] = (line, ax)
         item = QListWidgetItem(list_label)
@@ -2056,6 +2180,218 @@ class ResultsViewer(QMainWindow):
 
         self._cmp_detail_fig.tight_layout(pad=0.8)
         self._cmp_detail_canvas.draw()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Carbon Budget tab  (Tab 4)
+    # ─────────────────────────────────────────────────────────────────────────
+    def _build_carbon_tab(self):
+        """Build the Carbon Budget tab with mode selector and stacked timeseries."""
+        outer = QWidget()
+        layout = QVBoxLayout(outer)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+
+        # ── Controls row ──────────────────────────────────────────────────
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(6)
+
+        ctrl_layout.addWidget(QLabel("Display:"))
+        self._cb_mode_combo = QComboBox()
+        self._cb_mode_combo.addItems(["All Species", "Grouped by Class"])
+        ctrl_layout.addWidget(self._cb_mode_combo)
+
+        self._cb_total_chk = QCheckBox("Total C")
+        self._cb_total_chk.setChecked(True)
+        ctrl_layout.addWidget(self._cb_total_chk)
+
+        self._cb_status_lbl = QLabel("")
+        self._cb_status_lbl.setStyleSheet("color: #777; font-size: 10px;")
+        ctrl_layout.addWidget(self._cb_status_lbl)
+
+        ctrl_layout.addStretch()
+
+        btn = QPushButton("Plot")
+        btn.clicked.connect(self._update_carbon_budget)
+        ctrl_layout.addWidget(btn)
+
+        layout.addLayout(ctrl_layout, 0)
+
+        # ── Figure ────────────────────────────────────────────────────────
+        self._cb_fig = Figure(figsize=(12, 6))
+        self._cb_canvas = FigureCanvas(self._cb_fig)
+        self._cb_toolbar = NavigationToolbar(self._cb_canvas, outer)
+        layout.addWidget(self._cb_toolbar, 0)
+        layout.addWidget(self._cb_canvas, 1)
+
+        # Auto-replot when mode or checkbox changes
+        self._cb_mode_combo.currentIndexChanged.connect(self._update_carbon_budget)
+        self._cb_total_chk.stateChanged.connect(self._update_carbon_budget)
+
+        self.right_tabs.addTab(outer, "Carbon Budget")
+
+    def _update_carbon_budget(self):
+        """Compute carbon-weighted concentrations and draw the stacked timeseries."""
+        self._cb_fig.clear()
+        ax = self._cb_fig.add_subplot(111)
+
+        t = self.df.index.values          # hours since midnight
+        M = self.df['M'].values if 'M' in self.df.columns else None
+
+        # ── Parent VOC set from config (burst injections only) ────────────
+        parent_voc = set()
+        if self.budget_engine and self.budget_engine.cfg:
+            for inj in self.budget_engine.cfg.get('burst_injections', []):
+                sp = inj.get('species', '')
+                if sp and _carbon_count(sp) > 0:
+                    parent_voc.add(sp.upper())
+
+        # ── Collect carbon-containing MCM species ─────────────────────────
+        species_data = {}    # name → (n_carbons, ppb_C array)
+        unknown_species = [] # non-zero species with unresolvable C count
+        co2_present    = False
+
+        for col in self.df.columns:
+            if col == 'M' or col.upper().startswith('SAPHIR_'):
+                continue
+            # Always exclude CO2 — MCM treats it as a sink, not a tracked tracer
+            if col.upper() == 'CO2':
+                vals = self.df[col].values
+                ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
+                if np.nanmax(np.abs(ppb)) > 1e-3:
+                    co2_present = True
+                continue
+            n_c = _carbon_count(col)
+            vals = self.df[col].values
+            ppb = (vals / M) * 1e9 if M is not None else vals.copy()
+            if n_c == 0:
+                if np.nanmax(np.abs(ppb)) > 1e-3:
+                    unknown_species.append(col)
+                continue
+            ppb_c = np.clip(ppb, 0.0, None) * n_c
+            if np.nanmax(ppb_c) < 1e-9:
+                continue
+            species_data[col] = (n_c, ppb_c)
+
+        # ── Status label ──────────────────────────────────────────────────
+        if unknown_species:
+            shown = ', '.join(unknown_species[:6])
+            tail = f' +{len(unknown_species)-6} more' if len(unknown_species) > 6 else ''
+            self._cb_status_lbl.setText(f"⚠ Unknown C count: {shown}{tail}")
+            self._cb_status_lbl.setToolTip(
+                "Non-zero species with unrecognised carbon count "
+                "(add to _MCM_CARBON_LOOKUP if needed):\n" +
+                '\n'.join(unknown_species))
+        else:
+            self._cb_status_lbl.setText("✓ All non-zero species accounted for")
+            self._cb_status_lbl.setToolTip("")
+
+        if not species_data:
+            ax.text(0.5, 0.5, "No carbon-containing species found in simulation output.",
+                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+            self._cb_canvas.draw()
+            return
+
+        # ── HV open-roof shading ──────────────────────────────────────────
+        hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
+        if hv_col is not None:
+            hv = self.df[hv_col].values
+            in_open, open_start = False, None
+            for ti, vi in zip(t, hv):
+                if vi > 0.5 and not in_open:
+                    in_open, open_start = True, ti
+                elif vi <= 0.5 and in_open:
+                    ax.axvspan(open_start, ti, color='#fffacd', alpha=0.35,
+                               zorder=0, linewidth=0)
+                    in_open = False
+            if in_open:
+                ax.axvspan(open_start, t[-1], color='#fffacd', alpha=0.35,
+                           zorder=0, linewidth=0)
+
+        # ── Draw stacked areas ────────────────────────────────────────────
+        mode = self._cb_mode_combo.currentText()
+        if mode == "All Species":
+            self._cb_draw_all_species(ax, t, species_data)
+        else:
+            self._cb_draw_grouped(ax, t, species_data, parent_voc)
+
+        # ── Total C overlay ───────────────────────────────────────────────
+        if self._cb_total_chk.isChecked():
+            total = sum(np.nan_to_num(ppb_c) for _, ppb_c in species_data.values())
+            ax.plot(t, total, color='black', lw=1.5, ls='--',
+                    label='Total tracked C', zorder=10)
+
+        # ── Exclusion annotation (bottom-left corner) ─────────────────────
+        excl_lines = []
+        if co2_present:
+            excl_lines.append('• CO₂  (MCM sink — not a tracked tracer)')
+        for sp in unknown_species:
+            excl_lines.append(f'• {sp}  (carbon count unknown)')
+        if excl_lines:
+            note = 'Excluded from budget:\n' + '\n'.join(excl_lines)
+            ax.text(0.02, 0.02, note, transform=ax.transAxes, fontsize=7.5,
+                    va='bottom', ha='left', family='monospace',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='#fff8dc',
+                              alpha=0.88, edgecolor='#ccaa00'))
+
+        # ── Axes formatting ───────────────────────────────────────────────
+        ax.set_xlabel('Time of Day (UTC)')
+        ax.set_ylabel('Carbon content (ppb-C)')
+        ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+        ax.set_xlim(t[0], t[-1])
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle='--', alpha=0.4)
+
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            if mode == "All Species" and len(handles) > 15:
+                ncol = max(1, len(handles) // 20 + 1)
+                ax.legend(handles, labels, loc='upper right',
+                          fontsize=6, ncol=ncol, framealpha=0.85)
+            else:
+                ax.legend(handles, labels, loc='upper right',
+                          fontsize=8, framealpha=0.85)
+
+        self._cb_fig.tight_layout()
+        self._cb_canvas.draw()
+
+    def _cb_draw_all_species(self, ax, t, species_data):
+        """Stacked area with one band per species, sorted by mean contribution."""
+        sorted_items = sorted(species_data.items(),
+                              key=lambda x: np.nanmean(x[1][1]), reverse=True)
+        names  = [item[0] for item in sorted_items]
+        arrays = [np.nan_to_num(item[1][1]) for item in sorted_items]
+
+        cmap   = _mcm.get_cmap('tab20')
+        colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
+
+        ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+
+    def _cb_draw_grouped(self, ax, t, species_data, parent_voc):
+        """Stacked area with one band per chemical class using fixed class colours."""
+        class_totals = {}
+        for sp, (_, ppb_c) in species_data.items():
+            cls = _carbon_class(sp, parent_voc)
+            if cls not in class_totals:
+                class_totals[cls] = np.zeros(len(t))
+            class_totals[cls] += np.nan_to_num(ppb_c)
+
+        names, arrays, colors = [], [], []
+        # Emit in defined order first
+        for cls in _CB_CLASS_ORDER:
+            if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
+                names.append(cls)
+                arrays.append(class_totals[cls])
+                colors.append(_CB_CLASS_COLORS.get(cls, '#aaaaaa'))
+        # Append any classes not in the predefined order
+        for cls, arr in class_totals.items():
+            if cls not in _CB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
+                names.append(cls)
+                arrays.append(arr)
+                colors.append('#aaaaaa')
+
+        if arrays:
+            ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
 
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
