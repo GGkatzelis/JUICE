@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd 
 from scipy.integrate import solve_ivp
+from scipy.sparse import lil_matrix
 import sys
 import re
 import warnings
@@ -530,23 +531,72 @@ class ScenarioRunner:
 
         solver_method = 'Radau'
         step_limit = min(min_dur / 2.0, 60.0)
-        
+
+        # --- BUILD JACOBIAN SPARSITY PATTERN ---
+        # Uses compiled code object .co_names to detect which species each
+        # var_assignment expression depends on (e.g. RO2 = sum of 6 peroxy radicals).
+        # For each reaction the non-zero Jacobian columns are:
+        #   direct reactant species  +  any species-dependent vars in the rate expression
+        # Rows are all affected species (reactants + products).
+        # Diagonal added for the dilution term (dydt_i -= y_i * k_dil).
+        _sp_idx = self.solver.species_to_idx
+        N = self.solver.num_species
+        sparsity = lil_matrix((N, N), dtype=np.int8)
+
+        # diagonal: dilution
+        for i in range(N):
+            sparsity[i, i] = 1
+
+        # var_assignment expressions that depend on species concentrations (e.g. RO2 sum)
+        var_species_deps = {}
+        for var_name, comp_expr in self.var_assignments:
+            dep = frozenset(_sp_idx[n] for n in comp_expr.co_names if n in _sp_idx)
+            if dep:
+                var_species_deps[var_name] = dep
+
+        for rxn in self.mechanism.reactions:
+            reactant_idxs = frozenset(r['idx'] for r in rxn.reactants_parsed)
+            affected_idxs = reactant_idxs | frozenset(p['idx'] for p in rxn.products_parsed)
+            if not affected_idxs:
+                continue  # zeroth-order source with no ODE species on either side
+
+            # Extra species the rate constant depends on via var_assignments (e.g. RO2)
+            rate_extra = frozenset(
+                idx
+                for vname in rxn.safe_expr.co_names
+                if vname in var_species_deps
+                for idx in var_species_deps[vname]
+            )
+            all_rate_deps = reactant_idxs | rate_extra
+            if not all_rate_deps:
+                continue  # pure parameter-driven rate (T/M/J only), no species dependence
+
+            for ai in affected_idxs:
+                for rj in all_rate_deps:
+                    sparsity[ai, rj] = 1
+
+        sparsity_csr = sparsity.tocsr()
+        nnz = sparsity_csr.nnz
+        density = nnz / (N * N) * 100
+        print(f">>> [SPARSE] Jacobian: {N}×{N}, {nnz} non-zeros ({density:.1f}% dense) vs {N*N} dense")
+
         self.t_start = self.t_span[0]
         self.t_end = self.t_span[-1]
         self.last_progress_print_time = self.t_start
         self.eval_count = 0
         self.real_start_time = time.time()
-        
+
         print(f">>> [DEBUG] Solving for {len(self.mechanism.species)} species using {solver_method} (Max Step: {step_limit}s)...")
         self.sol = solve_ivp(
-            system_ode, 
-            [self.t_span[0], self.t_span[-1]], 
-            y0, 
-            method=solver_method, 
-            t_eval=self.t_span, 
+            system_ode,
+            [self.t_span[0], self.t_span[-1]],
+            y0,
+            method=solver_method,
+            t_eval=self.t_span,
             max_step=step_limit,
             rtol=1e-3,
-            atol=1e4
+            atol=1e4,
+            jac_sparsity=sparsity_csr
         )
         if not self.sol.success: print(f"\n[WARNING] ODE Solver stopped early!\nReason: {self.sol.message}")
 
