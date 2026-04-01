@@ -23,6 +23,7 @@ Decoupled three-stage workflow:
 | `mechanism_solver.py` | Legacy stub — core logic fully migrated to `scenario_runner.py` |
 | `results_viewer.py` | Interactive results viewer + process analysis engine (launched by runner) |
 | `Python_vs_FACSIMILE.py` | Standalone two-tab comparison GUI: timeseries overlay + slope matrix vs FACSIMILE `.cs` output |
+| `easy_to_json.py` | Converter: FACSIMILE `.easy` + `.enz` → `scenario_config.json` |
 
 ## 3. Core Physics
 
@@ -94,7 +95,8 @@ Key fields and their consumers:
 | `artifacts` | dict of flags+equations | `_add_artifacts` — adds HONO/HCHO/Y/dark-HONO reactions |
 | `initials` | dict of species→ppb | sets `y0` before solve |
 | `continuous_sources` | list of {target,rate} | `dydt += eval(rate, ctx)` each ODE step |
-| `burst_injections` | list of {target,ppb,start_utc,duration_s} | Gaussian pulse injected into `dydt` |
+| `burst_injections` | list of {target,ppb,start_utc,duration_s,profile,...} | Gaussian/Saturating/TwoReaction pulse injected into `dydt` |
+| `h2o_injection_impurities` | list of {target, rate_ppb_per_min} | CO/NO2 released during H2O injection window; timing inferred from H2O burst entry |
 | `custom_reactions` | list of {reactants,products,rate} | appended to `self.mechanism.reactions` |
 | `excluded_reactions` | list of {reactants,products} | filtered out of `self.mechanism.reactions` before artifacts |
 | `active_parameters` | list of parameter names | **DEPRECATED — no longer written or consumed.** Old JSON files may still contain this field; it is silently ignored by the runner. |
@@ -302,7 +304,68 @@ FACSIMILE's dark HONO wall source is `H2O → HONO` with `k = 1e-12`, where FACS
 **Fix 10 — Reactivity tab: measured k_OH overlay (2026-03-31):**
 `ResultsViewer` Reactivity tab now has a "Load Measured k_OH" button that loads a two-column CSV/TXT file (time + k_OH in s⁻¹) and overlays it as a red line on the reactivity timeseries. Also auto-detects columns matching `kOH`/`K_OH`/`SAPHIR_KOH` in `self.df`. Active only when radical=OH.
 
-## 10. Next Steps & Future Enhancements
+## 11. TwoReaction Injection Model (added 2026-04-02)
+
+Mirrors the FACSIMILE two-tank injection chain used in EASY files for VOC injection from cylinders.
+
+### Mechanism
+Three virtual ODE species per injection: `_INJ1_<uid>` (fast tank), `_INJ2_<uid>` (slow tank), `_INJA_<uid>` (delivery pool).
+
+During the valve-open window (`start_utc` → `start_utc + duration_s`):
+```
+dydt[_INJ1] += rate_per_s * fast_frac
+dydt[_INJ2] += rate_per_s * (1 - fast_frac)
+```
+Decay reactions (always active, added to mechanism):
+```
+_INJ1 → _INJA   at k_fast
+_INJ2 → _INJA   at k_slow
+_INJA → TARGET  at k_delivery
+_INJA → BYPRODUCT  at k_delivery * byproduct_frac   (optional)
+```
+
+### JSON fields
+```json
+{
+  "profile": "TwoReaction",
+  "k_fast":     "0.016667",   // s⁻¹, fast tank  τ=60s
+  "k_slow":     "0.000556",   // s⁻¹, slow tank  τ=30min
+  "k_delivery": "0.016667",   // s⁻¹, delivery   τ=60s
+  "fast_frac":  "0.9",        // fraction to fast tank
+  "byproduct_target": "NO2",  // optional
+  "byproduct_frac":   "0.1014"
+}
+```
+
+### GUI Shape Params field
+All profiles support an optional byproduct suffix `|SPECIES,frac`:
+- Gaussian/Saturating: `0.5` or `0.5|NO2,0.1014`
+- TwoReaction: `0.016667,0.000556,0.016667,0.9` or with byproduct: `0.016667,0.000556,0.016667,0.9|NO2,0.1014`
+
+### Injection profile selection
+| Injection | Profile | Why |
+|---|---|---|
+| VOC (ethanol, terpenes…) | TwoReaction | Passes through injection line → two-tank buffering |
+| NO | Gaussian, dur=60s | Direct gas injection, no buffering in EASY file |
+| O3 | Gaussian or disabled | Usually disabled (rate×0) |
+| H2O | Handled by `h2o_injection_impurities` | Impurities (CO, NO2) released during H2O flush |
+
+### CO2 background
+Always-on wall outgassing added to `continuous_sources`:
+```json
+{"target": "CO2", "rate": "M * 1e-6 / 3600 * 0.01"}
+```
+~10 ppb/hr. Matches `qCO2=CONST(1); k=M*1e-6/3600*0.01` in EASY file.
+
+### easy_to_json converter
+`easy_to_json(easy_path, enz_path, output_path)` — parses legacy FACSIMILE `.easy` + `.enz`:
+- Detects two-tank topology from reaction graph (sp1/sp2 → collective → TARGET)
+- Reads ENZ for timing: tries exact column → `injection_<col>` → `injection_<col.lstrip('q')>` → `injection_<target>` → largest non-zero `injection_*` column
+- Python ENZ convention (ppb > 1.5): uses ENZ value for ppb, sets duration=600s
+- FACSIMILE binary ENZ (value ≤ 1): computes ppb = rate × duration
+- Extracts env_map, artifacts, CO2 background, H2O impurities, initials in ppb
+
+## 12. Next Steps & Future Enhancements
 
 1.  **Overlay measured k_OH** — Load actual SAPHIR CRM k_OH measurement file and overlay on Reactivity tab. Likely in the SAPHIR archive NC file (variable TBD). Check if archive has `kOH` or `OH_reactivity` variable for 09.07.2024.
 2.  **Fix FACSIMILE comparison references** — case1/case2 EASY files need correct column names (`qVCP2`→`Injection_Ethanol`, `QNO`→`Injection_NO`) or a corrected ENZ file with those names. Until fixed, FACSIMILE comparison is not valid beyond t < 5.5h. Confirm with Franz whether a corrected FACSIMILE run can be produced.

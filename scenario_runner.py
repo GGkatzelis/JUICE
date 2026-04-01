@@ -180,6 +180,51 @@ class ScenarioRunner:
             products = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
             self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
 
+        # --- TwoReaction injections: virtual intermediate species + first-order decay reactions ---
+        # Each TwoReaction burst gets three internal species:
+        #   _INJ1_<uid>  — fast buffer tank  (fraction fast_frac of total)
+        #   _INJ2_<uid>  — slow buffer tank  (fraction 1-fast_frac)
+        #   _INJA_<uid>  — delivery pool     → TARGET  at k_delivery
+        # The source term (filling the tanks during the valve-open window) is
+        # applied in _solve() as a burst_eval entry, NOT as a reaction.
+        self._tr_specs = {}  # burst_idx → {'uid', 'sp1', 'sp2', 'spa', 'fast_frac'}
+        for b_idx, b in enumerate(self.cfg.get('burst_injections', [])):
+            if b.get('profile', 'Gaussian') != 'TwoReaction':
+                continue
+            if not b.get('target') or not b.get('ppb') or b['ppb'] == '':
+                continue
+            raw_uid = re.sub(r'[^A-Z0-9]', '_', b.get('name', f'INJ{b_idx}').upper())[:12].rstrip('_') or f'INJ{b_idx}'
+            uid, suffix = raw_uid, 0
+            while any(v['uid'] == uid for v in self._tr_specs.values()):
+                suffix += 1; uid = f"{raw_uid[:10]}_{suffix}"
+            sp1 = f'_INJ1_{uid}'
+            sp2 = f'_INJ2_{uid}'
+            spa = f'_INJA_{uid}'
+            target_up = b['target'].upper()
+            all_species.update([sp1, sp2, spa])
+            try:
+                k_fast     = float(eval(str(b.get('k_fast',     '0.01667'))))
+                k_slow     = float(eval(str(b.get('k_slow',     '0.000556'))))
+                k_delivery = float(eval(str(b.get('k_delivery', '0.01667'))))
+                fast_frac  = float(eval(str(b.get('fast_frac',  '0.9'))))
+            except Exception:
+                k_fast, k_slow, k_delivery, fast_frac = 1/60.0, 1/1800.0, 1/60.0, 0.9
+            self.mechanism.reactions.append(Reaction([sp1], [spa],       str(k_fast)))
+            self.mechanism.reactions.append(Reaction([sp2], [spa],       str(k_slow)))
+            self.mechanism.reactions.append(Reaction([spa], [target_up], str(k_delivery)))
+            byp_t = b.get('byproduct_target', '').strip().upper()
+            byp_f = 0.0
+            if b.get('byproduct_frac'):
+                try: byp_f = float(eval(str(b['byproduct_frac'])))
+                except: pass
+            if byp_t and byp_f > 0.0:
+                all_species.add(byp_t)
+                self.mechanism.reactions.append(Reaction([spa], [byp_t], str(k_delivery * byp_f)))
+            self._tr_specs[b_idx] = {'uid': uid, 'sp1': sp1, 'sp2': sp2, 'spa': spa, 'fast_frac': fast_frac}
+            print(f"  [TwoReaction] '{b.get('name')}' -> {sp1}/{sp2}/{spa} -> {target_up} "
+                  f"(k_fast={k_fast:.4g}  k_slow={k_slow:.4g}  k_del={k_delivery:.4g}  "
+                  f"f_fast={fast_frac:.2f})")
+
         # --- BUG FIX: Only purge explicitly mapped GUI variables, leave O3 alone! ---
         for mapped_key in self.cfg['env_map'].keys():
             all_species.discard(mapped_key.upper())
@@ -357,26 +402,59 @@ class ScenarioRunner:
 
         burst_eval = []
         min_dur = 3600.0
-        for b in self.cfg.get('burst_injections', []):
+        for b_idx, b in enumerate(self.cfg.get('burst_injections', [])):
             if not b.get('target') or not b.get('ppb') or b['ppb'] == "": continue
-            target = b['target'].upper()
-            if target in self.solver.species_to_idx:
+            target  = b['target'].upper()
+            profile = b.get('profile', 'Gaussian')
+
+            if profile == 'TwoReaction':
+                # Source term feeds _INJ1 and _INJ2 during the valve-open window.
+                # Decay reactions (_INJ1→_INJA→TARGET) are already in mechanism.
+                tr = self._tr_specs.get(b_idx)
+                if tr is None: continue
+                sp1, sp2 = tr['sp1'], tr['sp2']
+                if sp1 not in self.solver.species_to_idx: continue
+                target_utc  = pd.to_datetime(b['start_utc'], dayfirst=True)
+                start_s     = (target_utc - saphir_base_date).total_seconds()
+                dur         = float(eval(str(b.get('duration_s', 60))))
+                min_dur     = min(min_dur, dur)
+                total_conc  = float(b['ppb']) * 1e-9 * self.get_M(start_s)
+                fast_frac   = tr['fast_frac']
+                rate_per_s  = total_conc / max(dur, 1.0)
+                burst_eval.append({
+                    'profile': 'tworeaction',
+                    'idx1': self.solver.species_to_idx[sp1],
+                    'idx2': self.solver.species_to_idx[sp2],
+                    'start_s': start_s, 'dur': dur,
+                    'rate1': rate_per_s * fast_frac,
+                    'rate2': rate_per_s * (1.0 - fast_frac),
+                })
+            elif target in self.solver.species_to_idx:
                 target_utc = pd.to_datetime(b['start_utc'], dayfirst=True)
                 start_s = (target_utc - saphir_base_date).total_seconds()
                 dur = float(eval(str(b.get('duration_s', 60))))
                 min_dur = min(min_dur, dur)
                 total_conc = float(b['ppb']) * 1e-9 * self.get_M(start_s)  # molec/cm³
-                profile = b.get('profile', 'Gaussian')
                 try:
                     t90_frac = max(0.01, min(0.99, float(b.get('t90_frac', 0.5))))
                 except (ValueError, TypeError):
                     t90_frac = 0.5
+                # Optional byproduct (e.g. NO2 from NO injection)
+                byp_t = b.get('byproduct_target', '').strip().upper()
+                byp_f = 0.0
+                if byp_t and b.get('byproduct_frac'):
+                    try:
+                        byp_f = float(eval(str(b['byproduct_frac'])))
+                    except Exception:
+                        pass
+                byp_idx = self.solver.species_to_idx.get(byp_t) if byp_t and byp_f > 0 else None
                 if profile == 'Saturating':
                     lam = np.log(10.0) / (t90_frac * dur)
                     norm = (1.0 - np.exp(-lam * dur)) / lam
                     coeff = total_conc / norm
                     burst_eval.append({'profile': 'saturating', 'idx': self.solver.species_to_idx[target],
-                                       'start_s': start_s, 'dur': dur, 'lam': lam, 'coeff': coeff})
+                                       'start_s': start_s, 'dur': dur, 'lam': lam, 'coeff': coeff,
+                                       'byp_idx': byp_idx, 'byp_frac': byp_f})
                 else:  # Gaussian (default)
                     # t90_frac > 0.5: use it to set σ (z₉₀ = 1.2816); otherwise fall back to dur/6
                     if t90_frac > 0.5:
@@ -386,7 +464,41 @@ class ScenarioRunner:
                     mu = start_s + (dur / 2.0)
                     coeff = total_conc / (sigma * np.sqrt(2 * np.pi))
                     burst_eval.append({'profile': 'gaussian', 'idx': self.solver.species_to_idx[target],
-                                       'mu': mu, 'sigma': sigma, 'coeff': coeff})
+                                       'mu': mu, 'sigma': sigma, 'coeff': coeff,
+                                       'byp_idx': byp_idx, 'byp_frac': byp_f})
+
+        # --- H2O injection impurities (CO, NO2, …) tied to H2O injection window ---
+        h2o_imps = []
+        h2o_imp_defs = self.cfg.get('h2o_injection_impurities', [])
+        if h2o_imp_defs:
+            h2o_inj = next(
+                (b for b in self.cfg.get('burst_injections', [])
+                 if b.get('target', '').upper() == 'H2O'
+                 or b.get('name', '').upper() in ('H2O', 'WATER')),
+                None
+            )
+            if h2o_inj and h2o_inj.get('start_utc'):
+                h2o_start = (pd.to_datetime(h2o_inj['start_utc'], dayfirst=True)
+                             - saphir_base_date).total_seconds()
+                h2o_dur   = float(eval(str(h2o_inj.get('duration_s', 600))))
+                M_h2o     = self.get_M(h2o_start)
+                for imp in h2o_imp_defs:
+                    tgt = imp.get('target', '').upper()
+                    if not tgt or tgt not in self.solver.species_to_idx:
+                        continue
+                    try:
+                        rate_ppb_per_min = float(eval(str(imp.get('rate_ppb_per_min', '0'))))
+                    except Exception:
+                        continue
+                    if rate_ppb_per_min <= 0:
+                        continue
+                    h2o_imps.append({
+                        'idx':     self.solver.species_to_idx[tgt],
+                        'start_s': h2o_start,
+                        'dur':     h2o_dur,
+                        'rate':    rate_ppb_per_min * 1e-9 * M_h2o / 60.0,
+                    })
+                    print(f"  [H2O Impurity] {tgt}: {rate_ppb_per_min} ppb/min during H2O injection")
 
         def system_ode(t, y):
             dydt = np.zeros(self.solver.num_species)
@@ -552,12 +664,26 @@ class ScenarioRunner:
                 dydt[s['idx']] += eval(s['code'], globals(), ctx)
 
             for b in burst_eval:
-                if b['profile'] == 'saturating':
+                if b['profile'] == 'tworeaction':
+                    if b['start_s'] <= t <= b['start_s'] + b['dur']:
+                        dydt[b['idx1']] += b['rate1']
+                        dydt[b['idx2']] += b['rate2']
+                elif b['profile'] == 'saturating':
                     dt = t - b['start_s']
                     if 0.0 <= dt <= b['dur']:
-                        dydt[b['idx']] += b['coeff'] * np.exp(-b['lam'] * dt)
+                        rate = b['coeff'] * np.exp(-b['lam'] * dt)
+                        dydt[b['idx']] += rate
+                        if b['byp_idx'] is not None:
+                            dydt[b['byp_idx']] += rate * b['byp_frac']
                 else:  # gaussian
-                    dydt[b['idx']] += b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
+                    rate = b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
+                    dydt[b['idx']] += rate
+                    if b['byp_idx'] is not None:
+                        dydt[b['byp_idx']] += rate * b['byp_frac']
+
+            for imp in h2o_imps:
+                if imp['start_s'] <= t <= imp['start_s'] + imp['dur']:
+                    dydt[imp['idx']] += imp['rate']
             
             self.eval_count += 1
             if self.eval_count % 500 == 0 or t > self.last_progress_print_time + 300:
