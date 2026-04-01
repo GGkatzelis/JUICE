@@ -393,6 +393,11 @@ class ScenarioRunner:
             if 'H2O' in ctx and ctx['H2O'] > 0:
                 if ctx['H2O'] > 1.0: ctx['H2O'] = ctx['H2O'] / 100.0 # Fix percentage data
                 ctx['H2O'] = ctx['H2O'] * M_now
+                # Back-compute RH (%) from H2O VMR so artifact expressions (e.g. HONO wall source) work correctly
+                if 'RH' not in ctx:
+                    p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                    press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                    ctx['RH'] = (ctx['H2O'] / M_now) * press / p_sat * 100.0
             else:
                 ctx['H2O'] = 0.01 * M_now # Safe 1% Fallback
 
