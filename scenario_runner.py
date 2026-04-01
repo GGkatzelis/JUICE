@@ -470,13 +470,14 @@ class ScenarioRunner:
                     ctx[var_name] = 0.0
 
             # --- PHOTOLYSIS AUTO-LINKER (runs AFTER var_assignments as fallback) ---
-            # Seeds any J-values that are still 0 from measured .enz data.
-            # MCM J-numbering: J1=JO1D (O3->O1D), J4=JNO2 (NO2->NO+O),
-            #                  J7=JHONO (HONO->OH+NO), J3=JH2O2 (H2O2->2OH)
-            if ctx.get('JO1D', 0.0) > 0: ctx['J1'] = ctx['JO1D']   # measured always beats PHTFKT for O1D
-            if ctx.get('J4',  0.0) == 0.0 and ctx.get('JNO2',   0.0) > 0: ctx['J4']  = ctx['JNO2']
-            if ctx.get('J7',  0.0) == 0.0 and ctx.get('JHONO',  0.0) > 0: ctx['J7']  = ctx['JHONO']
-            if ctx.get('J3',  0.0) == 0.0 and ctx.get('JH2O2',  0.0) > 0: ctx['J3']  = ctx['JH2O2']
+            # Measured j-values always beat JSCALE/PHTFKT approximations.
+            # J7 and J3 are defined in anorg.mcm331.phot.rate as JSCALE*l*HV (non-zero),
+            # so the ==0 guard would prevent the override — they must be unconditional.
+            # MCM J-numbering: J1=JO1D (O3->O1D), J4=JNO2, J7=JHONO, J3=JH2O2
+            if ctx.get('JO1D',   0.0) > 0: ctx['J1']  = ctx['JO1D']
+            if ctx.get('JNO2',   0.0) > 0: ctx['J4']  = ctx['JNO2']
+            if ctx.get('JHONO',  0.0) > 0: ctx['J7']  = ctx['JHONO']   # unconditional: beats JSCALE approx
+            if ctx.get('JH2O2',  0.0) > 0: ctx['J3']  = ctx['JH2O2']   # unconditional: beats JSCALE approx
             if ctx.get('J11', 0.0) == 0.0 and ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R']
             if ctx.get('J12', 0.0) == 0.0 and ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M']
 

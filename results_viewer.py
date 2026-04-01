@@ -315,9 +315,12 @@ class BudgetEngine:
 
         if 'SAPHIR_JO1D' in ctx:
             ctx['J1'] = ctx['SAPHIR_JO1D']
-        for j_name, j_col in [('J4', 'SAPHIR_JNO2'), ('J7', 'SAPHIR_JHONO'),
-                               ('J3', 'SAPHIR_JH2O2'), ('J11', 'SAPHIR_JHCHO_R'),
-                               ('J12', 'SAPHIR_JHCHO_M')]:
+        # J4, J7, J3 are always overridden by measured values (JSCALE approx in anorg phot.rate
+        # sets them non-zero, so the ==0 guard would silently ignore measured data).
+        for j_name, j_col in [('J4', 'SAPHIR_JNO2'), ('J7', 'SAPHIR_JHONO'), ('J3', 'SAPHIR_JH2O2')]:
+            if j_col in ctx:
+                ctx[j_name] = ctx[j_col]
+        for j_name, j_col in [('J11', 'SAPHIR_JHCHO_R'), ('J12', 'SAPHIR_JHCHO_M')]:
             if j_col in ctx and np.all(ctx.get(j_name, np.zeros(1)) == 0):
                 ctx[j_name] = ctx[j_col]
 
