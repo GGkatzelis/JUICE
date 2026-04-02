@@ -739,14 +739,9 @@ class ResultsViewer(QMainWindow):
 
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
-        _icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Juelich logo ICE-3.png")
-        if not os.path.exists(_icon_path):
-            import glob as _glob
-            _candidates = _glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "*ICE-3*.png"))
-            if _candidates:
-                _icon_path = _candidates[0]
-        if os.path.exists(_icon_path):
-            self.setWindowIcon(QIcon(_icon_path))
+        _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Juelich Logo.png"))
+        if not _icon_pixmap.isNull():
+            self.setWindowIcon(QIcon(_icon_pixmap))
 
         # Convert MCM index from SAPHIR epoch (sec since 2000-01-01) to hours since
         # UTC midnight of the experiment day, same reference as NC instrument data.
