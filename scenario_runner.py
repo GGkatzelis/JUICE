@@ -809,6 +809,32 @@ class ScenarioRunner:
             except Exception:
                 pass
 
+        # --- O1D pseudo-steady-state correction ------------------------------------
+        # O1D has a lifetime of ~1 ns (quenched mainly by N2 and O2).  The ODE
+        # solver (atol=1e4) cannot resolve it accurately — atol is ~10⁶× the
+        # actual PSS value (~0.01 molec/cm³), so the integrated column carries
+        # numerical noise / an initial-condition spike.  Replace with the
+        # analytical PSS:  [O1D]_pss = J1·[O3] / (k_N2·[N2] + k_O2·[O2] + k_H2O·[H2O])
+        if 'O1D' in df.columns:
+            _T   = (df['SAPHIR_TEMP'].values if 'SAPHIR_TEMP' in df.columns else
+                    df['SAPHIR_T'].values     if 'SAPHIR_T'    in df.columns else
+                    np.full(len(df), 298.15))
+            _M   = df['M'].values
+            _HV  = df['SAPHIR_HV'].values  if 'SAPHIR_HV'  in df.columns else np.ones(len(df))
+            _o3  = df['O3'].values          if 'O3'         in df.columns else np.zeros(len(df))
+            # J1: prefer direct SAPHIR JO1D measurement, fall back to J1 diagnostic column
+            _j1  = (df['SAPHIR_JO1D'].values if 'SAPHIR_JO1D' in df.columns else
+                    df['J1'].values            if 'J1'          in df.columns else
+                    np.zeros(len(df)))
+            _j1  = np.where(_HV > 0.5, _j1, 0.0)   # zero when lights are off
+            # H2O: SAPHIR_H2O is stored as VMR fraction → convert to molec/cm³
+            _h2o = (df['SAPHIR_H2O'].values * _M) if 'SAPHIR_H2O' in df.columns else np.zeros(len(df))
+            _kq  = (2.15e-11 * np.exp(110.0 / _T) * 0.7809 * _M +
+                    3.30e-11 * np.exp( 55.0 / _T) * 0.2095 * _M +
+                    2.20e-10 * _h2o)
+            df['O1D'] = np.where(_kq > 0, _j1 * _o3 / np.maximum(_kq, 1e-30), 0.0)
+            print("  [O1D] Replaced ODE output with pseudo-steady-state (J1·O3/k_quench)")
+
         # Y background: diagnostic column showing background VOC concentration (molec/cm³)
         if self.cfg.get('artifacts', {}).get('y_active', False):
             try:
