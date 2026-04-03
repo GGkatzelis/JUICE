@@ -27,6 +27,12 @@ except ImportError:
     HAS_NC4 = False
 
 try:
+    from mcm_species_db import MCM_DB, KNOWN_ZERO_CARBON
+except ImportError:
+    MCM_DB = {}
+    KNOWN_ZERO_CARBON = frozenset()
+
+try:
     from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                  QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
                                  QPushButton, QLabel, QComboBox, QSplitter, QLineEdit,
@@ -85,42 +91,29 @@ _NB_CLASS_COLORS = {
     'Other N':      '#c7c7c7',
 }
 
-_MCM_NITROGEN_LOOKUP = {
-    # Inorganic
-    'NO': 1, 'NO2': 1, 'NO3': 1, 'N2O5': 2, 'N2O': 2,
-    'HONO': 1, 'HNO3': 1, 'HNO4': 1,
-    # PAN family (abbreviated names that don't contain NO/NO2 as substrings)
-    'PAN': 1, 'MPAN': 1, 'APAN': 1, 'GPAN': 1, 'PBZN': 1, 'PHAN': 1,
-    # Explicitly zero — species with N in name but no nitrogen atom
-    'NA': 0,
-}
+def _nitrogen_count(name: str) -> int:
+    """Return the number of nitrogen atoms for an MCM species.
 
-# Ordered list of nitrogen functional group patterns (longest first to avoid
-# double-counting — e.g. NO3 must be matched before NO).
-_N_FUNCTIONAL_GROUPS = [
-    ('N2O5', 2), ('CO3NO2', 1), ('ONO2', 1),
-    ('HNO3', 1), ('HNO4', 1), ('HONO', 1),
-    ('NO3',  1), ('NO2',  1), ('NO',   1),
-]
-
-def _nitrogen_count(name):
-    """Return the number of nitrogen atoms in a MCM species name.
-
-    Strategy:
-    1. Exact lookup for abbreviated names and known zero-N species.
-    2. Sequential functional-group scan (longest pattern first) so only
-       recognised MCM nitrogen groups are counted — avoids matching the 'N'
-       in 'ETHANOL', 'METHANOL', injection-tracer names, etc.
+    Primary source: MCM_DB formula (exact, from mcm_export_species.tsv).
+    Fallback: sequential functional-group scan on the MCM name (longest
+    pattern first, to avoid matching N in ETHANOL/METHANOL etc.).
     """
     upper = name.upper()
-    if upper in _MCM_NITROGEN_LOOKUP:
-        return _MCM_NITROGEN_LOOKUP[upper]
-    tmp = upper
-    total = 0
-    for pattern, n_atoms in _N_FUNCTIONAL_GROUPS:
+    entry = MCM_DB.get(upper)
+    if entry is not None:
+        return entry.n_N
+
+    # Fallback — functional-group scan on name for species not in DB
+    _N_GROUPS = [
+        ('N2O5', 2), ('CO3NO2', 1), ('ONO2', 1),
+        ('HNO3', 1), ('HNO4', 1), ('HONO', 1),
+        ('NO3',  1), ('NO2',  1), ('NO',   1),
+    ]
+    tmp, total = upper, 0
+    for pattern, n_atoms in _N_GROUPS:
         while pattern in tmp:
             total += n_atoms
-            tmp = tmp.replace(pattern, '\x00' * len(pattern), 1)  # mask so shorter patterns don't re-match
+            tmp = tmp.replace(pattern, '\x00' * len(pattern), 1)
     return total
 
 def _nitrogen_class(name):
@@ -141,20 +134,6 @@ def _nitrogen_class(name):
     return 'Other N'
 
 # ── Carbon budget helpers ─────────────────────────────────────────────────────
-# Lookup table for MCM species whose names are NOT condensed molecular formulas.
-# Maps uppercase species name → integer carbon count.
-_MCM_CARBON_LOOKUP = {
-    # Isoprene and its common MCM fragments
-    'ISOP': 5, 'ISOPD': 5, 'ISOPB': 5,
-    # Monoterpenes (C10)
-    'APINENE': 10, 'BPINENE': 10, 'LIMONENE': 10, 'MYRCENE': 10,
-    'SABINENE': 10, 'D3CARENE': 10, 'TERPINOLENE': 10, 'CAMPHENE': 10,
-    # Aromatics (no 'C' prefix in name → regex would return 0)
-    'BENZENE': 6, 'TOLUENE': 7,
-    'OXYLENE': 8, 'MXYLENE': 8, 'PXYLENE': 8, 'EBENZ': 8,
-    # Common 4-carbon abbreviations
-    'MEK': 4, 'MVK': 4, 'MACR': 4,
-}
 
 # Ordered list of classes for the "Grouped" stackplot (bottom → top).
 # Dominant, slow-decaying groups at the bottom for visual stability.
@@ -179,19 +158,19 @@ _CB_CLASS_COLORS = {
 }
 
 
-def _carbon_count(name):
-    """Return the number of carbon atoms in a MCM species name.
+def _carbon_count(name: str) -> int:
+    """Return the number of carbon atoms for an MCM species.
 
-    Strategy:
-    1. Check _MCM_CARBON_LOOKUP for abbreviated names (TOLUENE, ISOP, …).
-    2. Apply a regex on the condensed-formula name: each occurrence of
-       'C' (not followed by 'l' for chlorine) contributes 1 carbon;
-       'Cn' (C followed by a digit) contributes n carbons.
+    Primary source: MCM_DB formula (exact, from mcm_export_species.tsv).
+    Fallback: regex on the MCM name — C(n) pattern, skipping Cl.
     Returns 0 for inorganic/unrecognised species.
     """
     upper = name.upper()
-    if upper in _MCM_CARBON_LOOKUP:
-        return _MCM_CARBON_LOOKUP[upper]
+    entry = MCM_DB.get(upper)
+    if entry is not None:
+        return entry.n_C
+
+    # Fallback — regex on name for species not in DB
     total = 0
     for m in re.finditer(r'C(?!l)(\d*)', name):
         n = m.group(1)
@@ -267,7 +246,8 @@ class BudgetEngine:
         with open(config_path) as f:
             self.cfg = json.load(f)
 
-        chem_path = os.path.join(self.cfg['folder'], 'chemistry')
+        self.root = self.cfg.get('folder', os.path.dirname(config_path))
+        chem_path = os.path.join(self.root, 'chemistry')
         parser = EasyParser(base_path=chem_path)
         self.mechanism = Mechanism()
         self.var_assignments = []
@@ -1576,7 +1556,7 @@ class ResultsViewer(QMainWindow):
             ax_ts.legend(handles, labels, loc='upper left',
                          fontsize=7, framealpha=0.75, ncol=1,
                          handlelength=1.2, handleheight=0.8,
-                         borderpad=0.5, labelspacing=0.3)
+                         borderpad=0.5, labelspacing=0.3).set_draggable(True)
 
         # ── Bar chart: all positive, destruction at bottom, production at top ──
         # Destruction: sorted ascending → smallest at bottom, largest just below middle
@@ -1728,7 +1708,7 @@ class ResultsViewer(QMainWindow):
                                   bbox_to_anchor=(0.5, 0.98), ncol=6)
             for text, line in zip(leg.get_texts(), lines):
                 text.set_color(line.get_color())
-                text.set_fontweight('bold')
+            leg.set_draggable(True)
 
     # ── Reactivity tab ────────────────────────────────────────────────────────
     def _load_koh_nc(self):
@@ -1906,7 +1886,7 @@ class ResultsViewer(QMainWindow):
         handles, lbls = ax_ts.get_legend_handles_labels()
         if handles:
             ax_ts.legend(handles, lbls, loc='upper center',
-                         bbox_to_anchor=(0.5, -0.14), ncol=3, fontsize=7, framealpha=0.7)
+                         bbox_to_anchor=(0.5, -0.14), ncol=3, fontsize=7, framealpha=0.7).set_draggable(True)
 
         bar_labels = list(major.keys())
         bar_vals   = [np.nanmean(major[k]) for k in bar_labels]
@@ -2361,7 +2341,7 @@ class ResultsViewer(QMainWindow):
         ax.set_xlabel("Time of Day (UTC)", fontsize=9)
         ax.set_ylabel(sp, fontsize=9)
         ax.set_title(f"{sp}   m={slope:.3f}   {theta_str}", fontweight='bold', fontsize=10)
-        ax.legend(loc='upper right', fontsize=7)
+        ax.legend(loc='upper right', fontsize=7).set_draggable(True)
         ax.grid(True, ls='--', alpha=0.35)
 
         fig.tight_layout(pad=0.8)
@@ -2564,7 +2544,7 @@ class ResultsViewer(QMainWindow):
 
         # ── Collect carbon-containing MCM species ─────────────────────────
         species_data = {}    # name → (n_carbons, ppb_C array)
-        unknown_species = [] # non-zero species with unresolvable C count
+        unknown_species = [] # non-zero species with truly unresolvable C count
         co2_present    = False
 
         for col in self.df.columns:
@@ -2581,7 +2561,11 @@ class ResultsViewer(QMainWindow):
             vals = self.df[col].values
             ppb = (vals / M) * 1e9 if M is not None else vals.copy()
             if n_c == 0:
-                if np.nanmax(np.abs(ppb)) > 1e-3:
+                # Distinguish known zero-carbon species (inorganic, in DB or explicit
+                # inorganic list) from truly unidentified species not resolvable at all.
+                upper = col.upper()
+                known_zero = upper in MCM_DB or upper in KNOWN_ZERO_CARBON
+                if not known_zero and np.nanmax(np.abs(ppb)) > 1e-3:
                     unknown_species.append(col)
                 continue
             ppb_c = np.clip(ppb, 0.0, None) * n_c
@@ -2593,13 +2577,12 @@ class ResultsViewer(QMainWindow):
         if unknown_species:
             shown = ', '.join(unknown_species[:6])
             tail = f' +{len(unknown_species)-6} more' if len(unknown_species) > 6 else ''
-            self._cb_status_lbl.setText(f"⚠ Unknown C count: {shown}{tail}")
+            self._cb_status_lbl.setText(f"⚠ C count unknown: {shown}{tail}")
             self._cb_status_lbl.setToolTip(
-                "Non-zero species with unrecognised carbon count "
-                "(add to _MCM_CARBON_LOOKUP if needed):\n" +
+                "Non-zero species not in MCM DB — carbon count unresolvable:\n" +
                 '\n'.join(unknown_species))
         else:
-            self._cb_status_lbl.setText("✓ All non-zero species accounted for")
+            self._cb_status_lbl.setText("✓ All species accounted for")
             self._cb_status_lbl.setToolTip("")
 
         if not species_data:
@@ -2627,9 +2610,9 @@ class ResultsViewer(QMainWindow):
         # ── Draw stacked areas ────────────────────────────────────────────
         mode = self._cb_mode_combo.currentText()
         if mode == "All Species":
-            self._cb_draw_all_species(ax, t, species_data)
+            names, colors = self._cb_draw_all_species(ax, t, species_data)
         else:
-            self._cb_draw_grouped(ax, t, species_data, parent_voc)
+            names, colors = self._cb_draw_grouped(ax, t, species_data, parent_voc)
 
         # ── Total C overlay ───────────────────────────────────────────────
         if self._cb_total_chk.isChecked():
@@ -2640,9 +2623,9 @@ class ResultsViewer(QMainWindow):
         # ── Exclusion annotation (bottom-left corner) ─────────────────────
         excl_lines = []
         if co2_present:
-            excl_lines.append('• CO₂  (MCM sink — not a tracked tracer)')
+            excl_lines.append('• CO2  (MCM sink — not a tracked tracer)')
         for sp in unknown_species:
-            excl_lines.append(f'• {sp}  (carbon count unknown)')
+            excl_lines.append(f'• {sp}  (not in MCM DB)')
         if excl_lines:
             note = 'Excluded from budget:\n' + '\n'.join(excl_lines)
             ax.text(0.02, 0.02, note, transform=ax.transAxes, fontsize=7.5,
@@ -2660,31 +2643,29 @@ class ResultsViewer(QMainWindow):
 
         handles, labels = ax.get_legend_handles_labels()
         if handles:
-            if mode == "All Species" and len(handles) > 15:
-                ncol = max(1, len(handles) // 20 + 1)
-                ax.legend(handles, labels, loc='upper right',
-                          fontsize=6, ncol=ncol, framealpha=0.85)
-            else:
-                ax.legend(handles, labels, loc='upper right',
-                          fontsize=8, framealpha=0.85)
+            ncol = max(1, len(handles) // 20 + 1) if len(handles) > 15 else 1
+            ax.legend(handles, labels, loc='upper right',
+                      fontsize=6 if len(handles) > 15 else 8,
+                      ncol=ncol, framealpha=0.85).set_draggable(True)
 
         self._cb_fig.tight_layout()
         self._cb_canvas.draw()
 
     def _cb_draw_all_species(self, ax, t, species_data):
-        """Stacked area with one band per species, sorted by mean contribution."""
+        """Stacked area with one band per species, sorted by mean contribution.
+        Returns (names, colors) for legend building."""
         sorted_items = sorted(species_data.items(),
                               key=lambda x: np.nanmean(x[1][1]), reverse=True)
         names  = [item[0] for item in sorted_items]
         arrays = [np.nan_to_num(item[1][1]) for item in sorted_items]
-
         cmap   = _mcm.get_cmap('tab20')
         colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
-
         ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+        return names, colors
 
     def _cb_draw_grouped(self, ax, t, species_data, parent_voc):
-        """Stacked area with one band per chemical class using fixed class colours."""
+        """Stacked area with one band per chemical class using fixed class colours.
+        Returns (names, colors) for legend building."""
         class_totals = {}
         for sp, (_, ppb_c) in species_data.items():
             cls = _carbon_class(sp, parent_voc)
@@ -2693,13 +2674,11 @@ class ResultsViewer(QMainWindow):
             class_totals[cls] += np.nan_to_num(ppb_c)
 
         names, arrays, colors = [], [], []
-        # Emit in defined order first
         for cls in _CB_CLASS_ORDER:
             if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
                 names.append(cls)
                 arrays.append(class_totals[cls])
                 colors.append(_CB_CLASS_COLORS.get(cls, '#aaaaaa'))
-        # Append any classes not in the predefined order
         for cls, arr in class_totals.items():
             if cls not in _CB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
                 names.append(cls)
@@ -2708,6 +2687,7 @@ class ResultsViewer(QMainWindow):
 
         if arrays:
             ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+        return names, colors
 
     # ── Nitrogen budget ───────────────────────────────────────────────────────
     def _update_nitrogen_budget(self):
@@ -2719,14 +2699,13 @@ class ResultsViewer(QMainWindow):
         M = self.df['M'].values if 'M' in self.df.columns else None
 
         species_data = {}   # name → (n_N, ppb_N array)
-        unknown_species = []
 
         for col in self.df.columns:
             if col == 'M' or col.upper().startswith('SAPHIR_'):
                 continue
             n_n = _nitrogen_count(col)
             if n_n == 0:
-                continue
+                continue  # known zero-N (CO, C2H5OH, etc.) — silently skip
             vals = self.df[col].values
             ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
             ppb_n = np.clip(np.nan_to_num(ppb, nan=0.0, posinf=0.0, neginf=0.0), 0.0, None) * n_n
@@ -2756,6 +2735,7 @@ class ResultsViewer(QMainWindow):
             self._nb_canvas.draw()
             return
 
+        names, colors = [], []
         mode = self._cb_mode_combo.currentText()
         if mode == "All Species":
             sorted_items = sorted(species_data.items(),
@@ -2800,13 +2780,10 @@ class ResultsViewer(QMainWindow):
 
         handles, labels = ax.get_legend_handles_labels()
         if handles:
-            if mode == "All Species" and len(handles) > 15:
-                ax.legend(handles, labels, loc='upper right',
-                          fontsize=6, ncol=max(1, len(handles) // 20 + 1),
-                          framealpha=0.85)
-            else:
-                ax.legend(handles, labels, loc='upper right',
-                          fontsize=8, framealpha=0.85)
+            ncol = max(1, len(handles) // 20 + 1) if len(handles) > 15 else 1
+            ax.legend(handles, labels, loc='upper right',
+                      fontsize=6 if len(handles) > 15 else 8,
+                      ncol=ncol, framealpha=0.85).set_draggable(True)
 
         self._nb_fig.tight_layout()
         self._nb_canvas.draw()

@@ -624,7 +624,12 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
 
             start_s   = float(t_arr[active_idx[0]])
             end_s     = float(t_arr[active_idx[-1]])
-            dur_s     = max(60.0, end_s - start_s)
+            # Add the duration of the last active row so that N active rows
+            # → dur = N × dt (not (N-1) × dt which misses the final row's contribution).
+            last_idx = int(active_idx[-1])
+            dt_last = float(t_arr[last_idx + 1] - t_arr[last_idx]) \
+                      if last_idx + 1 < len(t_arr) else 60.0
+            dur_s     = max(60.0, end_s - start_s + dt_last)
             start_utc = _s_to_utc(start_s)
 
             src_products = _products_of(rhs_str)

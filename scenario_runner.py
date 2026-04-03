@@ -130,21 +130,23 @@ class ScenarioRunner:
         
         for f_name in mech_files:
             f_path = os.path.join(chem_path, f_name)
-            if os.path.exists(f_path):
-                m_part = parser.parse(f_path)
-                self.mechanism.species.extend(m_part.species)
-                self.mechanism.reactions.extend(m_part.reactions)
+            if not os.path.exists(f_path):
+                print(f"[WARNING] Mechanism file not found (skipped): {f_path}")
+                continue
+            m_part = parser.parse(f_path)
+            self.mechanism.species.extend(m_part.species)
+            self.mechanism.reactions.extend(m_part.reactions)
 
-                # Only use uncommented parameters — the parser already filters invalid names
-                for p_name, p_expr in m_part.parameters.items():
-                    p_clean = p_expr.replace('@', '**')
-                    p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
-                    p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
-                    p_clean = p_clean.strip()
-                    try:
-                        self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
-                    except Exception as e:
-                        print(f"[WARNING] Could not compile parameter {p_name}: {e}")
+            # Only use uncommented parameters — the parser already filters invalid names
+            for p_name, p_expr in m_part.parameters.items():
+                p_clean = p_expr.replace('@', '**')
+                p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+                p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
+                p_clean = p_clean.strip()
+                try:
+                    self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
+                except Exception as e:
+                    print(f"[WARNING] Could not compile parameter {p_name}: {e}")
                     
         # Apply blocked_parameters: explicit suppression from GUI Chemistry Overview tab
         blocked_params = {p.upper() for p in self.cfg.get('blocked_parameters', [])}
