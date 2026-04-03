@@ -7,6 +7,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
+# Set Windows AppUserModelID as early as possible so the taskbar uses our icon
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FZJ.JUICE")
+    except Exception:
+        pass
+
 # Force Python to look in the current script's folder
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -26,7 +34,7 @@ try:
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
                                  QInputDialog, QMessageBox, QAbstractItemView)
     from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QColor, QIcon
+    from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
     from matplotlib.figure import Figure
@@ -62,6 +70,54 @@ _PROD_COLORS = ['#2ca02c', '#98df8a', '#17becf', '#9edae5', '#1f77b4',
                 '#aec7e8', '#bcbd22', '#dbdb8d', '#c5b0d5', '#f7b6d2']
 _DEST_COLORS = ['#d62728', '#ff9896', '#ff7f0e', '#ffbb78', '#9467bd',
                 '#c49c94', '#8c564b', '#c7c7c7', '#e377c2', '#7f7f7f']
+
+# ── Nitrogen budget helpers ───────────────────────────────────────────────────
+_NB_CLASS_ORDER = [
+    'NOx', 'HNO3', 'HONO', 'N2O5', 'PANs', 'Org. Nitrates', 'Other N',
+]
+_NB_CLASS_COLORS = {
+    'NOx':          '#d62728',
+    'HNO3':         '#ff7f0e',
+    'HONO':         '#bcbd22',
+    'N2O5':         '#2ca02c',
+    'PANs':         '#1f77b4',
+    'Org. Nitrates':'#9467bd',
+    'Other N':      '#c7c7c7',
+}
+
+_MCM_NITROGEN_LOOKUP = {
+    'N2O5': 2, 'HONO': 1, 'HNO3': 1, 'HNO4': 1,
+    'NO': 1, 'NO2': 1, 'NO3': 1, 'N2O': 2,
+    'PAN': 1, 'MPAN': 1, 'APAN': 1, 'GPAN': 1, 'PBZN': 1,
+}
+
+def _nitrogen_count(name):
+    """Return the number of nitrogen atoms in a MCM species name."""
+    upper = name.upper()
+    if upper in _MCM_NITROGEN_LOOKUP:
+        return _MCM_NITROGEN_LOOKUP[upper]
+    total = 0
+    for m in re.finditer(r'N(?!a|i|e)(\d*)', name):
+        n = m.group(1)
+        total += int(n) if n else 1
+    return total
+
+def _nitrogen_class(name):
+    """Classify an MCM species into a chemical class for nitrogen budget grouping."""
+    n = name.upper()
+    if n in ('NO', 'NO2', 'NO3'):
+        return 'NOx'
+    if n in ('HNO3', 'HNO4'):
+        return 'HNO3'
+    if n == 'HONO':
+        return 'HONO'
+    if n == 'N2O5':
+        return 'N2O5'
+    if n.endswith('CO3NO2') or n in ('PAN', 'MPAN', 'APAN', 'GPAN', 'PBZN'):
+        return 'PANs'
+    if ('NO3' in n and n != 'NO3') or 'ONO2' in n or n.endswith('NO2'):
+        return 'Org. Nitrates'
+    return 'Other N'
 
 # ── Carbon budget helpers ─────────────────────────────────────────────────────
 # Lookup table for MCM species whose names are NOT condensed molecular formulas.
@@ -896,11 +952,11 @@ class ResultsViewer(QMainWindow):
         rx_layout.addWidget(self.rx_canvas, 1)
         self.right_tabs.addTab(rx_widget, "Reactivity")
 
-        # Tab 3 – Comparison
-        self._build_comparison_tab()
-
-        # Tab 4 – Carbon Budget
+        # Tab 3 – Carbon Budget
         self._build_carbon_tab()
+
+        # Tab 4 – Comparison (last)
+        self._build_comparison_tab()
 
         splitter.addWidget(right_panel)
         splitter.setSizes([300, 1300])
@@ -1829,6 +1885,8 @@ class ResultsViewer(QMainWindow):
             {'vline': None, 'text': None},
             {'vline': None, 'text': None},
         ]
+        self._cmp_mirror_vlines = [None, None]   # vline drawn in canvas s by the OTHER slot's hover
+        self._cmp_mirror_texts  = [None, None]   # text drawn in canvas s by the OTHER slot's hover
 
         outer = QWidget()
         outer_layout = QVBoxLayout(outer)
@@ -2258,18 +2316,29 @@ class ResultsViewer(QMainWindow):
         if event.inaxes is None:
             self._cmp_clear_crosshair(slot)
             return
+        other  = 1 - slot
         ax     = event.inaxes
         canvas = self._cmp_ts_canvases[slot]
         ch     = self._cmp_crosshair[slot]
         x      = event.xdata
 
-        # Remove previous artists
+        # Remove previous own artists
         if ch['vline'] is not None:
             try: ch['vline'].remove()
             except Exception: pass
         if ch['text'] is not None:
             try: ch['text'].remove()
             except Exception: pass
+
+        # Remove previous mirror artists in the peer canvas
+        if self._cmp_mirror_vlines[other] is not None:
+            try: self._cmp_mirror_vlines[other].remove()
+            except Exception: pass
+            self._cmp_mirror_vlines[other] = None
+        if self._cmp_mirror_texts[other] is not None:
+            try: self._cmp_mirror_texts[other].remove()
+            except Exception: pass
+            self._cmp_mirror_texts[other] = None
 
         ch['vline'] = ax.axvline(x, color='gray', lw=0.8, ls='--', zorder=10)
 
@@ -2280,16 +2349,40 @@ class ResultsViewer(QMainWindow):
             ref_at = float(np.interp(x, common_t, ref_vals))
             h, rem = divmod(max(0, int(x * 3600)), 3600)
             m      = rem // 60
-            txt    = f"{h:02d}:{m:02d}   MCM={py_at:.3g}   Ref={ref_at:.3g}"
+            pct_txt = f"   Agr={py_at/ref_at*100:.1f}%" if ref_at != 0 else ""
+            txt    = f"{h:02d}:{m:02d}   MCM={py_at:.3g}   Ref={ref_at:.3g}{pct_txt}"
             ch['text'] = ax.text(
                 0.02, 0.98, txt, transform=ax.transAxes,
                 va='top', ha='left', fontsize=8,
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85),
                 zorder=11)
 
+        # Draw mirror vline + text in the peer canvas
+        other_axes = self._cmp_ts_figs[other].axes
+        if other_axes:
+            other_ax = other_axes[0]
+            self._cmp_mirror_vlines[other] = other_ax.axvline(
+                x, color='gray', lw=0.8, ls='--', zorder=10)
+            other_data = self._cmp_ts_data[other]
+            if other_data is not None:
+                py_vals2, ref_vals2, common_t2, sp2 = other_data
+                py_at2  = float(np.interp(x, common_t2, py_vals2))
+                ref_at2 = float(np.interp(x, common_t2, ref_vals2))
+                h2, rem2 = divmod(max(0, int(x * 3600)), 3600)
+                m2       = rem2 // 60
+                pct_txt2 = f"   Agr={py_at2/ref_at2*100:.1f}%" if ref_at2 != 0 else ""
+                txt2     = f"{h2:02d}:{m2:02d}   MCM={py_at2:.3g}   Ref={ref_at2:.3g}{pct_txt2}"
+                self._cmp_mirror_texts[other] = other_ax.text(
+                    0.02, 0.98, txt2, transform=other_ax.transAxes,
+                    va='top', ha='left', fontsize=8,
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85),
+                    zorder=11)
+            self._cmp_ts_canvases[other].draw_idle()
+
         canvas.draw_idle()
 
     def _cmp_clear_crosshair(self, slot):
+        other  = 1 - slot
         ch     = self._cmp_crosshair[slot]
         canvas = self._cmp_ts_canvases[slot]
         if ch['vline'] is not None:
@@ -2300,19 +2393,33 @@ class ResultsViewer(QMainWindow):
             try: ch['text'].remove()
             except Exception: pass
             ch['text'] = None
+        # Also remove the mirror vline + text we drew in the peer canvas
+        peer_dirty = False
+        if self._cmp_mirror_vlines[other] is not None:
+            try: self._cmp_mirror_vlines[other].remove()
+            except Exception: pass
+            self._cmp_mirror_vlines[other] = None
+            peer_dirty = True
+        if self._cmp_mirror_texts[other] is not None:
+            try: self._cmp_mirror_texts[other].remove()
+            except Exception: pass
+            self._cmp_mirror_texts[other] = None
+            peer_dirty = True
+        if peer_dirty:
+            self._cmp_ts_canvases[other].draw_idle()
         canvas.draw_idle()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Carbon Budget tab  (Tab 4)
+    # Budgets tab  — Carbon (top) + Nitrogen (bottom)
     # ─────────────────────────────────────────────────────────────────────────
     def _build_carbon_tab(self):
-        """Build the Carbon Budget tab with mode selector and stacked timeseries."""
+        """Build the unified Budgets tab: Carbon on top, Nitrogen on bottom."""
         outer = QWidget()
-        layout = QVBoxLayout(outer)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(2, 2, 2, 2)
+        outer_layout.setSpacing(2)
 
-        # ── Controls row ──────────────────────────────────────────────────
+        # ── Shared controls row ───────────────────────────────────────────
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
         ctrl_layout.setSpacing(6)
@@ -2326,30 +2433,61 @@ class ResultsViewer(QMainWindow):
         self._cb_total_chk.setChecked(True)
         ctrl_layout.addWidget(self._cb_total_chk)
 
+        self._nb_total_chk = QCheckBox("Total N")
+        self._nb_total_chk.setChecked(True)
+        ctrl_layout.addWidget(self._nb_total_chk)
+
+        btn = QPushButton("Plot")
+        btn.clicked.connect(self._update_both_budgets)
+        ctrl_layout.addWidget(btn)
+
         self._cb_status_lbl = QLabel("")
         self._cb_status_lbl.setStyleSheet("color: #777; font-size: 10px;")
         ctrl_layout.addWidget(self._cb_status_lbl)
 
         ctrl_layout.addStretch()
+        outer_layout.addLayout(ctrl_layout, 0)
 
-        btn = QPushButton("Plot")
-        btn.clicked.connect(self._update_carbon_budget)
-        ctrl_layout.addWidget(btn)
+        # ── Vertical splitter: Carbon top / Nitrogen bottom ───────────────
+        vsplit = QSplitter(Qt.Orientation.Vertical)
 
-        layout.addLayout(ctrl_layout, 0)
-
-        # ── Figure ────────────────────────────────────────────────────────
-        self._cb_fig = Figure(figsize=(12, 6))
+        # Carbon panel
+        carbon_widget = QWidget()
+        carbon_layout = QVBoxLayout(carbon_widget)
+        carbon_layout.setContentsMargins(0, 0, 0, 0)
+        carbon_layout.setSpacing(0)
+        self._cb_fig = Figure(figsize=(12, 4))
         self._cb_canvas = FigureCanvas(self._cb_fig)
-        self._cb_toolbar = NavigationToolbar(self._cb_canvas, outer)
-        layout.addWidget(self._cb_toolbar, 0)
-        layout.addWidget(self._cb_canvas, 1)
+        self._cb_toolbar = NavigationToolbar(self._cb_canvas, carbon_widget)
+        carbon_layout.addWidget(self._cb_toolbar)
+        carbon_layout.addWidget(self._cb_canvas, 1)
+        vsplit.addWidget(carbon_widget)
 
-        # Auto-replot when mode or checkbox changes
-        self._cb_mode_combo.currentIndexChanged.connect(self._update_carbon_budget)
+        # Nitrogen panel
+        nitrogen_widget = QWidget()
+        nitrogen_layout = QVBoxLayout(nitrogen_widget)
+        nitrogen_layout.setContentsMargins(0, 0, 0, 0)
+        nitrogen_layout.setSpacing(0)
+        self._nb_fig = Figure(figsize=(12, 4))
+        self._nb_canvas = FigureCanvas(self._nb_fig)
+        self._nb_toolbar = NavigationToolbar(self._nb_canvas, nitrogen_widget)
+        nitrogen_layout.addWidget(self._nb_toolbar)
+        nitrogen_layout.addWidget(self._nb_canvas, 1)
+        vsplit.addWidget(nitrogen_widget)
+
+        vsplit.setSizes([500, 500])
+        outer_layout.addWidget(vsplit, 1)
+
+        # Auto-replot when controls change
+        self._cb_mode_combo.currentIndexChanged.connect(self._update_both_budgets)
         self._cb_total_chk.stateChanged.connect(self._update_carbon_budget)
+        self._nb_total_chk.stateChanged.connect(self._update_nitrogen_budget)
 
-        self.right_tabs.addTab(outer, "Carbon Budget")
+        self.right_tabs.addTab(outer, "Budgets")
+
+    def _update_both_budgets(self):
+        self._update_carbon_budget()
+        self._update_nitrogen_budget()
 
     def _update_carbon_budget(self):
         """Compute carbon-weighted concentrations and draw the stacked timeseries."""
@@ -2514,6 +2652,108 @@ class ResultsViewer(QMainWindow):
         if arrays:
             ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
 
+    # ── Nitrogen budget ───────────────────────────────────────────────────────
+    def _update_nitrogen_budget(self):
+        """Compute nitrogen-weighted concentrations and draw the stacked timeseries."""
+        self._nb_fig.clear()
+        ax = self._nb_fig.add_subplot(111)
+
+        t = self.df.index.values
+        M = self.df['M'].values if 'M' in self.df.columns else None
+
+        species_data = {}   # name → (n_N, ppb_N array)
+        unknown_species = []
+
+        for col in self.df.columns:
+            if col == 'M' or col.upper().startswith('SAPHIR_'):
+                continue
+            n_n = _nitrogen_count(col)
+            if n_n == 0:
+                continue
+            vals = self.df[col].values
+            ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
+            ppb_n = np.clip(ppb, 0.0, None) * n_n
+            if np.nanmax(ppb_n) < 1e-9:
+                continue
+            species_data[col] = (n_n, ppb_n)
+
+        # HV shading
+        hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
+        if hv_col is not None:
+            hv = self.df[hv_col].values
+            in_open, open_start = False, None
+            for ti, vi in zip(t, hv):
+                if vi > 0.5 and not in_open:
+                    in_open, open_start = True, ti
+                elif vi <= 0.5 and in_open:
+                    ax.axvspan(open_start, ti, color='#fffacd', alpha=0.35,
+                               zorder=0, linewidth=0)
+                    in_open = False
+            if in_open:
+                ax.axvspan(open_start, t[-1], color='#fffacd', alpha=0.35,
+                           zorder=0, linewidth=0)
+
+        if not species_data:
+            ax.text(0.5, 0.5, "No nitrogen-containing species found in simulation output.",
+                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+            self._nb_canvas.draw()
+            return
+
+        mode = self._cb_mode_combo.currentText()
+        if mode == "All Species":
+            sorted_items = sorted(species_data.items(),
+                                  key=lambda x: np.nanmean(x[1][1]), reverse=True)
+            names  = [item[0] for item in sorted_items]
+            arrays = [np.nan_to_num(item[1][1]) for item in sorted_items]
+            cmap   = _mcm.get_cmap('tab20')
+            colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
+            ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+        else:
+            class_totals = {}
+            for sp, (_, ppb_n) in species_data.items():
+                cls = _nitrogen_class(sp)
+                if cls not in class_totals:
+                    class_totals[cls] = np.zeros(len(t))
+                class_totals[cls] += np.nan_to_num(ppb_n)
+            names, arrays, colors = [], [], []
+            for cls in _NB_CLASS_ORDER:
+                if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
+                    names.append(cls)
+                    arrays.append(class_totals[cls])
+                    colors.append(_NB_CLASS_COLORS.get(cls, '#aaaaaa'))
+            for cls, arr in class_totals.items():
+                if cls not in _NB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
+                    names.append(cls)
+                    arrays.append(arr)
+                    colors.append('#aaaaaa')
+            if arrays:
+                ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+
+        if self._nb_total_chk.isChecked():
+            total = sum(np.nan_to_num(ppb_n) for _, ppb_n in species_data.values())
+            ax.plot(t, total, color='black', lw=1.5, ls='--',
+                    label='Total tracked N', zorder=10)
+
+        ax.set_xlabel('Time of Day (UTC)')
+        ax.set_ylabel('Nitrogen content (ppb-N)')
+        ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+        ax.set_xlim(t[0], t[-1])
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle='--', alpha=0.4)
+
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            if mode == "All Species" and len(handles) > 15:
+                ax.legend(handles, labels, loc='upper right',
+                          fontsize=6, ncol=max(1, len(handles) // 20 + 1),
+                          framealpha=0.85)
+            else:
+                ax.legend(handles, labels, loc='upper right',
+                          fontsize=8, framealpha=0.85)
+
+        self._nb_fig.tight_layout()
+        self._nb_canvas.draw()
+
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
         _voc_candidates = ['C2H5OH', 'TOLUENE', 'ISOPRENE', 'ALPHA_PINENE', 'BENZENE',
@@ -2628,4 +2868,9 @@ def main():
 
 
 if __name__ == "__main__":
+    if HAS_PYQT:
+        _app = QApplication(sys.argv)
+        _pm = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Juelich Logo.png"))
+        if not _pm.isNull():
+            _app.setWindowIcon(QIcon(_pm))
     main()

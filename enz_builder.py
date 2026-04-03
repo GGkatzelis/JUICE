@@ -18,10 +18,67 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QSplitter,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
     QRadioButton, QFileDialog, QMessageBox, QFrame,
-    QHeaderView, QAbstractItemView,
+    QHeaderView, QAbstractItemView, QComboBox, QListWidget, QListWidgetItem,
+    QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
+
+
+class CheckableComboBox(QPushButton):
+    """A button that opens a checkable list popup for multi-variable selection."""
+
+    def __init__(self, items=None, parent=None):
+        super().__init__(parent)
+        self._items = list(items or [])
+        self._checked = set()
+        if self._items:
+            self._checked.add(self._items[0])   # default: first item checked
+        self._update_label()
+        self.clicked.connect(self._open_popup)
+
+    def _update_label(self):
+        if not self._checked:
+            self.setText("(none)")
+        elif len(self._checked) == 1:
+            self.setText(next(iter(self._checked)))
+        else:
+            self.setText(f"{len(self._checked)} vars selected")
+
+    def _open_popup(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Select variables")
+        dlg.resize(320, 400)
+        layout = QVBoxLayout(dlg)
+        lw = QListWidget()
+        for item in self._items:
+            li = QListWidgetItem(item)
+            li.setFlags(li.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            li.setCheckState(Qt.CheckState.Checked if item in self._checked
+                             else Qt.CheckState.Unchecked)
+            lw.addItem(li)
+        layout.addWidget(lw)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._checked = {lw.item(i).text() for i in range(lw.count())
+                             if lw.item(i).checkState() == Qt.CheckState.Checked}
+            self._update_label()
+
+    def checked_items(self):
+        """Return list of currently checked variable names."""
+        return [v for v in self._items if v in self._checked]
+
+    def set_items(self, items, default_checked=None):
+        self._items = list(items)
+        if default_checked is not None:
+            self._checked = set(default_checked) & set(items)
+        else:
+            self._checked = {items[0]} if items else set()
+        self._update_label()
 
 # ── SAPHIR fixed constants ─────────────────────────────────────────────────────
 SAPHIR_LAT = 50.9086       # degrees N, Jülich Research Centre
@@ -564,7 +621,7 @@ class EnzBuilderDialog(QDialog):
     def __init__(self, parent=None, scenario_path=""):
         super().__init__(parent)
         self.setWindowTitle("Step 1 — Prepare Chamber Environment (.enz)")
-        self.resize(1100, 750)
+        self.resize(1500, 900)
         self.scenario_path = scenario_path
         self._wiki_thread = None
         self._last_pasted_wiki_text = ""   # persists across re-opens of the paste dialog
@@ -654,35 +711,47 @@ class EnzBuilderDialog(QDialog):
         arc_group = QGroupBox("Archive Variables (from NC files)")
         arc_vbox = QVBoxLayout()
 
-        self.archive_table = QTableWidget(len(ARCHIVE_MAP), 4)
+        self.archive_table = QTableWidget(len(ARCHIVE_MAP), 5)
         self.archive_table.setHorizontalHeaderLabels(
-            ["", "ENZ column", "NC file suffix", "Variable in NC"]
+            ["✓", "●", "ENZ column", "NC file suffix", "Variable in NC"]
         )
         self.archive_table.setColumnWidth(0, 22)
-        self.archive_table.setColumnWidth(1, 80)
+        self.archive_table.setColumnWidth(1, 22)
+        self.archive_table.setColumnWidth(2, 80)
         self.archive_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
+            3, QHeaderView.ResizeMode.Stretch
         )
-        self.archive_table.setColumnWidth(3, 110)
+        self.archive_table.setColumnWidth(4, 130)
         self.archive_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.archive_table.verticalHeader().setDefaultSectionSize(22)
+        self._extra_nc_suffixes = set()   # populated & cleared on each probe
 
         for row, (col, (suffix, var, _fill)) in enumerate(ARCHIVE_MAP.items()):
+            # Col 0: checkbox — default rows are checked
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            chk_item.setCheckState(Qt.CheckState.Checked)
+            self.archive_table.setItem(row, 0, chk_item)
+
+            # Col 1: status dot
             dot = QTableWidgetItem("●")
             dot.setForeground(QColor("#888"))
             dot.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            self.archive_table.setItem(row, 0, dot)
+            self.archive_table.setItem(row, 1, dot)
 
+            # Col 2: ENZ column name (read-only)
             col_item = QTableWidgetItem(col)
             col_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            self.archive_table.setItem(row, 1, col_item)
+            self.archive_table.setItem(row, 2, col_item)
 
+            # Col 3: NC file suffix (read-only)
             suf_item = QTableWidgetItem(suffix)
             suf_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            self.archive_table.setItem(row, 2, suf_item)
+            self.archive_table.setItem(row, 3, suf_item)
 
-            # NC variable name: editable so the user can override
-            self.archive_table.setItem(row, 3, QTableWidgetItem(var))
+            # Col 4: multi-select variable picker — initially just the default var
+            combo = CheckableComboBox([var])
+            self.archive_table.setCellWidget(row, 4, combo)
 
         probe_btn = QPushButton("Probe NC Files")
         probe_btn.setToolTip(
@@ -811,7 +880,7 @@ class EnzBuilderDialog(QDialog):
 
         v_splitter.setSizes([140, 520])
         main_splitter.addWidget(v_splitter)
-        main_splitter.setSizes([370, 730])
+        main_splitter.setSizes([650, 850])
         root.addWidget(main_splitter, stretch=1)
 
         # ── 3. Project Root + Generate ────────────────────────────────────────
@@ -1043,17 +1112,19 @@ class EnzBuilderDialog(QDialog):
     # ── Probe NC files ─────────────────────────────────────────────────────────
 
     def _probe_nc_files(self):
-        """Check each archive variable's NC file and update status dots."""
+        """Check each archive variable's NC file, update status dots, populate variable
+        dropdowns, and append rows for any extra NC files found in the folder."""
         nc4_available = True
         try:
-            import netCDF4  # noqa: F401
+            import netCDF4 as nc4  # noqa: F401
         except ImportError:
             nc4_available = False
 
+        # ── 1. Update ARCHIVE_MAP rows ─────────────────────────────────────────
         for row, (col, (suffix, _var, _fill)) in enumerate(ARCHIVE_MAP.items()):
-            var_item = self.archive_table.item(row, 3)
-            var_name = var_item.text().strip() if var_item else _var
-            dot = self.archive_table.item(row, 0)
+            combo = self.archive_table.cellWidget(row, 4)
+            cur_var = (combo.checked_items() or [_var])[0] if combo else _var
+            dot = self.archive_table.item(row, 1)
             if not dot:
                 continue
 
@@ -1064,42 +1135,107 @@ class EnzBuilderDialog(QDialog):
 
             nc_path = self._nc_path(suffix)
             if not nc_path or not os.path.isfile(nc_path):
-                dot.setForeground(QColor("#e05252"))  # red = file missing
+                dot.setForeground(QColor("#e05252"))
                 dot.setToolTip(f"File not found:\n{nc_path}")
                 continue
 
             if not nc4_available:
-                dot.setForeground(QColor("#f0a500"))  # orange = can't read
+                dot.setForeground(QColor("#f0a500"))
                 dot.setToolTip("File found but netCDF4 is not installed")
                 continue
 
-            # Try to open and find variable
             try:
-                import netCDF4 as nc4
                 with nc4.Dataset(nc_path, 'r') as ds:
-                    candidates = [var_name] + ARCHIVE_MAP_ALTS.get(var_name, [])
-                    found = any(c in ds.variables for c in candidates)
                     avail = [v for v in ds.variables
                              if v not in ('time', 'TIME', 'Time', 'epoch')]
+                    candidates = [cur_var] + ARCHIVE_MAP_ALTS.get(cur_var, [])
+                    found = any(c in ds.variables for c in candidates)
+
+                # Repopulate CheckableComboBox preserving current checked set,
+                # falling back to the ARCHIVE_MAP default if nothing matched
+                if combo and avail:
+                    prev_checked = combo.checked_items() or [_var]
+                    default = [v for v in prev_checked if v in avail] or [_var]
+                    combo.set_items(avail, default_checked=default)
+
                 if found:
-                    dot.setForeground(QColor("#4caf50"))  # green = OK
+                    dot.setForeground(QColor("#4caf50"))
                     dot.setToolTip(f"OK  —  {os.path.basename(nc_path)}")
                 else:
-                    dot.setForeground(QColor("#f0a500"))  # orange = wrong var
+                    dot.setForeground(QColor("#f0a500"))
                     dot.setToolTip(
-                        f"File found but '{var_name}' not present.\n"
-                        f"Available variables: {avail}\n"
-                        f"Double-click the 'Variable in NC' cell to override."
+                        f"File found but '{cur_var}' not present.\n"
+                        f"Use the picker to choose from: {avail}"
                     )
             except Exception as exc:
                 dot.setForeground(QColor("#e05252"))
                 dot.setToolTip(f"Error reading file:\n{exc}")
 
-        # ── H2O measurement flag ───────────────────────────────────────────────
+        # ── 2. Scan folder for ALL NC files, add extras as unchecked rows ────────
+        # First remove any previously added extra rows so re-probing is clean
+        n_default = len(ARCHIVE_MAP)
+        while self.archive_table.rowCount() > n_default:
+            self.archive_table.removeRow(self.archive_table.rowCount() - 1)
+        self._extra_nc_suffixes.clear()
+
+        extra_added = 0
+        if not self.rb_manual.isChecked() and nc4_available:
+            folder = self._get_nc_folder()
+            date_str = self.date_edit.text().strip()
+            if folder and os.path.isdir(folder) and date_str:
+                import glob as _glob
+                pattern = os.path.join(folder, f"{date_str}.*.nc")
+                known_suffixes = {suf for (suf, _, __) in ARCHIVE_MAP.values()}
+                for nc_path in sorted(_glob.glob(pattern)):
+                    fname = os.path.basename(nc_path)
+                    suffix = fname[len(date_str) + 1:]   # strip "YYYY-MM-DD."
+                    if suffix in known_suffixes:
+                        continue   # already shown as a default row
+                    self._extra_nc_suffixes.add(suffix)
+                    try:
+                        with nc4.Dataset(nc_path, 'r') as ds:
+                            avail = [v for v in ds.variables
+                                     if v not in ('time', 'TIME', 'Time', 'epoch')]
+                    except Exception:
+                        avail = []
+                    if not avail:
+                        continue
+
+                    r = self.archive_table.rowCount()
+                    self.archive_table.insertRow(r)
+
+                    # Col 0: checkbox — extra rows start unchecked
+                    chk_item = QTableWidgetItem()
+                    chk_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+                    chk_item.setCheckState(Qt.CheckState.Unchecked)
+                    self.archive_table.setItem(r, 0, chk_item)
+
+                    # Col 1: status dot (green — file exists & readable)
+                    dot = QTableWidgetItem("●")
+                    dot.setForeground(QColor("#4caf50"))
+                    dot.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    dot.setToolTip(f"OK  —  {fname}")
+                    self.archive_table.setItem(r, 1, dot)
+
+                    # Col 2: ENZ column name — editable, defaults to first variable
+                    enz_item = QTableWidgetItem(avail[0])
+                    self.archive_table.setItem(r, 2, enz_item)
+
+                    # Col 3: NC suffix (read-only)
+                    suf_item = QTableWidgetItem(suffix)
+                    suf_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    self.archive_table.setItem(r, 3, suf_item)
+
+                    # Col 4: multi-select variable picker
+                    combo = CheckableComboBox(avail)
+                    self.archive_table.setCellWidget(r, 4, combo)
+                    extra_added += 1
+
+        # ── 3. H2O measurement flag ────────────────────────────────────────────
         h2o_row_idx = next((i for i, col in enumerate(ARCHIVE_MAP) if col == 'H2O'), None)
         h2o_measured = False
         if h2o_row_idx is not None:
-            dot = self.archive_table.item(h2o_row_idx, 0)
+            dot = self.archive_table.item(h2o_row_idx, 1)
             h2o_measured = (dot is not None
                             and dot.foreground().color().name() == '#4caf50')
         self._h2o_measured = h2o_measured
@@ -1115,11 +1251,14 @@ class EnzBuilderDialog(QDialog):
                 if notes_it and h2o_measured and note not in notes_it.text():
                     notes_it.setText((notes_it.text() + "  " + note).strip())
 
+        extra_msg = f"\n\n+ {extra_added} new NC file(s) added to the table." if extra_added else ""
         QMessageBox.information(
             self, "Probe complete",
             "● Green  = file & variable found\n"
-            "● Orange = file found but variable name mismatch (edit the NC variable column)\n"
-            "● Red    = file not found"
+            "● Orange = file found but variable name mismatch (use the dropdown)\n"
+            "● Red    = file not found\n\n"
+            "Extra NC files are added unchecked — tick the checkbox and pick a variable to include them."
+            + extra_msg
             + ("\n\nℹ H\u2082O measurement found — QH2O injection rows are reference/plotting only."
                if h2o_measured else "")
         )
@@ -1373,17 +1512,32 @@ class EnzBuilderDialog(QDialog):
             elif code in WIKI_FAST_CODE_TO_COL:
                 col = WIKI_FAST_CODE_TO_COL[code]
                 fast_events.setdefault(col, []).append((t, desc))
-            elif code in WIKI_SLOW_START_CODE:
-                col = WIKI_SLOW_START_CODE[code]
-                pending_slow_start[col] = (t, desc)
-            elif code in WIKI_SLOW_STOP_CODE:
-                col = WIKI_SLOW_STOP_CODE[code]
-                if col in pending_slow_start:
-                    start_t, start_desc = pending_slow_start.pop(col)
-                    notes = f"Start: {start_desc[:50]} | Stop: {desc[:50]}"
-                    slow_pairs.setdefault(col, []).append((start_t, t, notes))
+            elif code in WIKI_SLOW_START_CODE or code in WIKI_SLOW_STOP_CODE:
+                col = WIKI_SLOW_START_CODE.get(code) or WIKI_SLOW_STOP_CODE.get(code)
+                # Determine start vs stop from description when both use the same code
+                desc_lower = desc.lower()
+                is_stop = (code in WIKI_SLOW_STOP_CODE and code not in WIKI_SLOW_START_CODE)
+                if not is_stop:
+                    # Same code used for both: check description for stop keywords
+                    stop_keywords = ('stop', 'stopp', 'end', 'finish', 'switch to experiment')
+                    if any(kw in desc_lower for kw in stop_keywords):
+                        is_stop = True
+
+                if is_stop:
+                    if col in pending_slow_start:
+                        start_t, start_desc = pending_slow_start.pop(col)
+                        notes = f"Start: {start_desc[:50]} | Stop: {desc[:50]}"
+                        slow_pairs.setdefault(col, []).append((start_t, t, notes))
+                    else:
+                        slow_pairs.setdefault(col, []).append(("", t, f"Stop: {desc[:60]}"))
                 else:
-                    slow_pairs.setdefault(col, []).append(("", t, f"Stop: {desc[:60]}"))
+                    # It's a start — if there's already a pending start without a stop, save it
+                    if col in pending_slow_start:
+                        old_start_t, old_desc = pending_slow_start[col]
+                        slow_pairs.setdefault(col, []).append(
+                            (old_start_t, "", f"Start: {old_desc[:60]} (stop not found)")
+                        )
+                    pending_slow_start[col] = (t, desc)
 
         for col, (start_t, desc) in pending_slow_start.items():
             slow_pairs.setdefault(col, []).append(
@@ -1508,12 +1662,21 @@ class EnzBuilderDialog(QDialog):
 
         # ── Archive variables ──────────────────────────────────────────────────
         if not self.rb_manual.isChecked():
+            # Default ARCHIVE_MAP rows — each row maps to one ENZ column;
+            # if multiple vars are checked, the first one is used (ENZ col name is fixed)
             for row, (col, (suffix, _var, fill)) in enumerate(ARCHIVE_MAP.items()):
-                var_item = self.archive_table.item(row, 3)
-                var_name = var_item.text().strip() if var_item else _var
+                chk = self.archive_table.item(row, 0)
+                if chk and chk.checkState() != Qt.CheckState.Checked:
+                    column_data[col] = np.full(len(grid_s), fill)
+                    continue
+                combo = self.archive_table.cellWidget(row, 4)
+                var_names = combo.checked_items() if combo else [_var]
+                if not var_names:
+                    var_names = [_var]
                 nc_path = self._nc_path(suffix)
+                # Primary var → the fixed ENZ column name
                 try:
-                    times_s, vals = read_nc_variable(nc_path, var_name)
+                    times_s, vals = read_nc_variable(nc_path, var_names[0])
                     column_data[col] = interpolate_to_grid(times_s, vals, grid_s, fill)
                 except FileNotFoundError:
                     errors.append(f"{col}: file not found ({nc_path})")
@@ -1521,6 +1684,37 @@ class EnzBuilderDialog(QDialog):
                 except (KeyError, ImportError, Exception) as exc:
                     errors.append(f"{col}: {exc}")
                     column_data[col] = np.full(len(grid_s), fill)
+                # Extra checked vars → extra columns named after the variable
+                for var_name in var_names[1:]:
+                    try:
+                        times_s, vals = read_nc_variable(nc_path, var_name)
+                        column_data[var_name] = interpolate_to_grid(times_s, vals, grid_s, fill)
+                    except Exception as exc:
+                        errors.append(f"{var_name}: {exc}")
+                        column_data[var_name] = np.full(len(grid_s), fill)
+
+            # Extra NC rows — each checked variable becomes its own ENZ column
+            n_default = len(ARCHIVE_MAP)
+            for row in range(n_default, self.archive_table.rowCount()):
+                chk = self.archive_table.item(row, 0)
+                if not chk or chk.checkState() != Qt.CheckState.Checked:
+                    continue
+                suf_item = self.archive_table.item(row, 3)
+                suffix = suf_item.text().strip() if suf_item else ""
+                if not suffix:
+                    continue
+                combo = self.archive_table.cellWidget(row, 4)
+                var_names = combo.checked_items() if combo else []
+                if not var_names:
+                    continue
+                nc_path = self._nc_path(suffix)
+                for var_name in var_names:
+                    try:
+                        times_s, vals = read_nc_variable(nc_path, var_name)
+                        column_data[var_name] = interpolate_to_grid(times_s, vals, grid_s, 0.0)
+                    except Exception as exc:
+                        errors.append(f"{var_name}: {exc}")
+                        column_data[var_name] = np.zeros(len(grid_s))
         else:
             # All-manual: fill archive columns with their fill values
             for col, (_suffix, _var, fill) in ARCHIVE_MAP.items():
