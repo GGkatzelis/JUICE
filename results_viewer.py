@@ -86,20 +86,41 @@ _NB_CLASS_COLORS = {
 }
 
 _MCM_NITROGEN_LOOKUP = {
-    'N2O5': 2, 'HONO': 1, 'HNO3': 1, 'HNO4': 1,
-    'NO': 1, 'NO2': 1, 'NO3': 1, 'N2O': 2,
-    'PAN': 1, 'MPAN': 1, 'APAN': 1, 'GPAN': 1, 'PBZN': 1,
+    # Inorganic
+    'NO': 1, 'NO2': 1, 'NO3': 1, 'N2O5': 2, 'N2O': 2,
+    'HONO': 1, 'HNO3': 1, 'HNO4': 1,
+    # PAN family (abbreviated names that don't contain NO/NO2 as substrings)
+    'PAN': 1, 'MPAN': 1, 'APAN': 1, 'GPAN': 1, 'PBZN': 1, 'PHAN': 1,
+    # Explicitly zero — species with N in name but no nitrogen atom
+    'NA': 0,
 }
 
+# Ordered list of nitrogen functional group patterns (longest first to avoid
+# double-counting — e.g. NO3 must be matched before NO).
+_N_FUNCTIONAL_GROUPS = [
+    ('N2O5', 2), ('CO3NO2', 1), ('ONO2', 1),
+    ('HNO3', 1), ('HNO4', 1), ('HONO', 1),
+    ('NO3',  1), ('NO2',  1), ('NO',   1),
+]
+
 def _nitrogen_count(name):
-    """Return the number of nitrogen atoms in a MCM species name."""
+    """Return the number of nitrogen atoms in a MCM species name.
+
+    Strategy:
+    1. Exact lookup for abbreviated names and known zero-N species.
+    2. Sequential functional-group scan (longest pattern first) so only
+       recognised MCM nitrogen groups are counted — avoids matching the 'N'
+       in 'ETHANOL', 'METHANOL', injection-tracer names, etc.
+    """
     upper = name.upper()
     if upper in _MCM_NITROGEN_LOOKUP:
         return _MCM_NITROGEN_LOOKUP[upper]
+    tmp = upper
     total = 0
-    for m in re.finditer(r'N(?!a|i|e)(\d*)', name):
-        n = m.group(1)
-        total += int(n) if n else 1
+    for pattern, n_atoms in _N_FUNCTIONAL_GROUPS:
+        while pattern in tmp:
+            total += n_atoms
+            tmp = tmp.replace(pattern, '\x00' * len(pattern), 1)  # mask so shorter patterns don't re-match
     return total
 
 def _nitrogen_class(name):
@@ -2672,7 +2693,7 @@ class ResultsViewer(QMainWindow):
                 continue
             vals = self.df[col].values
             ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
-            ppb_n = np.clip(ppb, 0.0, None) * n_n
+            ppb_n = np.clip(np.nan_to_num(ppb, nan=0.0, posinf=0.0, neginf=0.0), 0.0, None) * n_n
             if np.nanmax(ppb_n) < 1e-9:
                 continue
             species_data[col] = (n_n, ppb_n)
