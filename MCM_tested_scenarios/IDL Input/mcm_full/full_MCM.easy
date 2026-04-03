@@ -1,0 +1,337 @@
+;TITLE=10.07.2024:Experiment 7: Gasoline Daytime Oxidation at High NO, complete MCM!C!Cinjection into SAPHIR : MCM_all-mix, OH+dodecane->SOA, k(OH+dodecane->SOA) slowed down 1/2.2
+  
+; This is a temporary EASY-Input File written by mcm331cv.pro
+; with input file MCM_all.fac
+;   
+; To make this file a working EASY-Input File, the following
+; steps have to be done at least: 
+;   1) Fill in the INITIAL values (and water concentration)
+;   2) Make sure that EASY will find the included files
+;   3) Save the new file with a DOS compatible name
+   
+; INCLUDES: 
+#include anorg.mcm331.dark.rate   ; dark anorganic reactions
+#include anorg.mcm331.dark.mech   ; rate constants of dark reactions
+#include anorg.mcm331.phot.rate   ; anorganic photolysis reactions
+#include anorg.mcm331.phot.mech   ; anorganic photolysis frequencies
+#include MCM_all.fac.saphir.incl ; MCM3-spezific constants and functions 
+#include MCM_all.fac.ro2.incl ; RO2 species
+#include MCM_all.fac.mech ; reaction mechanism for given VOC
+#include MCM_all.fac.rate ; rate constants for given VOC reactions
+#include j_clear_sky.incl
+;#include Cl2_related.incl
+*********************************************************************
+ 
+;/WALLDEP, Wall deposition in SAPHIR chamber
+#include saphir.walldep.incl
+WALLDEP   = CONST(1.) ; Switch fuer die Wandverluste 
+ 
+*********************************************************************
+ 
+;/SOURCE, HONO and HCHO source of SAPHIR chamber
+
+; Funktion die die Wasserkonzentration in die relative
+; Feuchtigkeit umrechnet
+WVC2RH     =FUNCTION[%1*100./(exp(21.36469-5339.66/T)/P*M)]
+
+; Relative Feuchtigkeit
+RH = WVC2RH(H2O)
+
+; HONO Quelle aus Paper Rohrer et al.
+SHONO+HV --> HONO+XNOy
+k[SHONO+HV --> HONO+XNOy]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )
+SHONO = CONST(2.6*0.85)
+
+; HCHO Quelle (lichtabhängig, photochemie unabhängig)
+qSHCHO+HV --> HCHO
+k[qSHCHO+HV --> HCHO] = CONST(2.8e6)
+qSHCHO = CONST(1)
+ 
+*********************************************************************
+ 
+;/BGREAC, Background reactivity (see saphir.bgreac.incl) 
+;Y + OH --> HO2
+;k[Y + OH --> HO2]=CONST(2.4e-13)
+qY + OH --> CH3O2
+k[qY + OH --> CH3O2]=CONST(2.4e-13)
+qY=CONST(200e-9*M) ; Y in CO Äquivalenten
+ 
+*********************************************************************
+ 
+; DILUTION, /DIL
+;#include MCM_all.fac.dil.mech ;dilution mechanism
+;#include MCM_all.fac.dil.rate ;dilution rate
+;FLOW   = CONST(6.)  ; Experimetal flow in m^3/h
+DILUTE = CONST((FLOW+0.010*60)/(276.*3600.))
+DIL    = CONST(1.) ; Switch for dilution
+ 
+; Water as a variable 
+;INITIAL[H2O] = CONST(1.4e-2*M)
+ 
+*********************************************************************
+ 
+;/MEASURED, use measured photolysis frequencies (given in ENZ-file)
+;           and other measured parameters]
+#include saphir.jmeasured_02.incl ; definitions for further use of jno2
+                              ; and jo1d as scaling factors of other 
+                              ; photolysis frequencies
+jno2 = INPUT(jno2)
+k[NO2 + HV --> O3 + NO]      = CONST( jno2 )
+jo1d = INPUT(jo1d)
+k[O3 + HV --> O1D ]          = CONST( jo1d )
+jhcho_m                      = INPUT(jhcho_m)
+k[HCHO + HV --> H2 + CO ]    = CONST(jhcho_m)
+jhcho_r                      = INPUT(jhcho_r)
+k[HCHO + HV --> 2*HO2 + CO ] = CONST(jhcho_r)
+jh2o2                        = INPUT(jh2o2)
+k[H2O2 + HV --> 2*HO]        = CONST(jh2o2)
+jhono                        = INPUT(jhono)
+k[HONO + HV --> OH + NO]     = CONST(jhono)
+
+T_in = INPUT(t)
+T    = CONST(T_in)    ; temperature in K
+P    = CONST(1006.5)  ; pressure in hPa
+SZA  = INPUT(sz)      ; solar zenith angle
+SZ   = INPUT(sz)      ; solar zenith angle
+HV_in= INPUT(hv)      ; switch for light
+HV   = CONST(HV_in)
+FLOW = INPUT(dilute)  ; flow into the chamber in m^3/h
+H2O_in = INPUT(H2O)   ; mixing ratio of water
+H2O = CONST(1e-2*M*H2O_in)
+*********************************************************************
+ 
+; FILES: 
+FILES[ENZ]   = kammer.enz
+ 
+; FACSIMILE PARAMETERS
+FACS[HMAX]   = 30
+FACS[OUTSTEP]= 100000
+ 
+; INITIALS:
+INITIAL[*] = CONST(1.) 
+;INITIAL[O3] = CONST(M*250e-9) 
+INITIAL[CO] = CONST(M*1e-9*12 ) 
+INITIAL[CO2]= CONST(M*1e-6*0.07*0) 
+
+XNOy+DIL-->
+k[XNOy+DIL-->]=CONST(DILUTE)
+
+NA+DIL-->
+k[NA+DIL-->]=CONST(DILUTE)
+
+;qCO2-->CO2
+;qCO2=input(QCO2)
+;qCO2=CONST(1)
+;k[qCO2-->CO2]=CONST(M*1e-6/3600*0.01)
+
+;qCO2-->CO
+;qCO2=input(QCO2)
+;k[qCO2-->CO]=CONST(M*1e-9/60*60)
+
+qNO-->NO+XNOy
+qNO=input(QNO)
+k[qNO-->NO+XNOy]=CONST(M*1e-9/60*6.6)
+
+qNO-->NO2+XNOy
+k[qNO-->NO2+XNOy]=CONST(M*1e-9/60*0.1)
+
+;qNO-->HONO+XNOy
+;k[qNO-->HONO+XNOy]=CONST(M*1e-9/60*0.0)
+
+;qH2O-->H2O
+;qH2O=input(QH2O)
+;k[qH2O-->H2O]=CONST(M*1e-2/60*9)
+
+qH2O=input(QH2O)
+qH2O-->HONO+XNOy
+k[qH2O-->HONO+XNOy]=CONST(M*1e-9/60*0.05)
+qH2O-->CO
+k[qH2O-->CO]=CONST(M*1e-9/60*0.5)
+
+qH2O-->NO2+XNOy
+k[qH2O-->NO2+XNOy]=CONST(M*1e-9/60*0.1)
+qH2O-->NO+XNOy
+k[qH2O-->NO+XNOy]=CONST(M*1e-9/60*0.0)
+
+H2O-->HONO+XNOy
+k[H2O-->HONO+XNOy]=CONST(1e-012/2)
+
+qO3-->O3
+qO3=input(QO3)
+k[qO3-->O3]=CONST(M*1e-9/60*113*0)
+
+;O3=CONST(M*50e-9)
+;C5H8=CONST(M*1e-9)
+
+SNO2 --> NO2+XNOy
+;k[SNO2 --> NO2+XNOy]  = CONST(jno2/5e-3*1e-9*M/3600*HV_in*0.55)
+;SNO2=CONST(1)
+k[SNO2 --> NO2+XNOy]  = CONST(jno2/5e-3/3600*HV_in/1.6*0.55)
+INITIAL[SNO2] = CONST(M*1e-9*3.5*0)
+
+;SNO --> NO+XNOy
+;k[SNO --> NO+XNOy]  = CONST(jno2/5e-3*1e-9*M/3600*20)
+;SNO=CONST(HV_in)
+
+;SOH --> OH
+;k[SOH --> OH]  = CONST(jno2/5e-3*1e-9*M/3600)
+;k[SOH --> OH]  = CONST(M*1e-9/3600*4)
+;SOH=CONST(HV_in)
+
+;SHO2 --> HO2
+;k[SHO2 --> HO2]  = CONST(M*1e-9/3600*3)
+;SHO2=CONST(HV_in)
+
+;hv --> NO+XNOy
+;k[hv --> NO+XNOy]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )
+
+;hv --> OH
+;k[hv --> OH]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2)
+
+;NO2_in=input(NO2)
+;NO2=CONST(NO2_in*1e-9*M)
+;NO2=CONST(1e-9*M*30)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+qVOC=input(QVOC)
+
+k[VOCin1+DIL-->]=CONST(0)
+k[VOCin2+DIL-->]=CONST(0)
+k[qVOCin_all+DIL-->]=CONST(0)
+
+qVOC-->0.9*VOCin1+0.1*VOCin2
+k[qVOC-->0.9*VOCin1+0.1*VOCin2]=CONST(M*1e-9/60*23.34)
+
+VOCin1-->qVOCin_all
+k[VOCin1-->qVOCin_all]=CONST(1./60)
+VOCin2-->qVOCin_all
+k[VOCin2-->qVOCin_all]=CONST(1./1800)
+  qVOCin_all=input(QVOC)
+  qVOCin_all-->0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12
+k[qVOCin_all-->0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12]=CONST(M*1e-9/60*23.34)
+
+;qVOCin_all-->CO
+;k[qVOCin_all-->CO]=CONST(1./60)
+
+q_C2H4=input(Q_C2H4)
+q_C2H4-->C2H4
+k[q_C2H4-->C2H4]=CONST(M*1e-9/60*11)   ; MFC2 at 0.05 lpm for a 10% bottle for 36s
+;08:57 X R.T. CHANGE: Injection of 11 ppbv of ethylene using MFC2 at 0.05 lpm for a 10% bottle for 36 s
+
+q_C3H6=input(Q_C3H6)
+q_C3H6-->C3H6
+k[q_C3H6-->C3H6]=CONST(M*1e-9/60*6)    ; MFC2 at 0.25 lpm for a 1% bottle for 40s
+;09:12 X R.T. CHANGE: Injection of 6 ppbv of propene using MFC2 at 0.25 lpm for a 1% bottle for 40 s
+
+q_TBUT2ENE=input(Q_TBUT2ENE)
+q_TBUT2ENE-->TBUT2ENE
+k[q_TBUT2ENE-->TBUT2ENE]=CONST(M*1e-9/60*1)   ; MFC2 at 0.25 lpm for a 1% bottle for 40s
+;09:26 X G.G. CHANGE: Injection of 1 ppbv of trans-2-butene using 0.32 ml injection for around 1 ppbv from a pure bottle
+
+q_C4H6=input(Q_C4H6)
+q_C4H6-->C4H6
+k[q_C4H6-->C4H6]=CONST(M*1e-9/60*1.16)   ; 0.32 ml injection for around 1 ppbv from a pure bottle
+;09:32 X G.G. CHANGE: Injection of 1 ppbv of 1,3-butadiene using 0.32 ml injection for around 1 ppbv from a pure bottle
+
+q_MEPROPENE=input(Q_MEPROPENE)
+q_MEPROPENE-->MEPROPENE
+k[q_MEPROPENE-->MEPROPENE]=CONST(M*1e-9/60*1.5)   ; MFC2 at 0.25 lpm for a 1% bottle for 50s
+;09:45 X R.T. CHANGE: Injection of 1.5 ppbv of isobutene using MFC2 at 0.25 lpm for a 1% bottle for 50 s
+
+;qVOC2-->NO+XNOy
+;k[qVOC2-->NO+XNOy]=CONST(M*1e-9/60*0.01)
+
+TROE=FUNCTION[ M*(%1)*(T/300.)@((-1.)*(%2))/(1.+M*(%1)*(T/300.)@((-1.)*(%2))/((%3)*(T/300.)@((-1.)*(%4))))*0.6@(1./(1.+(log10(M*(%1)*(T/300.)@((-1.)*(%2))/((%3)*(T/300.)@((-1.)*(%4)))))**2)) ]
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+X_limonene+DIL-->
+k[X_limonene+DIL-->]=CONST(DILUTE)
+
+X_limonene-->
+k[X_limonene-->]=CONST(1/(3600*20))
+
+gamma_limonene=CONST(0.25)
+k[LIMONENE+O3-->LIMOOA]=CONST(2.80D-15*EXP(-770/(T))*0.730*(1-gamma_limonene))
+k[LIMONENE+O3-->LIMOOB]=CONST(2.80D-15*EXP(-770/(T))*0.270*(1-gamma_limonene))
+LIMONENE+O3-->SOA_LIM_O3
+k[LIMONENE+O3-->SOA_LIM_O3]=CONST(2.80D-15*EXP(-770/(T))*gamma_limonene)
+
+k[LIMONENE+OH-->LIMAO2]=CONST(4.28D-11*EXP(401/(T))*0.408*(1-gamma_limonene))
+k[LIMONENE+OH-->LIMBO2]=CONST(4.28D-11*EXP(401/(T))*0.222*(1-gamma_limonene))
+k[LIMONENE+OH-->LIMCO2]=CONST(4.28D-11*EXP(401/(T))*0.370*(1-gamma_limonene))
+LIMONENE+OH-->SOA_LIM_OH
+k[LIMONENE+OH-->SOA_LIM_OH]=CONST(4.28D-11*EXP(401/(T))*gamma_limonene)
+
+k[LIMONENE+NO3-->NLIMO2]=CONST(1.22D-11*(1-gamma_limonene))
+LIMONENE+NO3-->SOA_LIM_NO3
+k[LIMONENE+NO3-->SOA_LIM_NO3]=CONST(1.22D-11*gamma_limonene)
+
+gamma_dodecane=CONST(0.12)
+k[NC12H26+OH-->DDECO2]=CONST(1.39D-11*(1-gamma_dodecane)/2.2)
+NC12H26+OH-->SOA_NC12H26_OH
+k[NC12H26+OH-->SOA_NC12H26_OH]=CONST(1.39D-11*gamma_dodecane/2.2)
+SOA_NC12H26_OH-->
+k[SOA_NC12H26_OH-->]=CONST(1/(3600*SOA_decay))
+SOA_NC12H26_OH+DIL-->
+k[SOA_NC12H26_OH+DIL-->]=CONST(DILUTE)
+
+SOA_decay=CONST(10)
+SOA_LIM_O3-->
+k[SOA_LIM_O3-->]=CONST(1/(3600*SOA_decay))
+SOA_LIM_O3+DIL-->
+k[SOA_LIM_O3+DIL-->]=CONST(DILUTE)
+
+SOA_LIM_OH-->
+k[SOA_LIM_OH-->]=CONST(1/(3600*SOA_decay))
+SOA_LIM_OH+DIL-->
+k[SOA_LIM_OH+DIL-->]=CONST(DILUTE)
+
+SOA_LIM_NO3-->
+k[SOA_LIM_NO3-->]=CONST(1/(3600*SOA_decay))
+SOA_LIM_NO3+DIL-->
+k[SOA_LIM_NO3+DIL-->]=CONST(DILUTE)
+
+SOA_seed-->
+k[SOA_seed-->]=CONST(1/(3600*SOA_decay))
+SOA_seed+DIL-->
+k[SOA_seed+DIL-->]=CONST(DILUTE)
+
+Q_seed=input(Q_seed)
+Q_seed-->SOA_seed
+k[Q_seed-->SOA_seed]=CONST(M*1e-9/60/(136*2.3/48*1.97)*0.57)
+INITIAL[SOA_seed]=CONST(M*1e-9/(136*2.3/48*1.97)*0.0) 
+
+SOA=CONST(SOA_seed+SOA_LIM_NO3+SOA_LIM_O3+SOA_LIM_OH)
+
+KMT17   = CONST(0)
+
+
+;2024-07-10.VOC-Mix.data
+;  VOCin_all-->0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12
+;k[VOCin_all-->0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12]=CONST(1./60)
+;ppb injiziert selected  23.3404 
+;kOH injiziert selected  5.52268 
+;ppb injiziert all       43.8404 
+;kOH injiziert all       17.0559 
+;µL  injiziert           32.0000 
+;mg  injiziert liq+sol   24.5594 
+;µg/m³ VOC injiziert     89.3070 
+;µL  total liquids       30.6100 
+;mg  total list          23.4926 
+;mittlere Dichte g/mL    0.767482
+;acetaldehyde            CH3CHO     l  1.420µL  1.119mg  2.163ppb   0.81s-1  4.76%   selected
+;benzene                 BENZENE    l  1.480µL  1.296mg  1.413ppb   0.04s-1  0.25%   selected
+;ethanol                 C2H5OH     l  3.880µL  3.061mg  5.659ppb   0.45s-1  2.66%   selected
+;n-dodecane              NC12H26    l  9.130µL  6.847mg  3.423ppb   1.19s-1  6.97%   selected
+;toluene                 TOLUENE    l  2.610µL  2.263mg  2.091ppb   0.29s-1  1.73%   selected
+;p-xylene                PXYL       l  1.490µL  1.283mg  1.029ppb   0.37s-1  2.16%   selected
+;o-xylene                OXYL       l  1.080µL  0.950mg  0.762ppb   0.27s-1  1.60%   selected
+;m-xylene                MXYL       l  2.290µL  1.969mg  1.580ppb   0.91s-1  5.35%   selected
+;1,2,4-trimethylbenzene  TM124B     l  0.810µL  0.713mg  0.505ppb   0.41s-1  2.41%   selected
+;cis-2-pentene           CPENT2ENE  l  0.270µL  0.177mg  0.215ppb   0.35s-1  2.06%   selected
+;2-methylbutane          IC5H12     l  6.150µL  3.813mg  4.500ppb   0.42s-1  2.44%   selected
+;isobutene               MEPROPENE  g  1.292µL  1.033mg  1.500ppb   1.92s-1  11.26%          
+;propene                 C3H6       g  3.875µL  3.100mg  6.000ppb   4.27s-1  25.06%          
+;ethylene                C2H4       g  4.735µL  3.788mg  11.000ppb  2.15s-1  12.62%          
+;1,3-butadiene           C4H6       g  0.830µL  0.664mg  1.000ppb   1.59s-1  9.29%           
+;trans-2-butene          TBUT2ENE   g  0.861µL  0.689mg  1.000ppb   1.60s-1  9.38% 

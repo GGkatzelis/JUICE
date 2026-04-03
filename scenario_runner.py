@@ -180,6 +180,48 @@ class ScenarioRunner:
             products = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
             self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
 
+        # --- IDL chamber_source_reactions: SHONO/SHCHO (zeroth-order) & H2O dark source ---
+        # SHONO/SHCHO are FACSIMILE CONST pseudo-species: their values are already folded
+        # into the rate expression, so reactants are empty (zeroth-order production).
+        # H2O --> HONO has H2O as a real env reactant (first-order, from env_map).
+        mapped_up_set = {k.upper() for k in self.cfg.get('env_map', {})}
+        for r in self.cfg.get('chamber_source_reactions', []):
+            if not r.get('products') or not r.get('rate'):
+                continue
+            reacts_str = r.get('reactants', '')
+            reactants = [x.strip().upper() for x in reacts_str.split('+') if x.strip()] if reacts_str.strip() else []
+            products = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
+            # Only add to all_species if NOT an env-map entry (H2O etc. are env, not ODE)
+            for s in reactants:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s.strip())
+                if clean_s and not clean_s[0].isdigit() and clean_s not in mapped_up_set and clean_s not in self.ctx_data:
+                    all_species.add(clean_s)
+            for s in products:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s.strip())
+                if clean_s and not clean_s[0].isdigit():
+                    all_species.add(clean_s)
+            self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
+
+        # --- IDL injection_reactions: switch-gated zeroth-order sources + chain reactions ---
+        for r in self.cfg.get('injection_reactions', []):
+            if not r.get('products') or not r.get('rate'):
+                continue
+            reacts_str = r.get('reactants', '')
+            reactants = [x.strip().upper() for x in reacts_str.split('+') if x.strip()] if reacts_str.strip() else []
+            products_str = r['products']
+            products = [x.strip().upper() for x in products_str.split('+') if x.strip()]
+            for s in reactants:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s.strip())
+                # Skip ENZ switch columns (they are constrained inputs in ctx_data,
+                # not ODE species; the gating is already in the rate expression).
+                if clean_s and not clean_s[0].isdigit() and clean_s not in self.ctx_data:
+                    all_species.add(clean_s)
+            for s in products:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s.strip())
+                if clean_s and not clean_s[0].isdigit():
+                    all_species.add(clean_s)
+            self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
+
         # --- TwoReaction injections: virtual intermediate species + first-order decay reactions ---
         # Each TwoReaction burst gets three internal species:
         #   _INJ1_<uid>  — fast buffer tank  (fraction fast_frac of total)

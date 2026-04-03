@@ -1,0 +1,23 @@
+; saphir.walldep.incl
+; Erstellt von Cornelia Richter
+; Erneuert von F.Rohrer
+
+; Lebensdauer gegen Wandverlust ungefähr = 3 Tage
+; DV = 1/(3Tage * 24 Stunden/Tag * 3600 Sekunden/Stunde) = 1/(3*24*3600) s^-1
+DV     = CONST(3.858e-06)
+DVO3 = CONST(1.0/30.0/3600.0)
+WALLDEP = CONST(1.)
+;
+HNO3 --> NA
+HONO --> NA
+H2O2 -->
+HO2  -->
+O3   -->
+N2O5 --> 2*NA
+
+k[HNO3 --> NA] = CONST( WALLDEP * DV )
+k[HONO --> NA] = CONST( WALLDEP * DV )
+k[H2O2 --> ] = CONST( WALLDEP * DV )
+k[HO2  --> ] = CONST( WALLDEP * DV )
+k[O3   --> ] = CONST( WALLDEP * DV )
+k[N2O5 --> 2*NA] = CONST( WALLDEP * DV )

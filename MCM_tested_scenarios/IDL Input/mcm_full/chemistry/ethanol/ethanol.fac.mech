@@ -1,0 +1,106 @@
+ C2H5OH  +  OH  -->  C2H5O 
+ C2H5OH  +  OH  -->  CH3CHO  +  HO2 
+ C2H5OH  +  OH  -->  HOCH2CH2O2 
+ C2H5O  -->  CH3CHO  +  HO2 
+ CH3CHO + hv -->  CH3O2 + HO2 + CO 
+ NO3  +  CH3CHO  -->  HNO3  +  CH3CO3 
+ OH  +  CH3CHO  -->  CH3CO3 
+ OH  +  CH3CHO  -->  HCOCH2O2 
+ HOCH2CH2O2  +  HO2  -->  HYETHO2H 
+ HOCH2CH2O2  +  NO  -->  ETHOHNO3 
+ HOCH2CH2O2  +  NO  -->  HOCH2CH2O  +  NO2 
+ HOCH2CH2O2  +  NO3  -->  HOCH2CH2O  +  NO2 
+ HOCH2CH2O2  -->  ETHGLY
+ HOCH2CH2O2  --> HOCH2CH2O 
+ HOCH2CH2O2  --> HOCH2CHO 
+ CH3O2  +  HO2  --> CH3OOH 
+ CH3O2  +  HO2  --> HCHO 
+ CH3O2  +  NO  -->  CH3NO3 
+ CH3O2  +  NO  -->  CH3O  +  NO2 
+ CH3O2  +  NO2  -->  CH3O2NO2 
+ CH3O2  +  NO3  -->  CH3O  +  NO2 
+ CH3O2  -->  CH3O 
+ CH3O2  -->  CH3OH 
+ CH3O2  -->  HCHO 
+ CH3CO3  +  HO2  -->  CH3CO2H  +  O3 
+ CH3CO3  +  HO2  -->  CH3CO3H 
+ CH3CO3  +  HO2  -->  CH3O2  +  OH 
+ CH3CO3  +  NO  -->  NO2  +  CH3O2 
+ CH3CO3  +  NO2  -->  PAN 
+ CH3CO3  +  NO3  -->  NO2  +  CH3O2 
+ CH3CO3  -->  CH3CO2H 
+ CH3CO3  -->  CH3O2 
+ HCOCH2O2  +  HO2  -->  HCOCH2OOH 
+ HCOCH2O2  +  NO  -->  NO2  +  HCOCH2O 
+ HCOCH2O2  +  NO3  -->  HCOCH2O  +  NO2 
+ HCOCH2O2  -->  GLYOX 
+ HCOCH2O2  -->  HCOCH2O 
+ HCOCH2O2  -->  HOCH2CHO 
+ HYETHO2H  +  OH  -->  HOCH2CH2O2 
+ HYETHO2H  +  OH  -->  HOCH2CHO  +  OH 
+ HYETHO2H + hv -->  HOCH2CH2O + OH 
+ ETHOHNO3  +  OH  -->  HOCH2CHO  +  NO2 
+ HOCH2CH2O  -->  HO2  +  HCHO  +  HCHO 
+ HOCH2CH2O  -->  HO2  +  HOCH2CHO 
+ ETHGLY  +  OH  -->  HOCH2CHO  +  HO2 
+ HOCH2CHO  +  NO3  -->  HOCH2CO3  +  HNO3 
+ HOCH2CHO  +  OH  -->  GLYOX  +  HO2 
+ HOCH2CHO  +  OH  -->  HOCH2CO3 
+ HOCH2CHO + hv -->  HO2 + HCHO + HO2 + CO 
+ CH3OOH + hv -->  CH3O + OH 
+ OH  +  CH3OOH  -->  CH3O2 
+ OH  +  CH3OOH  -->  HCHO  +  OH 
+ HCHO + hv -->  CO + HO2 + HO2 
+ HCHO + hv -->  H2 + CO 
+ NO3  +  HCHO  -->  HNO3  +  CO  +  HO2 
+ OH  +  HCHO  -->  HO2  +  CO 
+ CH3NO3 + hv -->  CH3O + NO2 
+ OH  +  CH3NO3  -->  HCHO  +  NO2 
+ CH3O  -->  HCHO  +  HO2 
+ CH3O2NO2  -->  CH3O2  +  NO2 
+ CH3OH  +  OH  -->  HO2  +  HCHO 
+ CH3CO2H  +  OH  -->  CH3O2 
+ CH3CO3H  +  OH  -->  CH3CO3 
+ CH3CO3H + hv -->  CH3O2 + OH 
+ PAN  +  OH  -->  HCHO  +  CO  +  NO2 
+ PAN  -->  CH3CO3  +  NO2 
+ HCOCH2OOH  +  OH  -->  GLYOX  +  OH 
+ HCOCH2OOH  +  OH  -->  HCOCH2O2 
+ HCOCH2OOH + hv -->  HCOCH2O + OH 
+ HCOCH2OOH + hv -->  HO2 + CO + HCHO + OH 
+ HCOCH2O  -->  HCHO  +  CO  +  HO2 
+ GLYOX + hv -->  CO + CO + H2 
+ GLYOX + hv -->  CO + CO + HO2 + HO2 
+ GLYOX + hv -->  HCHO + CO 
+ NO3  +  GLYOX  -->  HCOCO  +  HNO3 
+ OH  +  GLYOX  -->  HCOCO 
+ HOCH2CO3  +  HO2  -->  HO2  +  HCHO  +  OH 
+ HOCH2CO3  +  HO2  -->  HOCH2CO2H  +  O3 
+ HOCH2CO3  +  HO2  -->  HOCH2CO3H 
+ HOCH2CO3  +  NO  -->  NO2  +  HO2  +  HCHO 
+ HOCH2CO3  +  NO2  -->  PHAN 
+ HOCH2CO3  +  NO3  -->  NO2  +  HO2  +  HCHO 
+ HOCH2CO3  -->  HCHO  +  HO2 
+ HOCH2CO3  -->  HOCH2CO2H 
+ HCOCO  -->  CO  +  CO  +  HO2 
+ HCOCO  -->  CO  +  CO  +  HO2 
+ HCOCO  -->  CO  +  OH 
+ HCOCO  -->  HCOCO3 
+ HOCH2CO2H  +  OH  -->  HCHO  +  HO2 
+ HOCH2CO3H  +  OH  -->  HOCH2CO3 
+ HOCH2CO3H + hv -->  HCHO + HO2 + OH 
+ PHAN  +  OH  -->  HCHO  +  CO  +  NO2 
+ PHAN  -->  HOCH2CO3  +  NO2 
+ HCOCO3  +  HO2  -->  HCOCO2H  +  O3 
+ HCOCO3  +  HO2  -->  HCOCO3H 
+ HCOCO3  +  HO2  -->  HO2  +  CO  +  OH 
+ HCOCO3  +  NO  -->  HO2  +  CO  +  NO2 
+ HCOCO3  +  NO2  -->  HO2  +  CO  +  NO3 
+ HCOCO3  +  NO3  -->  HO2  +  CO  +  NO2 
+ HCOCO3  -->  CO  +  HO2 
+ HCOCO3  -->  HCOCO2H 
+ HCOCO2H + hv -->  HO2 + HO2 + CO 
+ OH  +  HCOCO2H  -->  CO  +  HO2 
+ HCOCO3H + hv -->  HO2 + CO + OH 
+ HCOCO3H + hv -->  HO2 + CO + OH 
+ OH  +  HCOCO3H  -->  HCOCO3 

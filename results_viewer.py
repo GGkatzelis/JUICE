@@ -329,6 +329,42 @@ class BudgetEngine:
             prods = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
             self.mechanism.reactions.append(Reaction(reacs, prods, r['rate']))
 
+        # IDL chamber_source_reactions (SHONO/SHCHO/H2O)
+        for r in self.cfg.get('chamber_source_reactions', []):
+            if not r.get('products') or not r.get('rate'):
+                continue
+            reacts_str = r.get('reactants', '')
+            reacs = [x.strip().upper() for x in reacts_str.split('+') if x.strip()] if reacts_str.strip() else []
+            prods = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
+            self.mechanism.reactions.append(Reaction(reacs, prods, r['rate']))
+
+        # IDL injection_reactions
+        enz_cols_upper = set()
+        enz_path_rv = next((os.path.join(self.root, f) for f in os.listdir(self.root)
+                            if f.lower().endswith('.enz') and 'kammer' in f.lower()), None)
+        if enz_path_rv and os.path.exists(enz_path_rv):
+            try:
+                with open(enz_path_rv, 'r', encoding='latin-1') as _fh:
+                    for _line in _fh:
+                        if _line.startswith('COLUMN'):
+                            _parts = _line.split('=', 1)
+                            _name = _parts[1].split('/')[0].split('(')[0].strip().upper()
+                            enz_cols_upper.add(_name)
+                        if '&&' in _line:
+                            break
+            except Exception:
+                pass
+        for r in self.cfg.get('injection_reactions', []):
+            if not r.get('products') or not r.get('rate'):
+                continue
+            reacts_str = r.get('reactants', '')
+            reacs_raw = [x.strip().upper() for x in reacts_str.split('+') if x.strip()] if reacts_str.strip() else []
+            # Skip ENZ switch columns as reactants — they are constrained inputs, not ODE species
+            reacs = [s for s in reacs_raw
+                     if re.sub(r'^[\d\.]+\s*\*\s*', '', s) not in enz_cols_upper]
+            prods = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
+            self.mechanism.reactions.append(Reaction(reacs, prods, r['rate']))
+
         # Excluded reactions
         excl = self.cfg.get('excluded_reactions', [])
         if excl:
