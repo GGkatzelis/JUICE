@@ -29,7 +29,8 @@ class EasyParser:
         # content = re.sub(r';.*', '', content) # DEACTIVATED: Keep comments for line-by-line parsing
         def include_replacer(match):
             return self.preprocess(match.group(1).strip())
-        content = re.sub(r'#include\s+["\']?([^"\'\s]+)["\']?', include_replacer, content)
+        # Only match #include that is NOT preceded by a semicolon (i.e. not commented out).
+        content = re.sub(r'(?m)^[^;]*#include\s+["\']?([^"\'\s]+)["\']?', include_replacer, content)
         content = re.sub(r'\$\s*\n', '', content) 
         return content
 

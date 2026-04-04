@@ -405,12 +405,14 @@ class ScenarioRunner:
                 expr = expr.replace('@', '**') 
                 expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
                 expr = re.sub(r'J\((\d+)\)', r'J\1', expr)
-                try: 
+                try:
                     rxn.safe_expr = compile(expr, '<string>', 'eval')
                     eval(rxn.safe_expr, globals(), test_ctx)
-                except Exception as e: 
+                    rxn.rate_str_clean = expr
+                except Exception as e:
                     failed_rxns.append((expr, str(e)))
                     rxn.safe_expr = compile('0.0', '<string>', 'eval')
+                    rxn.rate_str_clean = '0.0'
 
                 rxn.reactants_parsed = []
                 rxn.reactants_env = []  
@@ -436,6 +438,46 @@ class ScenarioRunner:
                 print(f"[WARNING] {len(failed_rxns)} reactions failed to evaluate and will be DEAD!")
             else:
                 print(">>> [DIAGNOSTICS] All chemical equations evaluated successfully!")
+
+        # ── ODE HOT-PATH PRECOMPILATION ──────────────────────────────────────────────
+        # Pre-collect mcm_kinetics functions once — avoids dir()+getattr() every ODE call
+        _kmt_funcs   = [(n, getattr(mcm_kinetics, n)) for n in dir(mcm_kinetics)
+                        if not n.startswith('_') and n.upper().startswith('KMT')]
+        _other_funcs = [(n, getattr(mcm_kinetics, n)) for n in dir(mcm_kinetics)
+                        if not n.startswith('_') and not n.upper().startswith('KMT')]
+
+        # Cache species name list for fast ctx update (avoids repeated attribute lookup)
+        _species_names = list(self.solver.species)
+
+        # Generate a single compiled function that evaluates all reaction rate constants
+        # in one call.  Unique names are unpacked from ctx into locals once (one dict
+        # lookup per name, not per reaction), then all expressions run as plain Python
+        # bytecode — eliminates N_reactions × eval() dispatch overhead per ODE step.
+        _rate_co_names = set()
+        for rxn in self.mechanism.reactions:
+            _rate_co_names.update(rxn.safe_expr.co_names)
+
+        _fn_lines = ["def _compute_rates(_ctx, _k):"]
+        for name in sorted(_rate_co_names):
+            _fn_lines.append(f"    {name} = _ctx['{name}']")
+        for i, rxn in enumerate(self.mechanism.reactions):
+            _fn_lines.append(f"    _k[{i}] = {rxn.rate_str_clean}")
+        _fn_src = "\n".join(_fn_lines)
+
+        _batch_ns = {
+            '__builtins__': {'abs': abs, 'max': max, 'min': min, 'float': float},
+            'exp': np.exp, 'EXP': np.exp,
+            'log': np.log,  'LOG': np.log,
+            'log10': np.log10, 'LOG10': np.log10,
+            'cos': np.cos,  'sin': np.sin,
+            'sqrt': np.sqrt, 'SQRT': np.sqrt,
+            'np': np,
+        }
+        exec(_fn_src, _batch_ns)
+        _compute_rates = _batch_ns['_compute_rates']
+        _k_buf = np.zeros(len(self.mechanism.reactions))
+        print(f">>> [ODE] Precompiled batch rate function: {len(self.mechanism.reactions)} reactions, "
+              f"{len(_rate_co_names)} unique rate vars")
 
         cont_sources = []
         for s in self.cfg.get('continuous_sources', []):
@@ -596,16 +638,12 @@ class ScenarioRunner:
             # Load mcm_kinetics: COMPRC gets loaded as a direct callable (no KMT wrapping).
             # KMT lambdas are loaded but will be overwritten by COMPRC-based var_assignments
             # which produce correct scalar values at the current T and M.
-            for func_name in dir(mcm_kinetics):
-                if not func_name.startswith('_'):
-                    func = getattr(mcm_kinetics, func_name)
-                    if func_name.startswith('KMT'):
-                        ctx[func_name.upper()] = lambda *args, f=func: f(*args, T_now, M_now)
-                    else:
-                        ctx[func_name.upper()] = func  # COMPRC loaded here as a true callable
+            for func_name, func in _kmt_funcs:
+                ctx[func_name.upper()] = lambda *args, f=func, _T=T_now, _M=M_now: f(*args, _T, _M)
+            for func_name, func in _other_funcs:
+                ctx[func_name.upper()] = func
 
-            for i, name in enumerate(self.solver.species):
-                ctx[name] = float(y[i])
+            ctx.update(zip(_species_names, y.tolist()))
 
             # Re-apply constrained env_map species AFTER the species loop so that
             # measured values (e.g. H2O, NO, NO2) always override the ODE state in
@@ -685,19 +723,21 @@ class ScenarioRunner:
             if ctx.get('J11', 0.0) == 0.0 and ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R']
             if ctx.get('J12', 0.0) == 0.0 and ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M']
 
-            for rxn in self.mechanism.reactions:
-                try: 
-                    k = eval(rxn.safe_expr, globals(), ctx)
-                except:
-                    k = 0.0
+            try:
+                _compute_rates(ctx, _k_buf)
+            except Exception:
+                # Fallback: individual eval() per reaction (handles edge cases gracefully)
+                for i, rxn in enumerate(self.mechanism.reactions):
+                    try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx)
+                    except: _k_buf[i] = 0.0
+            np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
 
-                if callable(k):
-                    k = 0.0  # KMT lambda was not overwritten by var_assignments — config error
+            for i, rxn in enumerate(self.mechanism.reactions):
+                k = float(_k_buf[i])
                 if k != 0.0:
                     v = k
                     for r in rxn.reactants_parsed: v *= (y[r['idx']] ** r['coeff'])
-                    for r in rxn.reactants_env: v *= (ctx[r['name']] ** r['coeff']) 
-                    
+                    for r in rxn.reactants_env: v *= (ctx[r['name']] ** r['coeff'])
                     for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                     for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
@@ -746,7 +786,7 @@ class ScenarioRunner:
 
             return dydt
 
-        solver_method = 'Radau'
+        solver_method = 'BDF'
         step_limit = min(min_dur / 2.0, 60.0)
 
         # --- BUILD JACOBIAN SPARSITY PATTERN ---
@@ -803,19 +843,91 @@ class ScenarioRunner:
         self.eval_count = 0
         self.real_start_time = time.time()
 
-        print(f">>> [DEBUG] Solving for {len(self.mechanism.species)} species using {solver_method} (Max Step: {step_limit}s)...")
-        self.sol = solve_ivp(
-            system_ode,
-            [self.t_span[0], self.t_span[-1]],
-            y0,
-            method=solver_method,
-            t_eval=self.t_span,
-            max_step=step_limit,
-            rtol=1e-3,
-            atol=1e4,
-            jac_sparsity=sparsity_csr
-        )
-        if not self.sol.success: print(f"\n[WARNING] ODE Solver stopped early!\nReason: {self.sol.message}")
+        # --- DETECT HV DISCONTINUITY EVENTS ---
+        # BDF uses polynomial history from past steps. When HV switches 0↔1 (roof
+        # opens/closes), photolysis rates jump discontinuously and the stored history
+        # becomes inconsistent. We detect these transition times and split the
+        # integration at each one, re-initialising the solver with a clean y0 so BDF
+        # always starts from a smooth region.
+        hv_func = self.ctx_data.get('HV')
+        event_times = []
+        if hv_func is not None:
+            # Sample HV on a fine grid to find 0↔1 transitions
+            hv_probe = np.linspace(self.t_start, self.t_end, 5000)
+            hv_vals  = np.array([float(hv_func(t)) for t in hv_probe])
+            for i in range(1, len(hv_probe)):
+                if (hv_vals[i - 1] < 0.5) != (hv_vals[i] < 0.5):
+                    # Bisect to find the exact crossing time within ~1s
+                    lo, hi = hv_probe[i - 1], hv_probe[i]
+                    for _ in range(10):
+                        mid = 0.5 * (lo + hi)
+                        if (float(hv_func(lo)) < 0.5) != (float(hv_func(mid)) < 0.5):
+                            hi = mid
+                        else:
+                            lo = mid
+                    event_times.append(0.5 * (lo + hi))
+
+        if event_times:
+            print(f">>> [SOLVER] {len(event_times)} HV transition(s) detected — splitting integration for clean BDF restart.")
+        else:
+            print(f">>> [SOLVER] No HV transitions detected.")
+
+        # Build list of (t0, t1) segment boundaries
+        boundaries = sorted(set([self.t_start] + event_times + [self.t_end]))
+        # Remove duplicate / too-close boundaries
+        boundaries = [boundaries[0]] + [b for i, b in enumerate(boundaries[1:], 1)
+                                         if b - boundaries[i - 1] > 1.0]
+
+        print(f">>> [DEBUG] Solving {len(self.mechanism.species)} species with {solver_method} "
+              f"in {len(boundaries)-1} segment(s) (max_step={step_limit}s)...")
+
+        # Solve each segment, passing the final state as y0 for the next
+        seg_t_list, seg_y_list = [], []
+        y_seg = y0.copy()
+        for seg_idx, (t0, t1) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+            # Extract t_eval points that fall within this segment
+            mask = (self.t_span >= t0) & (self.t_span <= t1)
+            t_eval_seg = self.t_span[mask]
+            # Always include the segment endpoints so the final y is exact
+            if len(t_eval_seg) == 0 or t_eval_seg[0] > t0 + 1.0:
+                t_eval_seg = np.concatenate([[t0], t_eval_seg])
+            if t_eval_seg[-1] < t1 - 1.0:
+                t_eval_seg = np.concatenate([t_eval_seg, [t1]])
+            t_eval_seg = np.unique(t_eval_seg)
+
+            seg_sol = solve_ivp(
+                system_ode,
+                [t0, t1],
+                y_seg,
+                method=solver_method,
+                t_eval=t_eval_seg,
+                max_step=step_limit,
+                rtol=1e-3,
+                atol=1e4,
+                jac_sparsity=sparsity_csr
+            )
+
+            if not seg_sol.success:
+                print(f"\n[WARNING] Segment {seg_idx+1}/{len(boundaries)-1} "
+                      f"({t0:.0f}–{t1:.0f}s) stopped early: {seg_sol.message}")
+
+            # Collect results (skip first point of subsequent segments to avoid duplicates)
+            skip = 1 if seg_idx > 0 and len(seg_t_list) > 0 else 0
+            seg_t_list.append(seg_sol.t[skip:])
+            seg_y_list.append(seg_sol.y[:, skip:])
+            y_seg = seg_sol.y[:, -1]
+
+        # Stitch segments into a single solution object
+        all_t = np.concatenate(seg_t_list)
+        all_y = np.concatenate(seg_y_list, axis=1)
+
+        # Wrap in a namespace that _export_results expects (sol.t and sol.y)
+        class _SolResult:
+            pass
+        self.sol = _SolResult()
+        self.sol.t = all_t
+        self.sol.y = all_y
+        self.sol.success = True
 
     def _export_results(self):
         print("\n>>> [DATA] Exporting results to CSV...")
