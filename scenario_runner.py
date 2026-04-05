@@ -334,21 +334,28 @@ class ScenarioRunner:
                 print(f"  [WARNING] Could not compile O1D PSS expression: {e}")
 
         # --- PSS species: ground-state O atom, lifetime ~µs (O+O2+M→O3 dominates sink).
-        # Production: NO2+hv → NO+O  (rate = J4 = JNO2)
-        # Sink:       O+O2+M → O3     (k = (5.6e-34*N2 + 6.0e-34*O2) * (T/300)^-2.6 * O2)
-        # PSS: [O] = J4*[NO2] / k_sink   (minor sinks O+NO, O+NO2 neglected, <0.1% of total)
+        # Production sources:
+        #   J4 (JNO2): NO2 + hv → NO + O
+        #   J2:        O3  + hv → O          ← must include to preserve O3 ↔ O recycling
+        #   J6:        NO3 + hv → NO2 + O
+        # Sink: O + O2 + M → O3   (k = (5.6e-34*N2 + 6.0e-34*O2) * (T/300)^-2.6 * O2)
+        # PSS: [O] = (J4*NO2 + J2*O3 + J6*NO3) / k_sink
+        # NOTE: J2*O3 must be included — it cancels the O3 + hv → O consumption in the O3 ODE.
+        #       Omitting it breaks the O3 budget by ~J2*O3 ≈ 2e-5 * 1e12 = 2e7 molec/cm³/s.
         if 'O' in all_species:
             all_species.discard('O')
             self._pss_species.add('O')
             _o_pss = (
-                "np.maximum(JNO2, 0.0) * np.maximum(NO2, 0.0) / "
+                "(np.maximum(JNO2, 0.0)*np.maximum(NO2, 0.0)"
+                " + np.maximum(J2, 0.0)*np.maximum(O3, 0.0)"
+                " + np.maximum(J6, 0.0)*np.maximum(NO3, 0.0)) / "
                 "np.maximum("
                 "(5.6e-34 * N2 + 6.0e-34 * O2) * ((T / 300.0) ** -2.6) * O2"
                 ", 1e-30)"
             )
             try:
                 self.var_assignments.append(('O', compile(_o_pss, '<O_pss>', 'eval')))
-                print("  [PSS] O atom removed from ODE state → J4·NO2/k_O+O2+M analytical expression added")
+                print("  [PSS] O atom removed from ODE state → (J4·NO2+J2·O3+J6·NO3)/k_O+O2+M analytical expression added")
             except Exception as e:
                 print(f"  [WARNING] Could not compile O atom PSS expression: {e}")
 
@@ -824,15 +831,22 @@ class ScenarioRunner:
                             2.14e-10 * _h2o_now)
                 ctx['O1D'] = max(_j1_now, 0.0) * max(_o3_now, 0.0) / max(_kq_now, 1e-30)
 
-            # --- Recompute O atom PSS (lifetime ~µs, production=J4*NO2, sink=O+O2+M) ---
+            # --- Recompute O atom PSS (production = J4*NO2 + J2*O3 + J6*NO3, sink=O+O2+M) ---
             if 'O' in _pss_species_set:
                 _j4_now  = float(ctx.get('J4',   ctx.get('JNO2', 0.0)))
+                _j2_now  = float(ctx.get('J2',   0.0))   # O3 + hv → O
+                _j6_now  = float(ctx.get('J6',   0.0))   # NO3 + hv → NO2 + O
                 _no2_now = float(ctx.get('NO2',  0.0))
+                _o3_now  = float(ctx.get('O3',   0.0))
+                _no3_now = float(ctx.get('NO3',  0.0))
                 _t_now   = float(ctx.get('T',    298.15))
                 _n2_now  = float(ctx.get('N2',   0.7809 * M_now))
                 _o2_now  = float(ctx.get('O2',   0.2095 * M_now))
                 _ks_now  = (5.6e-34 * _n2_now + 6.0e-34 * _o2_now) * ((_t_now / 300.0) ** -2.6) * _o2_now
-                ctx['O'] = max(_j4_now, 0.0) * max(_no2_now, 0.0) / max(_ks_now, 1e-30)
+                _o_prod  = (max(_j4_now,0.0)*max(_no2_now,0.0) +
+                            max(_j2_now,0.0)*max(_o3_now,0.0) +
+                            max(_j6_now,0.0)*max(_no3_now,0.0))
+                ctx['O'] = _o_prod / max(_ks_now, 1e-30)
 
             try:
                 _compute_rates(ctx, _k_buf)
@@ -1032,13 +1046,20 @@ class ScenarioRunner:
 
             # 9c. Recompute O atom PSS (Jacobian must match system_ode)
             if 'O' in _pss_species_set:
-                _j4j  = float(ctx_j.get('J4',  ctx_j.get('JNO2', 0.0)))
-                _no2j = float(ctx_j.get('NO2', 0.0))
-                _tj   = float(ctx_j.get('T',   298.15))
-                _n2j  = float(ctx_j.get('N2',  0.7809 * M_now))
-                _o2j  = float(ctx_j.get('O2',  0.2095 * M_now))
-                _ksj  = (5.6e-34 * _n2j + 6.0e-34 * _o2j) * ((_tj / 300.0) ** -2.6) * _o2j
-                ctx_j['O'] = max(_j4j, 0.0) * max(_no2j, 0.0) / max(_ksj, 1e-30)
+                _j4j   = float(ctx_j.get('J4',  ctx_j.get('JNO2', 0.0)))
+                _j2j   = float(ctx_j.get('J2',  0.0))
+                _j6j   = float(ctx_j.get('J6',  0.0))
+                _no2j  = float(ctx_j.get('NO2', 0.0))
+                _o3j   = float(ctx_j.get('O3',  0.0))
+                _no3j  = float(ctx_j.get('NO3', 0.0))
+                _tj    = float(ctx_j.get('T',   298.15))
+                _n2j   = float(ctx_j.get('N2',  0.7809 * M_now))
+                _o2j   = float(ctx_j.get('O2',  0.2095 * M_now))
+                _ksj   = (5.6e-34 * _n2j + 6.0e-34 * _o2j) * ((_tj / 300.0) ** -2.6) * _o2j
+                _o_prodj = (max(_j4j,0.0)*max(_no2j,0.0) +
+                            max(_j2j,0.0)*max(_o3j,0.0) +
+                            max(_j6j,0.0)*max(_no3j,0.0))
+                ctx_j['O'] = _o_prodj / max(_ksj, 1e-30)
 
             # 10. Rate constants via precompiled batch function
             try:
@@ -1240,7 +1261,9 @@ class ScenarioRunner:
             print("  [O1D] Replaced ODE output with pseudo-steady-state (J1·O3/k_quench)")
 
         # --- O atom pseudo-steady-state correction ----------------------------------
-        # Ground-state O lifetime ~µs. PSS: [O] = J4·[NO2] / (k_O+O2+M · O2)
+        # Ground-state O lifetime ~µs.
+        # PSS: [O] = (J4·NO2 + J2·O3 + J6·NO3) / k_sink   where k_sink = (5.6e-34·N2 + 6.0e-34·O2)·(T/300)^-2.6·O2
+        # J2·O3 must be included to preserve the O3 ↔ O recycling loop.
         if 'O' in df.columns:
             _T   = (df['SAPHIR_TEMP'].values if 'SAPHIR_TEMP' in df.columns else
                     df['SAPHIR_T'].values     if 'SAPHIR_T'    in df.columns else
@@ -1248,15 +1271,24 @@ class ScenarioRunner:
             _M   = df['M'].values
             _HV  = df['SAPHIR_HV'].values if 'SAPHIR_HV' in df.columns else np.ones(len(df))
             _no2 = df['NO2'].values        if 'NO2'       in df.columns else np.zeros(len(df))
+            _o3  = df['O3'].values         if 'O3'        in df.columns else np.zeros(len(df))
+            _no3 = df['NO3'].values        if 'NO3'       in df.columns else np.zeros(len(df))
             _j4  = (df['SAPHIR_JNO2'].values if 'SAPHIR_JNO2' in df.columns else
                     df['J4'].values           if 'J4'          in df.columns else
                     np.zeros(len(df)))
+            _j2  = df['J2'].values if 'J2' in df.columns else np.zeros(len(df))   # O3 + hv → O
+            _j6  = df['J6'].values if 'J6' in df.columns else np.zeros(len(df))   # NO3 + hv → NO2 + O
             _j4  = np.where(_HV > 0.5, _j4, 0.0)
+            _j2  = np.where(_HV > 0.5, _j2, 0.0)
+            _j6  = np.where(_HV > 0.5, _j6, 0.0)
             _N2  = 0.7809 * _M
             _O2  = 0.2095 * _M
             _ks  = (5.6e-34 * _N2 + 6.0e-34 * _O2) * ((_T / 300.0) ** -2.6) * _O2
-            df['O'] = np.where(_ks > 0, np.maximum(_j4, 0.0) * np.maximum(_no2, 0.0) / np.maximum(_ks, 1e-30), 0.0)
-            print("  [O]   Replaced ODE output with pseudo-steady-state (J4·NO2/k_O+O2+M)")
+            _o_prod = (np.maximum(_j4, 0.0) * np.maximum(_no2, 0.0) +
+                       np.maximum(_j2, 0.0) * np.maximum(_o3,  0.0) +
+                       np.maximum(_j6, 0.0) * np.maximum(_no3, 0.0))
+            df['O'] = np.where(_ks > 0, _o_prod / np.maximum(_ks, 1e-30), 0.0)
+            print("  [O]   Replaced ODE output with pseudo-steady-state (J4·NO2+J2·O3+J6·NO3)/k_O+O2+M")
 
         # Y background: diagnostic column showing background VOC concentration (molec/cm³)
         if self.cfg.get('artifacts', {}).get('y_active', False):
