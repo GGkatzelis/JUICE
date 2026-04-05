@@ -233,6 +233,26 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         except Exception as e:
             print(f"[idl_parser] WARNING: could not load ENZ: {e}")
 
+    # ---- pre-scan: check if .dil.mech / .dil.rate includes are commented out --
+    # In IDL mode these are often commented, meaning general MCM-species dilution
+    # is disabled.  Only explicit per-species k[SPECIES+DIL-->] reactions apply.
+    _dil_active = set()
+    _dil_commented = set()
+    with open(easy_path, "r", encoding="latin-1") as _fh:
+        for _line in _fh:
+            _s = _line.strip()
+            _cmt = _s.startswith((";", "*"))
+            _cl  = re.sub(r';.*', '', _s).strip()
+            _im  = re.match(r"#include\s+(\S+)", _cl, re.I)
+            if _im:
+                _fn = _im.group(1).strip().lower()
+                if '.dil.mech' in _fn or '.dil.rate' in _fn:
+                    (_dil_commented if _cmt else _dil_active).add(_fn)
+    # analytical_dilution = True  → runner applies dydt -= y * k_dil (normal mode)
+    # analytical_dilution = False → IDL mode; explicit +DIL reactions handle losses
+    analytical_dilution = bool(_dil_active)   # False when all .dil files are commented
+    print(f"[idl_parser] Dilution mode: {'analytical (runner)' if analytical_dilution else 'IDL explicit (commented .dil files — per-species +DIL reactions only)'}")
+
     # ---- parse EASY file line by line ----------------------------------------
     mechanism_files_raw = []
     env_map             = {}
@@ -251,6 +271,8 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     co2_bg_rate = None
     h2o_imps    = []
     skipped_notes = []   # human-readable notes about skipped/inactive lines
+    idl_dilution_reactions = []  # k[SPECIES+DIL-->]=CONST(DILUTE) reactions from EASY
+    idl_parameters         = {}  # DILUTE, DIL — computed constants needed by IDL dil rxns
 
     for clean, is_commented in _read_easy_lines(easy_path):
         if not clean:
@@ -310,7 +332,13 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                        ENZ_COL_TO_ENV.get(var_up.lower()))
             if mapping:
                 env_key, canonical = mapping
-                env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
+                # FLOW drives dilution. When dilution is disabled (analytical_dilution=False)
+                # the .dil files are commented and FLOW has no role — exclude it from env_map
+                # so it doesn't appear as a constrained variable in the GUI.
+                if env_key == "FLOW" and not analytical_dilution:
+                    skipped_notes.append("FLOW = INPUT(dilute): excluded from env_map (dilution inactive)")
+                else:
+                    env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
             else:
                 injection_switches[var_up] = enz_col
             continue
@@ -559,6 +587,26 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             # Y + OH background reactivity — handled via y_active artifact, not as reaction
             skipped_notes.append(f"Y + OH --> HO2: handled as Y-background artifact "
                                  f"(y_eqn={y_eqn} ppb, k=2.4e-13)")
+
+        elif '+DIL' in lhs_up:
+            # Explicit per-species dilution: SPECIES+DIL --> at rate CONST(DILUTE).
+            # DIL = CONST(1.) is a switch constant; DILUTE = CONST((FLOW+...)/...) is
+            # the rate in s⁻¹.  Strip DIL from reactants; the rate expression handles it.
+            species = lhs_up.replace('+DIL', '').strip()
+            rate    = _k(lhs_up, rhs_str)
+            if not rate or _is_zero_rate(rate):
+                skipped_notes.append(f"zero-rate +DIL dilution: {lhs_up}")
+            else:
+                rate_py = _easy_to_py(rate)
+                idl_dilution_reactions.append({
+                    "reactants": species,
+                    "products":  rhs_str.strip() if rhs_str.strip() else "",
+                    "rate":      rate_py,
+                    "label":     f"{species} dilution (IDL)",
+                    "group":     "IDL Dilution",
+                    "comment":   f"k[{lhs_up}-->] = {rate}  (DILUTE = {rate_py})",
+                })
+
         else:
             skipped_notes.append(f"unclassified regular reaction: {lhs_up} --> {rhs_str}")
 
@@ -607,6 +655,18 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 "group":     "IDL Injection",
                 "comment":   f"k[QH2O --> {rhs_str}] = {rate_expr}",
             })
+
+    # ---- IDL parameters: DILUTE / DIL (needed for +DIL dilution reactions) ----
+    # DILUTE = CONST((FLOW+0.010*60)/(276.*3600.)) is the per-species dilution rate
+    # constant in s⁻¹.  DIL = CONST(1.) is a switch (always on).  Both are evaluated
+    # as var_assignments in the runner so that DILUTE is correct at every timestep.
+    for _pname in ("DILUTE", "DIL", "WALLDEP"):
+        if _pname in source_consts:
+            idl_parameters[_pname] = source_consts[_pname]
+    if idl_dilution_reactions and "DILUTE" not in idl_parameters:
+        # Fallback: derive from FLOW env_map entry if DILUTE CONST was not found
+        idl_parameters["DILUTE"] = "(FLOW + 0.010*60) / (276. * 3600.)"
+        skipped_notes.append("DILUTE CONST not found in EASY — using fallback formula")
 
     # ---- burst injection summaries (informational) ---------------------------
     burst_injections = []
@@ -751,6 +811,9 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                                       if co2_bg_rate else []),
         "burst_injections":          burst_injections,
         "injection_reactions":       injection_reactions,
+        "idl_dilution_reactions":    idl_dilution_reactions,
+        "idl_parameters":            idl_parameters,
+        "analytical_dilution":       analytical_dilution,
         "chamber_source_reactions":  chamber_source_reactions,
         "custom_reactions":          [],
         "excluded_reactions":        [],
@@ -786,6 +849,13 @@ def _print_summary(cfg: dict):
     for r in cfg["injection_reactions"]:
         print(f"[idl_parser]   [OK][{r['reactants']}] --> {r['products']}  "
               f"rate={r['rate'][:60]}")
+
+    dil_rxns = cfg.get("idl_dilution_reactions", [])
+    idl_params = cfg.get("idl_parameters", {})
+    print(f"[idl_parser] IDL DILUTION: analytical={'YES' if cfg.get('analytical_dilution', True) else 'NO (per-species +DIL reactions)'}  "
+          f"dilution_reactions={len(dil_rxns)}  parameters={list(idl_params.keys())}")
+    for r in dil_rxns:
+        print(f"[idl_parser]   [DIL] {r['reactants']} --> '{r['products']}'  rate={r['rate']}")
 
     csr = cfg.get("chamber_source_reactions", [])
     print(f"[idl_parser] CHAMBER SOURCE REACTIONS ({len(csr)}):")

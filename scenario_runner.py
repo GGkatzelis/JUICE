@@ -161,6 +161,18 @@ class ScenarioRunner:
             j_clean = j_expr.upper().replace('@', '**')
             try: self.var_assignments.append((j_target.upper(), compile(j_clean, '<string>', 'eval')))
             except: pass
+
+        # IDL-mode computed parameters (DILUTE, DIL, …) — evaluated each ODE step,
+        # overriding the ctx_data DILUTE=0 stub so explicit +DIL reactions use the
+        # correct rate constant.
+        for p_name, p_expr in self.cfg.get('idl_parameters', {}).items():
+            p_clean = p_expr.upper().replace('@', '**')
+            p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+            try:
+                self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
+                print(f"  [IDL param] {p_name} = {p_expr}")
+            except Exception as e:
+                print(f"[WARNING] Could not compile IDL parameter {p_name}: {e}")
             
         all_species = set(self.mechanism.species)
         for spec in self.cfg.get('initials', {}).keys():
@@ -223,6 +235,29 @@ class ScenarioRunner:
                 if clean_s and not clean_s[0].isdigit():
                     all_species.add(clean_s)
             self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
+
+        # --- IDL dilution reactions: explicit per-species decay at rate DILUTE --------------------
+        # These come from k[SPECIES+DIL-->]=CONST(DILUTE) lines in the EASY master file.
+        # Used only when analytical_dilution=False (general .dil.mech/.dil.rate commented out).
+        for r in self.cfg.get('idl_dilution_reactions', []):
+            if not r.get('reactants') or not r.get('rate'):
+                continue
+            reacts_str = r['reactants']
+            reactants  = [x.strip().upper() for x in reacts_str.split('+') if x.strip()]
+            prods_str  = r.get('products', '')
+            products   = [x.strip().upper() for x in prods_str.split('+') if x.strip()] if prods_str.strip() else []
+            for s in reactants:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s)
+                if clean_s and not clean_s[0].isdigit() and clean_s not in self.ctx_data:
+                    all_species.add(clean_s)
+            for s in products:
+                clean_s = re.sub(r'^[\d\.]+\s*\*\s*', '', s)
+                if clean_s and not clean_s[0].isdigit():
+                    all_species.add(clean_s)
+            self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
+        n_dil = len(self.cfg.get('idl_dilution_reactions', []))
+        if n_dil:
+            print(f"  [IDL Dilution] Added {n_dil} per-species dilution reaction(s) from EASY file")
 
         # --- TwoReaction injections: virtual intermediate species + first-order decay reactions ---
         # Each TwoReaction burst gets three internal species:
@@ -479,6 +514,11 @@ class ScenarioRunner:
         _v_buf = np.zeros(len(self.mechanism.reactions))  # reaction velocity buffer for Jacobian
         print(f">>> [ODE] Precompiled batch rate function: {len(self.mechanism.reactions)} reactions, "
               f"{len(_rate_co_names)} unique rate vars")
+
+        # Store for use in _export_kinetics (called after _solve completes)
+        self._compute_rates_fn = _compute_rates
+        self._kmt_funcs_cached = _kmt_funcs
+        self._other_funcs_cached = _other_funcs
 
         cont_sources = []
         for s in self.cfg.get('continuous_sources', []):
@@ -744,8 +784,13 @@ class ScenarioRunner:
                     for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                     for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
-            k_dil = (self.ctx_data['FLOW'](t_abs) + 0.6) / (self.cfg['chamber_vol'] * 3600)
-            dydt -= y * k_dil
+            # Analytical dilution: applied only when NOT in IDL explicit-dilution mode.
+            # In IDL mode the .dil.mech/.dil.rate files are commented out and dilution
+            # is handled via explicit per-species k[SPECIES+DIL-->] reactions above.
+            if self.cfg.get('analytical_dilution', True):
+                _flow = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
+                k_dil = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
+                dydt -= y * k_dil
 
             for s in cont_sources:
                 dydt[s['idx']] += eval(s['code'], globals(), ctx)
@@ -926,13 +971,17 @@ class ScenarioRunner:
             # where factor = sign_affected * coeff_reactant_rj (precomputed)
             y_col    = np.maximum(y[_jac_cols], 1e-40)
             jac_data = _jac_factors * _v_buf[_jac_rxn_idxs] / y_col
-            # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil
-            k_dil    = (self.ctx_data['FLOW'](t_abs) + 0.6) / (self.cfg['chamber_vol'] * 3600)
-            dil_idx  = np.arange(N, dtype=np.int32)
-            dil_data = np.full(N, -k_dil)
-            rows = np.concatenate([_jac_rows, dil_idx])
-            cols = np.concatenate([_jac_cols, dil_idx])
-            d    = np.concatenate([jac_data, dil_data])
+            # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil (only in analytical mode)
+            if self.cfg.get('analytical_dilution', True):
+                _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
+                k_dil    = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
+                dil_idx  = np.arange(N, dtype=np.int32)
+                dil_data = np.full(N, -k_dil)
+                rows = np.concatenate([_jac_rows, dil_idx])
+                cols = np.concatenate([_jac_cols, dil_idx])
+                d    = np.concatenate([jac_data, dil_data])
+            else:
+                rows, cols, d = _jac_rows, _jac_cols, jac_data
             # coo_matrix sums duplicate (row,col) entries — correct for multi-reaction contributions
             return coo_matrix((d, (rows, cols)), shape=(N, N)).tocsc()
 
@@ -1109,9 +1158,210 @@ class ScenarioRunner:
 
         out_path = os.path.join(self.root, "simulation_results.csv")
         df.to_csv(out_path)
-        
         print(f"  ... Saved to {out_path}")
+
+        # Export reaction kinetics (k-values + turnovers) to separate files
+        self._export_kinetics(df)
+
         return out_path
+
+    def _export_kinetics(self, df):
+        """Re-evaluate all reaction rate constants and turnovers at every output timestep.
+
+        Design for speed:
+        - All env time series pre-extracted as numpy arrays (one vectorized call each).
+        - Species matrix pre-extracted as numpy (n_t × n_species) — no pandas per-step.
+        - Rate-constant loop: only unavoidable per-timestep work (scalar ctx + compiled eval).
+        - Turnover computation: fully vectorized in numpy AFTER the k loop — no Python
+          loop over (timestep × reaction).
+
+        Saves:
+        - simulation_kinetics.npz  : compressed float32 arrays (n_t × n_rxn)
+            keys: 'time_s', 'k_values', 'turnovers' (molec/cm³/s)
+        - simulation_reactions.csv : human-readable reaction manifest
+        M is already in simulation_results.csv.
+        """
+        print("\n>>> [DATA] Computing reaction kinetics (k-values + turnovers)...")
+        n_t   = len(self.sol.t)
+        n_rxn = len(self.mechanism.reactions)
+
+        _species_names = list(self.solver.species)
+        _compute_rates = self._compute_rates_fn
+        _kmt_funcs     = self._kmt_funcs_cached
+        _other_funcs   = self._other_funcs_cached
+
+        # ── PRE-EXTRACT: species concentrations as contiguous numpy matrix ─────────
+        # df[col].iloc[t_i] in a loop is ~100× slower than numpy indexing.
+        # Only keep species that are actually ODE columns in df.
+        _sp_cols    = [s for s in _species_names if s in df.columns]
+        _sp_missing = [s for s in _species_names if s not in df.columns]
+        y_matrix = np.maximum(df[_sp_cols].values.astype(np.float64), 0.0)  # (n_t, len(_sp_cols))
+        _sp_idx_map = {s: i for i, s in enumerate(_sp_cols)}  # species → column in y_matrix
+
+        # ── PRE-EXTRACT: env time series by calling interpolators vectorized ───────
+        env_arrs = {}   # key.upper() → numpy array shape (n_t,)
+        for k_env, v_func in self.ctx_data.items():
+            try:
+                arr = v_func(self.sol.t)
+                if not isinstance(arr, np.ndarray):
+                    arr = np.full(n_t, float(arr))
+                env_arrs[k_env.upper()] = arr.astype(np.float64)
+            except Exception:
+                pass
+
+        # Pre-extract M and T arrays (used every step)
+        M_arr = df['M'].values.astype(np.float64) if 'M' in df.columns else \
+                np.array([self.get_M(t) for t in self.sol.t])
+        T_arr = env_arrs.get('TEMP', np.full(n_t, 298.15))
+
+        # H2O VMR → molec/cm³ array (pre-converted once)
+        if 'H2O' in env_arrs:
+            h2o_arr = env_arrs['H2O'] * M_arr          # VMR fraction × M
+        else:
+            h2o_arr = 0.01 * M_arr                     # 1% fallback
+
+        # ── RATE-CONSTANT LOOP (per-timestep, scalar ctx) ─────────────────────────
+        # This cannot be fully vectorized because the compiled rate expressions
+        # contain scalar math (exp, KMT functions, etc.).  Everything else is
+        # optimised: numpy indexing instead of pandas, pre-extracted arrays instead
+        # of repeated interpolation calls.
+        k_arr  = np.zeros((n_t, n_rxn), dtype=np.float64)
+        _k_loc = np.zeros(n_rxn)
+
+        for t_i in range(n_t):
+            t_abs = self.sol.t[t_i]
+            M_now = M_arr[t_i]
+            T_now = T_arr[t_i]
+
+            ctx = SafeDict()
+            # Load env from pre-extracted arrays (fast numpy scalar)
+            for k_up, arr in env_arrs.items():
+                ctx[k_up] = float(arr[t_i])
+            # H2O already converted
+            ctx['H2O'] = float(h2o_arr[t_i])
+            ctx.update({"T": T_now, "TEMP": T_now, "M": M_now,
+                        "O2": 0.2095 * M_now, "N2": 0.7809 * M_now,
+                        "np": np, "exp": np.exp, "EXP": np.exp,
+                        "LOG10": np.log10, "log10": np.log10,
+                        "LOG": np.log, "SQRT": np.sqrt,
+                        "AMAX": np.maximum, "AMIN": np.minimum})
+            for fn, func in _kmt_funcs:
+                ctx[fn.upper()] = lambda *args, f=func, _T=T_now, _M=M_now: f(*args, _T, _M)
+            for fn, func in _other_funcs:
+                ctx[fn.upper()] = func
+            # Species from numpy (no pandas .iloc)
+            for j, s in enumerate(_sp_cols):
+                ctx[s] = float(y_matrix[t_i, j])
+            # Pass 1: constants + KMT rates
+            for var_name, comp_expr in self.var_assignments:
+                try: ctx[var_name] = eval(comp_expr, globals(), ctx)
+                except: ctx[var_name] = 0.0
+            # PHTFKT callable
+            _cosx = max(float(ctx.get('COSX', np.cos(float(ctx.get('SZ', 45.0)) * 0.0174533))), 0.01)
+            _jno2 = float(ctx.get('JNO2', 0.0))
+            _lno2 = float(ctx.get('LNO2', 1.165e-2))
+            _mno2 = float(ctx.get('MNO2', 0.244))
+            _nnno2= float(ctx.get('NNO2', -0.267))
+            _hv   = float(ctx.get('HV', 0.0))
+            def _phtfkt(a, b, c, _c=_cosx, _j=_jno2, _l=_lno2, _m=_mno2, _n=_nnno2, _h=_hv):
+                if _h == 0 or _c <= 0: return 0.0
+                cs_j = a * _c**b * np.exp(c / _c)
+                if _j > 0:
+                    jcs = _l * _c**_m * np.exp(_n / _c)
+                    return cs_j * min(_j / jcs, 1.0) if jcs > 0 else cs_j
+                return 0.0
+            ctx['PHTFKT']    = _phtfkt
+            ctx['PHTFKT_CS'] = lambda a, b, c, _c=_cosx: a * _c**b * np.exp(c / _c)
+            # Pass 2: J-values using PHTFKT
+            for var_name, comp_expr in self.var_assignments:
+                try: ctx[var_name] = eval(comp_expr, globals(), ctx)
+                except: pass
+            # Measured J overrides
+            if ctx.get('JO1D', 0) > 0: ctx['J1'] = ctx['JO1D']
+            if ctx.get('JNO2', 0) > 0: ctx['J4'] = ctx['JNO2']
+            if ctx.get('JHONO', 0) > 0: ctx['J7'] = ctx['JHONO']
+            if ctx.get('JH2O2', 0) > 0: ctx['J3'] = ctx['JH2O2']
+
+            try:
+                _compute_rates(ctx, _k_loc)
+            except Exception:
+                for i, rxn in enumerate(self.mechanism.reactions):
+                    try: _k_loc[i] = eval(rxn.safe_expr, globals(), ctx)
+                    except: _k_loc[i] = 0.0
+            np.nan_to_num(_k_loc, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            k_arr[t_i] = _k_loc
+
+            if (t_i + 1) % 400 == 0 or t_i == n_t - 1:
+                print(f"  ... k-values {t_i + 1}/{n_t}")
+
+        # ── VECTORISED TURNOVER COMPUTATION ───────────────────────────────────────
+        # v[t,i] = k[t,i] * prod_j( y[t,j]^c_j ) * prod_e( env[t,e]^c_e )
+        # All multiplications are numpy array ops over the time axis — no Python loop
+        # over timesteps.  Only the outer loop over reactions (n_rxn) remains.
+        print("  ... computing turnovers (vectorised)...")
+        v_arr = k_arr.copy()   # shape (n_t, n_rxn), start with k
+
+        for i, rxn in enumerate(self.mechanism.reactions):
+            # ODE species reactants
+            for r in rxn.reactants_parsed:
+                col_i = _sp_idx_map.get(_species_names[r['idx']])
+                if col_i is None:
+                    v_arr[:, i] = 0.0
+                    break
+                y_col = y_matrix[:, col_i]           # shape (n_t,)
+                if r['coeff'] == 1.0:
+                    v_arr[:, i] *= y_col
+                else:
+                    v_arr[:, i] *= y_col ** r['coeff']
+            # Env reactants (e.g. H2O, M)
+            for r in rxn.reactants_env:
+                env_col = env_arrs.get(r['name'])
+                if env_col is None:
+                    # Special cases: M, O2, N2 not in env_arrs but derivable
+                    if r['name'] == 'M':
+                        env_col = M_arr
+                    elif r['name'] == 'O2':
+                        env_col = 0.2095 * M_arr
+                    elif r['name'] == 'N2':
+                        env_col = 0.7809 * M_arr
+                    elif r['name'] == 'H2O':
+                        env_col = h2o_arr
+                    else:
+                        v_arr[:, i] = 0.0
+                        break
+                if r['coeff'] == 1.0:
+                    v_arr[:, i] *= np.maximum(env_col, 0.0)
+                else:
+                    v_arr[:, i] *= np.maximum(env_col, 0.0) ** r['coeff']
+
+        np.nan_to_num(v_arr, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+
+        # ── BUILD REACTION MANIFEST ───────────────────────────────────────────────
+        rxn_labels    = []
+        rows_manifest = []
+        for i, rxn in enumerate(self.mechanism.reactions):
+            r_str  = ' + '.join(rxn.reactants) if rxn.reactants else '(none)'
+            p_str  = ' + '.join(rxn.products)  if rxn.products  else '(none)'
+            rate_e = getattr(rxn, 'rate_expression', getattr(rxn, 'rate_str', '?'))
+            label  = f"R{i:05d}"
+            rxn_labels.append(label)
+            rows_manifest.append({"index": i, "label": label,
+                                   "reactants": r_str, "products": p_str,
+                                   "rate_expression": rate_e[:120]})
+
+        # ── SAVE ─────────────────────────────────────────────────────────────────
+        npz_path = os.path.join(self.root, "simulation_kinetics.npz")
+        np.savez_compressed(npz_path,
+                            time_s=self.sol.t.astype(np.float64),
+                            k_values=k_arr.astype(np.float32),
+                            turnovers=v_arr.astype(np.float32),
+                            reaction_labels=np.array(rxn_labels))
+        print(f"  ... Kinetics saved to {npz_path}  "
+              f"({n_rxn} reactions × {n_t} timesteps, float32)")
+
+        man_path = os.path.join(self.root, "simulation_reactions.csv")
+        pd.DataFrame(rows_manifest).to_csv(man_path, index=False)
+        print(f"  ... Reaction manifest saved to {man_path}")
 
     def _show_results(self, out_path):
         from results_viewer import show_results

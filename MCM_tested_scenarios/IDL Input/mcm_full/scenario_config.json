@@ -31,10 +31,6 @@
             "type": "SAPHIR File",
             "value": "jO1D"
         },
-        "FLOW": {
-            "type": "Fixed Constant",
-            "value": "0.0"
-        },
         "H2O": {
             "type": "SAPHIR File",
             "value": "H2O"
