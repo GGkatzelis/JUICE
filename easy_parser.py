@@ -9,6 +9,29 @@ class EasyParser:
         self.include_dir = include_dir
         self.rates_map = {}
 
+    @staticmethod
+    def _canon_rxn_key(lhs: str, rhs: str) -> str:
+        """Return a stoichiometry-normalised reaction key.
+
+        Expands integer stoichiometric coefficients so that e.g.
+        '2*NA' and 'NA+NA' both produce the same sorted token list.
+        This lets k[N2O5-->2*NA] override the bare 'N2O5 --> NA + NA' line
+        even though the literal strings differ.
+        """
+        def _expand(side: str) -> list:
+            tokens = []
+            for term in side.upper().replace(' ', '').split('+'):
+                m = re.match(r'^(\d+)\*(.+)$', term)
+                if m:
+                    tokens.extend([m.group(2)] * int(m.group(1)))
+                elif term:
+                    tokens.append(term)
+            return sorted(tokens)
+
+        lhs_tokens = _expand(lhs)
+        rhs_tokens = _expand(rhs)
+        return '+'.join(lhs_tokens) + '-->' + '+'.join(rhs_tokens)
+
     def _find_file(self, filename: str) -> str:
         if os.path.isabs(filename) and os.path.exists(filename): return filename
         local_path = os.path.join(self.base_path, filename)
@@ -109,7 +132,15 @@ class EasyParser:
 
             rate_def = re.match(r'k\[(.*?)\](?:\{[^}]*\})?\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line_for_rxn, re.I)
             if rate_def:
-                self.rates_map[rate_def.group(1).replace(' ', '').upper()] = rate_def.group(2).strip().upper()
+                raw_key = rate_def.group(1).replace(' ', '').upper()
+                self.rates_map[raw_key] = rate_def.group(2).strip().upper()
+                # Also store under the stoichiometry-normalised key so that
+                # k[N2O5-->2*NA] matches the bare "N2O5 --> NA + NA" reaction line.
+                if '-->' in raw_key:
+                    lhs_r, rhs_r = raw_key.split('-->', 1)
+                    canon = self._canon_rxn_key(lhs_r, rhs_r)
+                    if canon != raw_key:
+                        self.rates_map[canon] = rate_def.group(2).strip().upper()
                 continue
 
             def process_side(side_str):
@@ -125,8 +156,12 @@ class EasyParser:
                 reacs = process_side(left)
                 prods = process_side(right)
                 key = line_for_rxn.replace(' ', '').upper()
-                # Override semantics: last definition wins (matches FACSIMILE behaviour)
-                self._rxn_map[key] = (reacs, prods, self.rates_map.get(key, "0.0"))
+                # Override semantics: last definition wins (matches FACSIMILE behaviour).
+                # Also build a stoichiometry-normalised key so that e.g.
+                # "N2O5 --> NA + NA" and "N2O5 --> 2*NA" resolve to the same entry.
+                canon_key = self._canon_rxn_key(left, right)
+                rate = self.rates_map.get(key, self.rates_map.get(canon_key, "0.0"))
+                self._rxn_map[canon_key] = (reacs, prods, rate)
 
             elif line_for_rxn.startswith('%'):
                 parts = line_for_rxn.split(':', 1)

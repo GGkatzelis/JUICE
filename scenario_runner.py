@@ -333,6 +333,25 @@ class ScenarioRunner:
             except Exception as e:
                 print(f"  [WARNING] Could not compile O1D PSS expression: {e}")
 
+        # --- PSS species: ground-state O atom, lifetime ~µs (O+O2+M→O3 dominates sink).
+        # Production: NO2+hv → NO+O  (rate = J4 = JNO2)
+        # Sink:       O+O2+M → O3     (k = (5.6e-34*N2 + 6.0e-34*O2) * (T/300)^-2.6 * O2)
+        # PSS: [O] = J4*[NO2] / k_sink   (minor sinks O+NO, O+NO2 neglected, <0.1% of total)
+        if 'O' in all_species:
+            all_species.discard('O')
+            self._pss_species.add('O')
+            _o_pss = (
+                "np.maximum(JNO2, 0.0) * np.maximum(NO2, 0.0) / "
+                "np.maximum("
+                "(5.6e-34 * N2 + 6.0e-34 * O2) * ((T / 300.0) ** -2.6) * O2"
+                ", 1e-30)"
+            )
+            try:
+                self.var_assignments.append(('O', compile(_o_pss, '<O_pss>', 'eval')))
+                print("  [PSS] O atom removed from ODE state → J4·NO2/k_O+O2+M analytical expression added")
+            except Exception as e:
+                print(f"  [WARNING] Could not compile O atom PSS expression: {e}")
+
         self.mechanism.species = sorted(list(all_species))
 
         # Apply reaction exclusions / rate overrides defined in the scenario JSON
@@ -805,6 +824,16 @@ class ScenarioRunner:
                             2.14e-10 * _h2o_now)
                 ctx['O1D'] = max(_j1_now, 0.0) * max(_o3_now, 0.0) / max(_kq_now, 1e-30)
 
+            # --- Recompute O atom PSS (lifetime ~µs, production=J4*NO2, sink=O+O2+M) ---
+            if 'O' in _pss_species_set:
+                _j4_now  = float(ctx.get('J4',   ctx.get('JNO2', 0.0)))
+                _no2_now = float(ctx.get('NO2',  0.0))
+                _t_now   = float(ctx.get('T',    298.15))
+                _n2_now  = float(ctx.get('N2',   0.7809 * M_now))
+                _o2_now  = float(ctx.get('O2',   0.2095 * M_now))
+                _ks_now  = (5.6e-34 * _n2_now + 6.0e-34 * _o2_now) * ((_t_now / 300.0) ** -2.6) * _o2_now
+                ctx['O'] = max(_j4_now, 0.0) * max(_no2_now, 0.0) / max(_ks_now, 1e-30)
+
             try:
                 _compute_rates(ctx, _k_buf)
             except Exception:
@@ -1000,6 +1029,17 @@ class ScenarioRunner:
                         3.20e-11 * _o2j * np.exp(67.0  / _tj) +
                         2.14e-10 * _hwj)
                 ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)
+
+            # 9c. Recompute O atom PSS (Jacobian must match system_ode)
+            if 'O' in _pss_species_set:
+                _j4j  = float(ctx_j.get('J4',  ctx_j.get('JNO2', 0.0)))
+                _no2j = float(ctx_j.get('NO2', 0.0))
+                _tj   = float(ctx_j.get('T',   298.15))
+                _n2j  = float(ctx_j.get('N2',  0.7809 * M_now))
+                _o2j  = float(ctx_j.get('O2',  0.2095 * M_now))
+                _ksj  = (5.6e-34 * _n2j + 6.0e-34 * _o2j) * ((_tj / 300.0) ** -2.6) * _o2j
+                ctx_j['O'] = max(_j4j, 0.0) * max(_no2j, 0.0) / max(_ksj, 1e-30)
+
             # 10. Rate constants via precompiled batch function
             try:
                 _compute_rates(ctx_j, _k_buf)
@@ -1198,6 +1238,25 @@ class ScenarioRunner:
                     2.20e-10 * _h2o)
             df['O1D'] = np.where(_kq > 0, _j1 * _o3 / np.maximum(_kq, 1e-30), 0.0)
             print("  [O1D] Replaced ODE output with pseudo-steady-state (J1·O3/k_quench)")
+
+        # --- O atom pseudo-steady-state correction ----------------------------------
+        # Ground-state O lifetime ~µs. PSS: [O] = J4·[NO2] / (k_O+O2+M · O2)
+        if 'O' in df.columns:
+            _T   = (df['SAPHIR_TEMP'].values if 'SAPHIR_TEMP' in df.columns else
+                    df['SAPHIR_T'].values     if 'SAPHIR_T'    in df.columns else
+                    np.full(len(df), 298.15))
+            _M   = df['M'].values
+            _HV  = df['SAPHIR_HV'].values if 'SAPHIR_HV' in df.columns else np.ones(len(df))
+            _no2 = df['NO2'].values        if 'NO2'       in df.columns else np.zeros(len(df))
+            _j4  = (df['SAPHIR_JNO2'].values if 'SAPHIR_JNO2' in df.columns else
+                    df['J4'].values           if 'J4'          in df.columns else
+                    np.zeros(len(df)))
+            _j4  = np.where(_HV > 0.5, _j4, 0.0)
+            _N2  = 0.7809 * _M
+            _O2  = 0.2095 * _M
+            _ks  = (5.6e-34 * _N2 + 6.0e-34 * _O2) * ((_T / 300.0) ** -2.6) * _O2
+            df['O'] = np.where(_ks > 0, np.maximum(_j4, 0.0) * np.maximum(_no2, 0.0) / np.maximum(_ks, 1e-30), 0.0)
+            print("  [O]   Replaced ODE output with pseudo-steady-state (J4·NO2/k_O+O2+M)")
 
         # Y background: diagnostic column showing background VOC concentration (molec/cm³)
         if self.cfg.get('artifacts', {}).get('y_active', False):
