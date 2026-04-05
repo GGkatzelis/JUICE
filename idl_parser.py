@@ -481,7 +481,13 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             const_py = source_consts.get("SHONO", "")
             # SHONO = CONST(...) in FACSIMILE — it is a fixed parameter, not an ODE species.
             # Its value is already folded into full_rate, so reactants are empty (zeroth-order).
-            full_rate = f"({k_py}) * ({const_py})" if const_py else k_py
+            # SPECIAL CASE: if lhs is "SHONO+HV", HV is an explicit reactant in the EASY file
+            # and must be multiplied in.  For ethanol-style "SHONO=CONST(HV*...)", HV is
+            # already inside const_py so this branch is not taken.
+            if lhs_up == "SHONO+HV" and const_py and "HV" not in const_py.upper():
+                full_rate = f"({k_py}) * ({const_py}) * HV"
+            else:
+                full_rate = f"({k_py}) * ({const_py})" if const_py else k_py
             chamber_source_reactions.append({
                 "reactants": "",
                 "products":  rhs_str,
@@ -571,6 +577,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     # H2O burst injection to act as the timing trigger — the QH2O column IS the gate.
     if "QH2O" in injection_switches:
         qh2o_col = injection_switches["QH2O"]  # original ENZ column name (e.g. "QH2O")
+        _seen_qh2o_products = set()  # deduplicate: same rhs can appear in multiple #include files
         for lhs_up, rhs_str, rate_expr, sc in injection_source_rxns:
             if lhs_up != "QH2O":
                 continue
@@ -583,6 +590,11 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 skipped_notes.append(f"zero-rate qH2O impurity: QH2O --> {rhs_str}  "
                                      f"(k={rate_expr})")
                 continue
+            dedup_key = (rhs_up, rate_expr.replace(" ", ""))
+            if dedup_key in _seen_qh2o_products:
+                skipped_notes.append(f"duplicate qH2O impurity skipped: QH2O --> {rhs_str}")
+                continue
+            _seen_qh2o_products.add(dedup_key)
             rate_py  = _easy_to_py(rate_expr)
             full_rate = f"({rate_py}) * {qh2o_col.upper()}"
             tgt = _products_of(rhs_str)

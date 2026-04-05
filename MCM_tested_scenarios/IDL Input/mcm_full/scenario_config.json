@@ -32,8 +32,8 @@
             "value": "jO1D"
         },
         "FLOW": {
-            "type": "SAPHIR File",
-            "value": "dilute"
+            "type": "Fixed Constant",
+            "value": "0.0"
         },
         "H2O": {
             "type": "SAPHIR File",
@@ -83,7 +83,7 @@
         {
             "reactants": "",
             "products": "HONO+XNOy",
-            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (2.6*0.85)",
+            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (2.6*0.85) * HV",
             "comment": "[IDL] SHONO=2.6*0.85 -> HONO (chamber photolytic source) | k=4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2  *  SHONO=2.6*0.85",
             "group": "Chamber Source"
         },

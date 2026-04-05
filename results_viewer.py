@@ -38,7 +38,7 @@ try:
                                  QPushButton, QLabel, QComboBox, QSplitter, QLineEdit,
                                  QTabWidget, QFileDialog, QDialog, QDialogButtonBox,
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
-                                 QInputDialog, QMessageBox, QAbstractItemView)
+                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox)
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -832,7 +832,7 @@ class ResultsViewer(QMainWindow):
 
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
-        _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Juelich Logo.png"))
+        _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
         if not _icon_pixmap.isNull():
             self.setWindowIcon(QIcon(_icon_pixmap))
 
@@ -1963,11 +1963,69 @@ class ResultsViewer(QMainWindow):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(2)
+
+        # ── Filter bar (above toolbar, above canvas) ──────────────────────────
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(4)
+
+        filter_row.addWidget(QLabel("Filter:"))
+        self._cmp_filter_combo = QComboBox()
+        self._cmp_filter_combo.addItems([
+            "Show all",
+            "Best 50  (slope closest to 1)",
+            "Best 25  (slope closest to 1)",
+            "Worst 50  (slope furthest from 1)",
+            "Worst 25  (slope furthest from 1)",
+        ])
+        self._cmp_filter_combo.setMinimumWidth(190)
+        self._cmp_filter_combo.currentIndexChanged.connect(self._cmp_apply_filter)
+        filter_row.addWidget(self._cmp_filter_combo)
+
+        filter_row.addSpacing(8)
+        filter_row.addWidget(QLabel("Sort:"))
+        self._cmp_sort_combo = QComboBox()
+        self._cmp_sort_combo.addItems([
+            "Alphabetical",
+            "Time of peak  (earliest first)",
+            "Time of peak  (latest first)",
+            "Carbon count  (low → high)",
+            "Carbon count  (high → low)",
+            "Nitrogen count  (N≥1, low → high)",
+            "Radicals first",
+        ])
+        self._cmp_sort_combo.setMinimumWidth(200)
+        self._cmp_sort_combo.currentIndexChanged.connect(self._cmp_apply_filter)
+        filter_row.addWidget(self._cmp_sort_combo)
+
+        filter_row.addSpacing(8)
+        filter_row.addWidget(QLabel("Search:"))
+        self._cmp_search_box = QLineEdit()
+        self._cmp_search_box.setPlaceholderText("type species name…")
+        self._cmp_search_box.setMaximumWidth(160)
+        self._cmp_search_box.textChanged.connect(self._cmp_apply_filter)
+        filter_row.addWidget(self._cmp_search_box)
+
+        filter_row.addSpacing(8)
+        filter_row.addWidget(QLabel("Show:"))
+        self._cmp_limit_spin = QSpinBox()
+        self._cmp_limit_spin.setRange(1, 9999)
+        self._cmp_limit_spin.setValue(9999)
+        self._cmp_limit_spin.setSpecialValueText("All")   # shows "All" when at minimum... use max trick below
+        self._cmp_limit_spin.setSuffix("  boxes")
+        self._cmp_limit_spin.setMaximumWidth(105)
+        self._cmp_limit_spin.setToolTip("Maximum number of boxes to display after filter/sort/search.\nSet to 9999 to show all.")
+        self._cmp_limit_spin.valueChanged.connect(self._cmp_apply_filter)
+        filter_row.addWidget(self._cmp_limit_spin)
+        filter_row.addStretch(1)
+
+        ll.addLayout(filter_row)
+
         self._cmp_slope_fig = Figure()
         self._cmp_slope_canvas = FigureCanvas(self._cmp_slope_fig)
         self._cmp_slope_canvas.mpl_connect('button_press_event', self._cmp_on_slope_click)
         ll.addWidget(NavigationToolbar(self._cmp_slope_canvas, self))
-        ll.addWidget(self._cmp_slope_canvas)
+        ll.addWidget(self._cmp_slope_canvas, stretch=1)
         splitter.addWidget(left)
 
         # ── Right panel: two stacked timeseries slots ─────────────────────────
@@ -2203,18 +2261,141 @@ class ResultsViewer(QMainWindow):
 
         self._cmp_draw_slope_matrix()
 
+    # ── Sorting helpers ───────────────────────────────────────────────────────
+    @staticmethod
+    def _atom_count(sp, atom):
+        """Count occurrences of a given atom letter in a species name.
+        Handles C2, C12, C (=1), etc.  atom must be 'C' or 'N'."""
+        import re
+        # Find atom followed by a digit (e.g. C2, N12) or atom at end/before
+        # uppercase/non-alpha (e.g. lone C in CH3, N in NO2).
+        total = 0
+        for m in re.finditer(rf'{atom}(\d+)', sp):
+            total += int(m.group(1))
+        # Count bare atom letters not already captured by the digit pattern
+        bare = len(re.findall(rf'{atom}(?!\d)', sp))
+        total += bare
+        return total
+
+    # Radical patterns: peroxy (ends RO2 / contains O2 after R-group),
+    # alkoxy (RO•), and named small radicals.
+    _RADICAL_NAMES = {'OH', 'HO2', 'NO3', 'O1D', 'O3', 'HCO', 'CHO',
+                      'CH3O', 'C2H5O', 'CH3O2', 'C2H5O2'}
+    _RADICAL_SUFFIXES = ('O2', 'OO', 'O•', 'CHO')
+    _RADICAL_PREFIXES = ('HO', 'RO')
+
+    @classmethod
+    def _is_radical(cls, sp):
+        if sp in cls._RADICAL_NAMES:
+            return True
+        # Peroxy / alkoxy: most MCM names end in O2 (e.g. CH3O2, HOCH2CH2O2)
+        if sp.endswith('O2') or sp.endswith('OO'):
+            return True
+        # Alkoxy radicals end in a single O after a carbon chain
+        if len(sp) > 2 and sp.endswith('O') and sp[-2].isdigit():
+            return True
+        return False
+
+    def _cmp_apply_filter(self):
+        """Called whenever filter combo, sort combo, or search box changes."""
+        self._cmp_draw_slope_matrix()
+
+    def _cmp_get_filtered_species(self):
+        """Return the species list to display, applying filter → sort → search."""
+        all_sp = sorted(self._cmp_slope_results.keys())
+        if not all_sp:
+            return all_sp
+
+        # ── 1. Filter by agreement quality ───────────────────────────────────
+        choice = self._cmp_filter_combo.currentText() if hasattr(self, '_cmp_filter_combo') else "Show all"
+        if "Best 50" in choice:
+            all_sp = sorted(all_sp, key=lambda s: abs(self._cmp_slope_results[s]['slope'] - 1.0))[:50]
+        elif "Best 25" in choice:
+            all_sp = sorted(all_sp, key=lambda s: abs(self._cmp_slope_results[s]['slope'] - 1.0))[:25]
+        elif "Worst 50" in choice:
+            all_sp = sorted(all_sp, key=lambda s: abs(self._cmp_slope_results[s]['slope'] - 1.0), reverse=True)[:50]
+        elif "Worst 25" in choice:
+            all_sp = sorted(all_sp, key=lambda s: abs(self._cmp_slope_results[s]['slope'] - 1.0), reverse=True)[:25]
+
+        # ── 2. Search box: substring filter (case-insensitive) ────────────────
+        query = self._cmp_search_box.text().strip().upper() if hasattr(self, '_cmp_search_box') else ""
+        if query:
+            all_sp = [s for s in all_sp if query in s.upper()]
+
+        # ── 3. Sort ───────────────────────────────────────────────────────────
+        sort_choice = self._cmp_sort_combo.currentText() if hasattr(self, '_cmp_sort_combo') else "Alphabetical"
+
+        if "Alphabetical" in sort_choice:
+            all_sp = sorted(all_sp)
+
+        elif "Time of peak" in sort_choice:
+            def _t_peak(sp):
+                d = self._cmp_slope_results[sp]
+                t_arr, py = d['common_t'], d['py']
+                if len(py) == 0:
+                    return np.inf
+                return float(t_arr[np.argmax(np.abs(py))])
+            reverse = "latest" in sort_choice
+            all_sp = sorted(all_sp, key=_t_peak, reverse=reverse)
+
+        elif "Carbon count" in sort_choice:
+            reverse = "high → low" in sort_choice
+            all_sp = sorted(all_sp,
+                            key=lambda s: (self._atom_count(s, 'C'), s),
+                            reverse=reverse)
+
+        elif "Nitrogen count" in sort_choice:
+            # Show N≥1 first (sorted low→high), then N=0 alphabetically at the end
+            def _n_key(sp):
+                n = self._atom_count(sp, 'N')
+                return (0 if n >= 1 else 1, n, sp)
+            all_sp = sorted(all_sp, key=_n_key)
+
+        elif "Radicals first" in sort_choice:
+            # Radicals (+ O3) first alphabetically, then non-radicals alphabetically
+            all_sp = sorted(all_sp, key=lambda s: (0 if self._is_radical(s) else 1, s))
+
+        # ── 4. Hard cap: user-chosen number of boxes ──────────────────────────
+        if hasattr(self, '_cmp_limit_spin'):
+            limit = self._cmp_limit_spin.value()
+            if limit < len(all_sp):
+                all_sp = all_sp[:limit]
+
+        return all_sp
+
     def _cmp_draw_slope_matrix(self):
         self._cmp_slope_fig.clear()
         ax = self._cmp_slope_fig.add_subplot(111)
         ax.axis('off')
 
-        species_list = sorted(self._cmp_slope_results.keys())
+        species_list = self._cmp_get_filtered_species()
         n = len(species_list)
+        total_n = len(self._cmp_slope_results)
         if n == 0:
-            ax.text(0.5, 0.5, "No significant species found.\nTry lowering the noise threshold.",
+            msg = ("No species match the current filter / search.\n"
+                   "Try 'Show all' or clear the search box."
+                   if total_n > 0 else
+                   "No significant species found.\nTry lowering the noise threshold.")
+            ax.text(0.5, 0.5, msg,
                     ha='center', va='center', transform=ax.transAxes, fontsize=11)
             self._cmp_slope_canvas.draw()
             return
+
+        # Title line: count + active sort + search query + box cap
+        sort_label = (self._cmp_sort_combo.currentText().split("(")[0].strip()
+                      if hasattr(self, '_cmp_sort_combo') else "")
+        search_q   = (self._cmp_search_box.text().strip()
+                      if hasattr(self, '_cmp_search_box') else "")
+        limit_val  = (self._cmp_limit_spin.value()
+                      if hasattr(self, '_cmp_limit_spin') else 9999)
+        count_str  = f"Showing {n} of {total_n} species"
+        if sort_label and sort_label != "Alphabetical":
+            count_str += f"  ·  {sort_label}"
+        if search_q:
+            count_str += f"  ·  search: '{search_q}'"
+        if limit_val < total_n and n == limit_val:
+            count_str += f"  ·  capped at {limit_val}"
+        ax.set_title(count_str, fontsize=8, color='#444', pad=2)
 
         # Choose a column count that gives a compact grid close to the canvas aspect.
         # Prefer slightly more columns than rows so the grid fills a landscape panel.
@@ -2904,7 +3085,7 @@ def main():
 if __name__ == "__main__":
     if HAS_PYQT:
         _app = QApplication(sys.argv)
-        _pm = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Juelich Logo.png"))
+        _pm = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
         if not _pm.isNull():
             _app.setWindowIcon(QIcon(_pm))
     main()

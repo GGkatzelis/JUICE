@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pandas as pd 
 from scipy.integrate import solve_ivp
-from scipy.sparse import lil_matrix
+from scipy.sparse import coo_matrix
 from scipy.interpolate import interp1d
 import sys
 import re
@@ -476,6 +476,7 @@ class ScenarioRunner:
         exec(_fn_src, _batch_ns)
         _compute_rates = _batch_ns['_compute_rates']
         _k_buf = np.zeros(len(self.mechanism.reactions))
+        _v_buf = np.zeros(len(self.mechanism.reactions))  # reaction velocity buffer for Jacobian
         print(f">>> [ODE] Precompiled batch rate function: {len(self.mechanism.reactions)} reactions, "
               f"{len(_rate_co_names)} unique rate vars")
 
@@ -587,17 +588,19 @@ class ScenarioRunner:
                     print(f"  [H2O Impurity] {tgt}: {rate_ppb_per_min} ppb/min during H2O injection")
 
         def system_ode(t, y):
+            y = np.maximum(y, 0.0)  # clip: BDF can produce slightly negative y; prevents NaN in k*y^n
+            t_abs = t + _t_offset   # convert relative solver time → absolute interpolation time
             dydt = np.zeros(self.solver.num_species)
-            M_now = self.get_M(t)
-            T_now = self.ctx_data['TEMP'](t)
+            M_now = self.get_M(t_abs)
+            T_now = self.ctx_data['TEMP'](t_abs)
 
             ctx = SafeDict()
 
             # 1. Baseline Environment Data (Loads everything from .enz)
             active_constraints = set()
             for k, v_func in self.ctx_data.items():
-                try: 
-                    ctx[k.upper()] = float(v_func(t))
+                try:
+                    ctx[k.upper()] = float(v_func(t_abs))
                     if k.upper() in self.cfg['env_map']:
                         active_constraints.add(k.upper())
                 except Exception:
@@ -606,9 +609,9 @@ class ScenarioRunner:
             # --- THE WATER AUTO-BALANCER ---
             if 'RH' in ctx and 'H2O' not in ctx:
                 p_sat = np.exp(21.36469 - 5339.66 / T_now)
-                press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
-                ctx['H2O'] = (ctx['RH'] / 100.0) * (p_sat / press) 
-                
+                press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
+                ctx['H2O'] = (ctx['RH'] / 100.0) * (p_sat / press)
+
             if 'H2O' in ctx:
                 # ctx['H2O'] is already a corrected VMR fraction (scaled + noise-floored at setup).
                 h2o_vmr = ctx['H2O']
@@ -617,7 +620,7 @@ class ScenarioRunner:
                 if 'RH' not in ctx:
                     if h2o_vmr > 0:
                         p_sat = np.exp(21.36469 - 5339.66 / T_now)
-                        press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                        press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
                         ctx['RH'] = h2o_vmr * press / p_sat * 100.0
                     else:
                         ctx['RH'] = 0.0
@@ -651,7 +654,7 @@ class ScenarioRunner:
             # for chemistry evaluation the measurement must win.
             for k in active_constraints:
                 try:
-                    ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t))
+                    ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                 except Exception:
                     pass
             # Re-run the water block so H2O molec/cm³ and RH are consistent with
@@ -662,7 +665,7 @@ class ScenarioRunner:
                 ctx['H2O'] = h2o_vmr * M_now
                 if h2o_vmr > 0:
                     p_sat = np.exp(21.36469 - 5339.66 / T_now)
-                    press = float(self.ctx_data['PRESS'](t)) if 'PRESS' in self.ctx_data else 1013.25
+                    press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
                     ctx['RH'] = h2o_vmr * press / p_sat * 100.0
                 else:
                     ctx['RH'] = 0.0
@@ -741,7 +744,7 @@ class ScenarioRunner:
                     for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                     for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
-            k_dil = (self.ctx_data['FLOW'](t) + 0.6) / (self.cfg['chamber_vol'] * 3600)
+            k_dil = (self.ctx_data['FLOW'](t_abs) + 0.6) / (self.cfg['chamber_vol'] * 3600)
             dydt -= y * k_dil
 
             for s in cont_sources:
@@ -749,38 +752,38 @@ class ScenarioRunner:
 
             for b in burst_eval:
                 if b['profile'] == 'tworeaction':
-                    if b['start_s'] <= t <= b['start_s'] + b['dur']:
+                    if b['start_s'] <= t_abs <= b['start_s'] + b['dur']:
                         dydt[b['idx1']] += b['rate1']
                         dydt[b['idx2']] += b['rate2']
                 elif b['profile'] == 'saturating':
-                    dt = t - b['start_s']
+                    dt = t_abs - b['start_s']
                     if 0.0 <= dt <= b['dur']:
                         rate = b['coeff'] * np.exp(-b['lam'] * dt)
                         dydt[b['idx']] += rate
                         if b['byp_idx'] is not None:
                             dydt[b['byp_idx']] += rate * b['byp_frac']
                 else:  # gaussian
-                    rate = b['coeff'] * np.exp(-0.5 * ((t - b['mu']) / b['sigma'])**2)
+                    rate = b['coeff'] * np.exp(-0.5 * ((t_abs - b['mu']) / b['sigma'])**2)
                     dydt[b['idx']] += rate
                     if b['byp_idx'] is not None:
                         dydt[b['byp_idx']] += rate * b['byp_frac']
 
             for imp in h2o_imps:
-                if imp['start_s'] <= t <= imp['start_s'] + imp['dur']:
+                if imp['start_s'] <= t_abs <= imp['start_s'] + imp['dur']:
                     dydt[imp['idx']] += imp['rate']
-            
+
             self.eval_count += 1
             if self.eval_count % 500 == 0 or t > self.last_progress_print_time + 300:
-                progress = max(0.0, min((t - self.t_start) / (self.t_end - self.t_start), 1.0))
-                
+                progress = max(0.0, min(t / _t_duration, 1.0))
+
                 eta_str = ""
                 if progress > 0:
                     elapsed = time.time() - self.real_start_time
                     total_est = elapsed / progress
                     rem_secs = int(total_est - elapsed)
                     eta_str = f" | ETA: {rem_secs // 60}m {rem_secs % 60}s"
-                
-                print(f"  ... ODE Eval Step: {self.eval_count} | Sim Time: {t-self.t_start:.1f}s / {self.t_end-self.t_start:.1f}s | Fraction Done: {progress:.3f} ({progress*100:.1f}%){eta_str}")
+
+                print(f"  ... ODE Eval Step: {self.eval_count} | Sim Time: {t:.1f}s / {_t_duration:.1f}s | Fraction Done: {progress:.3f} ({progress*100:.1f}%){eta_str}")
                 if t > self.last_progress_print_time + 300:
                     self.last_progress_print_time = t
 
@@ -788,58 +791,156 @@ class ScenarioRunner:
 
         solver_method = 'BDF'
         step_limit = min(min_dur / 2.0, 60.0)
-
-        # --- BUILD JACOBIAN SPARSITY PATTERN ---
-        # Uses compiled code object .co_names to detect which species each
-        # var_assignment expression depends on (e.g. RO2 = sum of 6 peroxy radicals).
-        # For each reaction the non-zero Jacobian columns are:
-        #   direct reactant species  +  any species-dependent vars in the rate expression
-        # Rows are all affected species (reactants + products).
-        # Diagonal added for the dilution term (dydt_i -= y_i * k_dil).
-        _sp_idx = self.solver.species_to_idx
         N = self.solver.num_species
-        sparsity = lil_matrix((N, N), dtype=np.int8)
 
-        # diagonal: dilution
-        for i in range(N):
-            sparsity[i, i] = 1
+        # --- PRE-COMPUTE ANALYTICAL JACOBIAN STRUCTURE ---
+        # For each reaction i with ODE reactants r1..rN and affected species a1..aM:
+        #   J[aj, rj] += (sign_aj * coeff_rj) * v_i / y[rj]
+        # where v_i = k_i * prod(y_ode^c) * prod(env^c)  and  dv/dy[rj] = coeff_rj * v_i / y[rj]
+        # Replaces expensive finite-difference (~200 ODE evals/Jacobian → 1 algebraic pass).
+        _jac_rows_l, _jac_cols_l, _jac_factors_l, _jac_rxn_idxs_l = [], [], [], []
+        for rxn_idx, rxn in enumerate(self.mechanism.reactions):
+            if not rxn.reactants_parsed:
+                continue  # zero-order or env-only reactants: dv/dy = 0
+            # affected[i] = (species_idx, signed_stoich): reactants lose, products gain
+            affected = [(r['idx'], -r['coeff']) for r in rxn.reactants_parsed] + \
+                       [(p['idx'], +p['coeff']) for p in rxn.products_parsed]
+            for rj in rxn.reactants_parsed:
+                for ai, sign_ca in affected:
+                    _jac_rows_l.append(ai)
+                    _jac_cols_l.append(rj['idx'])
+                    _jac_factors_l.append(sign_ca * rj['coeff'])
+                    _jac_rxn_idxs_l.append(rxn_idx)
+        _jac_rows     = np.array(_jac_rows_l,      dtype=np.int32)
+        _jac_cols     = np.array(_jac_cols_l,      dtype=np.int32)
+        _jac_factors  = np.array(_jac_factors_l,   dtype=np.float64)
+        _jac_rxn_idxs = np.array(_jac_rxn_idxs_l, dtype=np.int32)
+        print(f">>> [JAC] Analytical Jacobian: {N}×{N}, {len(_jac_rows)} terms "
+              f"across {len(self.mechanism.reactions)} reactions")
 
-        # var_assignment expressions that depend on species concentrations (e.g. RO2 sum)
-        var_species_deps = {}
-        for var_name, comp_expr in self.var_assignments:
-            dep = frozenset(_sp_idx[n] for n in comp_expr.co_names if n in _sp_idx)
-            if dep:
-                var_species_deps[var_name] = dep
-
-        for rxn in self.mechanism.reactions:
-            reactant_idxs = frozenset(r['idx'] for r in rxn.reactants_parsed)
-            affected_idxs = reactant_idxs | frozenset(p['idx'] for p in rxn.products_parsed)
-            if not affected_idxs:
-                continue  # zeroth-order source with no ODE species on either side
-
-            # Extra species the rate constant depends on via var_assignments (e.g. RO2)
-            rate_extra = frozenset(
-                idx
-                for vname in rxn.safe_expr.co_names
-                if vname in var_species_deps
-                for idx in var_species_deps[vname]
-            )
-            all_rate_deps = reactant_idxs | rate_extra
-            if not all_rate_deps:
-                continue  # pure parameter-driven rate (T/M/J only), no species dependence
-
-            for ai in affected_idxs:
-                for rj in all_rate_deps:
-                    sparsity[ai, rj] = 1
-
-        sparsity_csr = sparsity.tocsr()
-        nnz = sparsity_csr.nnz
-        density = nnz / (N * N) * 100
-        print(f">>> [SPARSE] Jacobian: {N}×{N}, {nnz} non-zeros ({density:.1f}% dense) vs {N*N} dense")
+        def analytical_jac(t, y_raw):
+            """Analytical Jacobian: exact d(dydt)/dy computed from reaction structure.
+            Much faster than finite-difference: O(reactions) vs O(N_colors * ODE_cost)."""
+            y = np.maximum(y_raw, 0.0)
+            t_abs = t + _t_offset   # convert relative solver time → absolute interpolation time
+            M_now = self.get_M(t_abs)
+            T_now = self.ctx_data['TEMP'](t_abs)
+            ctx_j = SafeDict()
+            # 1. Load all measured/environmental inputs
+            for k, v_func in self.ctx_data.items():
+                try:
+                    ctx_j[k.upper()] = float(v_func(t_abs))
+                except Exception:
+                    pass
+            # 2. H2O VMR → molec/cm³ (mirrors system_ode logic)
+            if 'RH' in ctx_j and 'H2O' not in ctx_j:
+                p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
+                ctx_j['H2O'] = (ctx_j['RH'] / 100.0) * (p_sat / press)
+            if 'H2O' in ctx_j:
+                h2o_vmr = ctx_j['H2O']
+                ctx_j['H2O'] = h2o_vmr * M_now
+                if 'RH' not in ctx_j:
+                    if h2o_vmr > 0:
+                        p_sat = np.exp(21.36469 - 5339.66 / T_now)
+                        press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
+                        ctx_j['RH'] = h2o_vmr * press / p_sat * 100.0
+                    else:
+                        ctx_j['RH'] = 0.0
+            else:
+                ctx_j['H2O'] = 0.01 * M_now
+            # 3. Base physics variables + math functions
+            ctx_j.update({
+                "T": T_now, "TEMP": T_now, "M": M_now,
+                "O2": 0.2095 * M_now, "N2": 0.7809 * M_now,
+                "np": np, "exp": np.exp, "EXP": np.exp,
+                "LOG10": np.log10, "log10": np.log10,
+                "LOG": np.log, "log": np.log,
+                "COS": np.cos, "SIN": np.sin, "TAN": np.tan, "SQRT": np.sqrt,
+            })
+            # 4. KMT functions
+            for func_name, func in _kmt_funcs:
+                ctx_j[func_name.upper()] = lambda *args, f=func, _T=T_now, _M=M_now: f(*args, _T, _M)
+            for func_name, func in _other_funcs:
+                ctx_j[func_name.upper()] = func
+            # 5. ODE species concentrations
+            ctx_j.update(zip(_species_names, y.tolist()))
+            # 6. Pass 1: COMPRC/KMT var_assignments (COSX, KMT01-14, etc.)
+            for var_name, comp_expr in self.var_assignments:
+                try:
+                    ctx_j[var_name] = eval(comp_expr, globals(), ctx_j)
+                except Exception:
+                    ctx_j[var_name] = 0.0
+            # 7. Build PHTFKT callable (requires COSX from pass 1)
+            _cosx  = max(float(ctx_j.get('COSX', np.cos(float(ctx_j.get('SZ', 45.0)) * 0.0174533))), 0.01)
+            _jno2  = float(ctx_j.get('JNO2',  0.0))
+            _lno2  = float(ctx_j.get('LNO2',  1.165e-2))
+            _mno2  = float(ctx_j.get('MNO2',  0.244))
+            _nnno2 = float(ctx_j.get('NNO2',  -0.267))
+            _hv    = float(ctx_j.get('HV',    0.0))
+            def _phtfkt_j(a, b, c, _c=_cosx, _j=_jno2, _l=_lno2, _m=_mno2, _n=_nnno2, _h=_hv):
+                if _h == 0 or _c <= 0: return 0.0
+                cs_j = a * _c**b * np.exp(c / _c)
+                if _j > 0:
+                    jno2_cs = _l * _c**_m * np.exp(_n / _c)
+                    scale = min(_j / jno2_cs, 1.0) if jno2_cs > 0 else 1.0
+                else:
+                    scale = 1.0
+                return cs_j * scale
+            ctx_j['PHTFKT']    = _phtfkt_j
+            ctx_j['PHTFKT_CS'] = lambda a, b, c, _c=_cosx: a * _c**b * np.exp(c / _c)
+            ctx_j['AMAX']      = np.maximum
+            ctx_j['AMIN']      = np.minimum
+            # 8. Pass 2: J-value var_assignments (uses PHTFKT from step 7)
+            for var_name, comp_expr in self.var_assignments:
+                try:
+                    ctx_j[var_name] = eval(comp_expr, globals(), ctx_j)
+                except Exception:
+                    ctx_j[var_name] = 0.0
+            # 9. Measured J-value override
+            if ctx_j.get('JO1D',   0.0) > 0: ctx_j['J1']  = ctx_j['JO1D']
+            if ctx_j.get('JNO2',   0.0) > 0: ctx_j['J4']  = ctx_j['JNO2']
+            if ctx_j.get('JHONO',  0.0) > 0: ctx_j['J7']  = ctx_j['JHONO']
+            if ctx_j.get('JH2O2',  0.0) > 0: ctx_j['J3']  = ctx_j['JH2O2']
+            if ctx_j.get('J11', 0.0) == 0.0 and ctx_j.get('JHCHO_R', 0.0) > 0: ctx_j['J11'] = ctx_j['JHCHO_R']
+            if ctx_j.get('J12', 0.0) == 0.0 and ctx_j.get('JHCHO_M', 0.0) > 0: ctx_j['J12'] = ctx_j['JHCHO_M']
+            # 10. Rate constants via precompiled batch function
+            try:
+                _compute_rates(ctx_j, _k_buf)
+            except Exception:
+                for i, rxn in enumerate(self.mechanism.reactions):
+                    try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx_j)
+                    except: _k_buf[i] = 0.0
+            np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            # 11. Reaction velocities: v[i] = k[i] * prod(y_ode^c) * prod(env^c)
+            np.copyto(_v_buf, _k_buf)
+            for i, rxn in enumerate(self.mechanism.reactions):
+                if _v_buf[i] == 0.0: continue
+                for r in rxn.reactants_parsed:
+                    _v_buf[i] *= y[r['idx']] ** r['coeff']
+                for r in rxn.reactants_env:
+                    env_v = float(ctx_j.get(r['name'], 0.0))
+                    _v_buf[i] *= env_v ** r['coeff']
+            # 12. Assemble sparse Jacobian
+            # J[ai, rj] += factor * v[rxn] / y[rj]
+            # where factor = sign_affected * coeff_reactant_rj (precomputed)
+            y_col    = np.maximum(y[_jac_cols], 1e-40)
+            jac_data = _jac_factors * _v_buf[_jac_rxn_idxs] / y_col
+            # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil
+            k_dil    = (self.ctx_data['FLOW'](t_abs) + 0.6) / (self.cfg['chamber_vol'] * 3600)
+            dil_idx  = np.arange(N, dtype=np.int32)
+            dil_data = np.full(N, -k_dil)
+            rows = np.concatenate([_jac_rows, dil_idx])
+            cols = np.concatenate([_jac_cols, dil_idx])
+            d    = np.concatenate([jac_data, dil_data])
+            # coo_matrix sums duplicate (row,col) entries — correct for multi-reaction contributions
+            return coo_matrix((d, (rows, cols)), shape=(N, N)).tocsc()
 
         self.t_start = self.t_span[0]
         self.t_end = self.t_span[-1]
-        self.last_progress_print_time = self.t_start
+        _t_offset   = self.t_start          # solver works in relative time (t_rel = t_abs - offset)
+        _t_duration = self.t_end - self.t_start  # total integration span in seconds
+        self.last_progress_print_time = 0.0  # relative-time tracking
         self.eval_count = 0
         self.real_start_time = time.time()
 
@@ -885,7 +986,7 @@ class ScenarioRunner:
         seg_t_list, seg_y_list = [], []
         y_seg = y0.copy()
         for seg_idx, (t0, t1) in enumerate(zip(boundaries[:-1], boundaries[1:])):
-            # Extract t_eval points that fall within this segment
+            # Extract t_eval points that fall within this segment (absolute time)
             mask = (self.t_span >= t0) & (self.t_span <= t1)
             t_eval_seg = self.t_span[mask]
             # Always include the segment endpoints so the final y is exact
@@ -895,16 +996,22 @@ class ScenarioRunner:
                 t_eval_seg = np.concatenate([t_eval_seg, [t1]])
             t_eval_seg = np.unique(t_eval_seg)
 
+            # Shift to relative time before passing to solver (avoids float64 precision loss
+            # when t_abs ~ 7.7e8 s and the required step ~ 1e-4 s: eps*t_abs ~ 1.7e-7 s)
+            t0_rel      = t0 - _t_offset
+            t1_rel      = t1 - _t_offset
+            t_eval_rel  = t_eval_seg - _t_offset
+
             seg_sol = solve_ivp(
                 system_ode,
-                [t0, t1],
+                [t0_rel, t1_rel],
                 y_seg,
                 method=solver_method,
-                t_eval=t_eval_seg,
+                t_eval=t_eval_rel,
                 max_step=step_limit,
-                rtol=1e-3,
+                rtol=1e-2,
                 atol=1e4,
-                jac_sparsity=sparsity_csr
+                jac=analytical_jac,
             )
 
             if not seg_sol.success:
@@ -912,8 +1019,9 @@ class ScenarioRunner:
                       f"({t0:.0f}–{t1:.0f}s) stopped early: {seg_sol.message}")
 
             # Collect results (skip first point of subsequent segments to avoid duplicates)
+            # Restore absolute time for the output arrays
             skip = 1 if seg_idx > 0 and len(seg_t_list) > 0 else 0
-            seg_t_list.append(seg_sol.t[skip:])
+            seg_t_list.append(seg_sol.t[skip:] + _t_offset)
             seg_y_list.append(seg_sol.y[:, skip:])
             y_seg = seg_sol.y[:, -1]
 
