@@ -37,6 +37,10 @@ class EasyParser:
     def parse(self, filename: str):
         # Create a new mechanism object for each file, as the runner accumulates them.
         self.mech = Mechanism()
+        # Use an ordered dict to deduplicate reactions by normalised key (last definition wins,
+        # matching FACSIMILE override semantics — duplicate k[A-->B] lines in .mech files are
+        # treated as overrides, not additions).
+        self._rxn_map = {}   # normalised_key -> (reacs, prods, rate_expr)
         full_content = self.preprocess(filename)
         lines = full_content.split('\n')
         
@@ -121,7 +125,8 @@ class EasyParser:
                 reacs = process_side(left)
                 prods = process_side(right)
                 key = line_for_rxn.replace(' ', '').upper()
-                self.mech.reactions.append(Reaction(reacs, prods, self.rates_map.get(key, "0.0")))
+                # Override semantics: last definition wins (matches FACSIMILE behaviour)
+                self._rxn_map[key] = (reacs, prods, self.rates_map.get(key, "0.0"))
 
             elif line_for_rxn.startswith('%'):
                 parts = line_for_rxn.split(':', 1)
@@ -132,6 +137,11 @@ class EasyParser:
                         left, right = rxn_part.split('=', 1)
                         reacs = process_side(left)
                         prods = process_side(right)
-                        self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
-        
+                        key_pct = rxn_part.replace(' ', '').upper()
+                        self._rxn_map[key_pct] = (reacs, prods, rate_expr)
+
+        # Materialise reactions from dedup map (preserves insertion order of last occurrence)
+        for reacs, prods, rate_expr in self._rxn_map.values():
+            self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
+
         return self.mech

@@ -126,6 +126,9 @@ _EASY_VAR_SUBS = [
     # HV_in is the FACSIMILE alias for the HV (roof open/closed) ENZ column
     (r'(?<![A-Za-z0-9_])HV_in(?![A-Za-z0-9_])',   'HV'),
     (r'(?<![A-Za-z0-9_])hv_in(?![A-Za-z0-9_])',   'HV'),
+    # T_in is the FACSIMILE alias for temperature (T = CONST(T_in) in EASY files)
+    (r'(?<![A-Za-z0-9_])T_in(?![A-Za-z0-9_])',    'T'),
+    (r'(?<![A-Za-z0-9_])t_in(?![A-Za-z0-9_])',    'T'),
 ]
 
 
@@ -406,6 +409,18 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     def _k(lhs_up, rhs_str):
         return k_lookup.get(_rxn_key(lhs_up, rhs_str), "")
 
+    # Set of normalised keys that have a bare --> line in the EASY file.
+    # Used later to detect "k[] only" entries = MCM rate overrides.
+    _rxn_keys_with_bare_line = {_rxn_key(lhs, rhs) for lhs, rhs in all_reactions}
+
+    def _substitute_consts(rate_py: str, consts: dict) -> str:
+        """Replace FACSIMILE CONST names (e.g. gamma_dodecane, SOA_decay) with
+        their numeric/expression values so the rate is self-contained."""
+        out = rate_py
+        for cname, cval in consts.items():
+            out = re.sub(r'(?i)\b' + re.escape(cname) + r'\b', f'({cval})', out)
+        return out
+
     # ---- classify reactions --------------------------------------------------
     injection_source_rxns = []         # (lhs_up, rhs_str, rate, switch_col|None)
     injection_intermediate_species = set()
@@ -496,6 +511,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     # species (SHONO, SHCHO) is multiplied into the rate so the full production
     # rate is self-contained: rate_full = k_rate * source_const.
     chamber_source_reactions = []
+    _custom_reactions_list   = []   # reactions from EASY not in injection/chamber/dilution
 
     for lhs_up, rhs_str in regular_reactions:
         rhs_up = rhs_str.upper()
@@ -608,7 +624,67 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 })
 
         else:
-            skipped_notes.append(f"unclassified regular reaction: {lhs_up} --> {rhs_str}")
+            # Any other reaction explicitly written in the EASY file that is not
+            # handled by injection/chamber/dilution logic is a new reaction that
+            # supplements or modifies the MCM mechanism → custom_reactions.
+            rate = _k(lhs_up, rhs_str)
+            if not rate or _is_zero_rate(rate):
+                skipped_notes.append(f"unclassified reaction (no/zero rate): "
+                                     f"{lhs_up} --> {rhs_str}")
+            else:
+                rate_py = _substitute_consts(_easy_to_py(rate), source_consts)
+                _custom_reactions_list.append({
+                    "reactants": lhs_up,
+                    "products":  rhs_str,
+                    "rate":      rate_py,
+                    "group":     "EASY Reaction",
+                    "comment":   f"[EASY] {lhs_up} → {rhs_str} | k={rate}",
+                })
+
+    # ---- MCM rate overrides: k[] in EASY but NO bare --> line in EASY ---------
+    # These are EASY file overrides for reactions that already exist in the MCM
+    # mechanism files at a different rate.  They must become excluded_reactions
+    # with action="Modify Rate" so the runner replaces the MCM rate.
+    _mcm_rate_overrides = []
+    # Build a set of injection/chain LHS so we don't double-count those rates
+    _injection_lhs = {lhs for lhs, _, _, _ in injection_source_rxns} | \
+                     {lhs for lhs, _, _ in injection_chain_rxns}
+    for _ok, _orate in all_k_assignments.items():
+        if _ok in _rxn_keys_with_bare_line:
+            continue   # has a bare --> line → handled as new/custom reaction
+        if '-->' not in _ok:
+            continue   # bare parameter rate, not a reaction
+        _olhs, _orhs = _ok.split('-->', 1)
+        # Skip injection-owned reactions and +DIL dilution reactions
+        _olhs_parts = [s.strip() for s in _olhs.split('+') if s.strip()]
+        if any(p in _injection_lhs for p in _olhs_parts):
+            continue
+        if '+DIL' in _olhs or 'DIL' in _olhs_parts:
+            continue
+        if not _orate or _is_zero_rate(_orate):
+            continue
+        # Skip photolysis reactions (X+HV-->...) whose rate is a single J-value
+        # already covered by env_map (JNO2, JO1D, JH2O2, JHONO, JHCHO_*).
+        # These are handled by the J-value auto-linker in the runner, not overrides.
+        _rate_tok = _orate.strip().upper()
+        if 'HV' in _olhs_parts and re.match(r'^J[A-Z0-9_]+$', _rate_tok):
+            continue
+        rate_py = _substitute_consts(_easy_to_py(_orate), source_consts)
+        # Format reactants as "A+B" string (canonical spacing)
+        reacts_str = '+'.join(_olhs_parts)
+        prods_str  = _orhs.strip()
+        _mcm_rate_overrides.append({
+            "reactants": reacts_str,
+            "products":  prods_str,
+            "action":    "Modify Rate",
+            "rate":      rate_py,
+            "comment":   f"[EASY override] k[{_olhs}-->{_orhs}] = {_orate}",
+        })
+    if _mcm_rate_overrides:
+        print(f"[idl_parser] MCM RATE OVERRIDES detected: {len(_mcm_rate_overrides)}")
+        for _r in _mcm_rate_overrides:
+            print(f"[idl_parser]   [OVERRIDE] {_r['reactants']} --> {_r['products']}  "
+                  f"new_rate={_r['rate'][:60]}")
 
     # ---- CO2 background (always-on QCO2 switch) -----------------------------
     if "QCO2" in injection_switches:
@@ -815,8 +891,8 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         "idl_parameters":            idl_parameters,
         "analytical_dilution":       analytical_dilution,
         "chamber_source_reactions":  chamber_source_reactions,
-        "custom_reactions":          [],
-        "excluded_reactions":        [],
+        "custom_reactions":          _custom_reactions_list,
+        "excluded_reactions":        _mcm_rate_overrides,
         "blocked_parameters":        [],
         "h2o_injection_impurities":  h2o_imps,
         "_skipped":                  skipped_notes,
@@ -862,6 +938,18 @@ def _print_summary(cfg: dict):
     for r in csr:
         print(f"[idl_parser]   [OK][{r['reactants']}] --> {r['products']}  "
               f"rate={r['rate'][:60]}")
+
+    cr = cfg.get("custom_reactions", [])
+    print(f"[idl_parser] CUSTOM REACTIONS from EASY ({len(cr)}):")
+    for r in cr:
+        print(f"[idl_parser]   [OK][{r['reactants']}] --> {r['products']}  "
+              f"rate={r['rate'][:60]}")
+
+    er = cfg.get("excluded_reactions", [])
+    print(f"[idl_parser] MCM RATE OVERRIDES from EASY ({len(er)}):")
+    for r in er:
+        print(f"[idl_parser]   [OVERRIDE][{r['reactants']}] --> {r['products']}  "
+              f"new_rate={r['rate'][:60]}")
 
     arts = cfg["artifacts"]
     y_on = arts.get("y_active")

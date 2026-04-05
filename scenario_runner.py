@@ -183,15 +183,18 @@ class ScenarioRunner:
             if s.get('target'): all_species.add(s['target'].upper())
             
         for r in self.cfg.get('custom_reactions', []):
-            if not r.get('reactants') or not r.get('products') or not r.get('rate'): continue
-            parts = re.split(r'\s*\+\s*|\s*->\s*|\s*=\s*', r['reactants'] + " + " + r['products'])
+            # Allow empty products (pure decay) or empty reactants (zeroth-order source); only rate is required.
+            if not r.get('rate'): continue
+            reacts_str = r.get('reactants', '') or ''
+            prods_str  = r.get('products',  '') or ''
+            parts = re.split(r'\s*\+\s*|\s*->\s*|\s*=\s*', reacts_str + " + " + prods_str)
             for p in parts:
                 clean_p = p.strip().upper()
-                clean_p = re.sub(r'^[\d\.]+\s*\*\s*', '', clean_p) 
+                clean_p = re.sub(r'^[\d\.]+\s*\*\s*', '', clean_p)
                 if clean_p and not clean_p[0].isdigit(): all_species.add(clean_p)
-            
-            reactants = [x.strip().upper() for x in r['reactants'].split('+') if x.strip()]
-            products = [x.strip().upper() for x in r['products'].split('+') if x.strip()]
+
+            reactants = [x.strip().upper() for x in reacts_str.split('+') if x.strip()]
+            products  = [x.strip().upper() for x in prods_str.split('+')  if x.strip()]
             self.mechanism.reactions.append(Reaction(reactants, products, r['rate']))
 
         # --- IDL chamber_source_reactions: SHONO/SHCHO (zeroth-order) & H2O dark source ---
@@ -309,6 +312,26 @@ class ScenarioRunner:
             all_species.discard(mapped_key.upper())
         for bg in ['RH', 'O2', 'N2', 'M']:
             all_species.discard(bg)
+
+        # --- PSS species: O1D lifetime ~1 ns, far below ODE atol=1e4.
+        # Remove from ODE state; compute analytically in ctx so reactions using
+        # O1D as a reactant (e.g. O1D+H2O→2OH) see the correct PSS concentration.
+        self._pss_species = set()
+        if 'O1D' in all_species:
+            all_species.discard('O1D')
+            self._pss_species.add('O1D')
+            _o1d_pss = (
+                "np.maximum(JO1D, 0.0) * np.maximum(O3, 0.0) / "
+                "np.maximum("
+                "2.0e-11 * N2 * np.exp(130.0 / T) + "
+                "3.20e-11 * O2 * np.exp(67.0 / T) + "
+                "2.14e-10 * H2O, 1e-30)"
+            )
+            try:
+                self.var_assignments.append(('O1D', compile(_o1d_pss, '<O1D_pss>', 'eval')))
+                print("  [PSS] O1D removed from ODE state → J1·O3/k_quench analytical expression added")
+            except Exception as e:
+                print(f"  [WARNING] Could not compile O1D PSS expression: {e}")
 
         self.mechanism.species = sorted(list(all_species))
 
@@ -433,7 +456,7 @@ class ScenarioRunner:
 
             failed_rxns = []
             mapped_keys_upper = [k.upper() for k in self.cfg['env_map'].keys()]
-            bulk_gases = ['O2', 'N2', 'M', 'RH', 'H2O'] 
+            bulk_gases = ['O2', 'N2', 'M', 'RH', 'H2O'] + list(getattr(self, '_pss_species', set()))
             
             for rxn in self.mechanism.reactions:
                 expr = getattr(rxn, 'rate_expression', getattr(rxn, 'rate_str', '0.0')).upper()
@@ -519,6 +542,9 @@ class ScenarioRunner:
         self._compute_rates_fn = _compute_rates
         self._kmt_funcs_cached = _kmt_funcs
         self._other_funcs_cached = _other_funcs
+
+        # PSS species set — captured in system_ode closure for O1D (and future additions)
+        _pss_species_set = getattr(self, '_pss_species', set())
 
         cont_sources = []
         for s in self.cfg.get('continuous_sources', []):
@@ -766,6 +792,19 @@ class ScenarioRunner:
             if ctx.get('J11', 0.0) == 0.0 and ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R']
             if ctx.get('J12', 0.0) == 0.0 and ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M']
 
+            # --- Recompute O1D PSS using final J1 (post-autolinker) ---
+            if 'O1D' in _pss_species_set:
+                _j1_now  = float(ctx.get('J1',  0.0))
+                _o3_now  = float(ctx.get('O3',  0.0))
+                _t_now   = float(ctx.get('T',   298.15))
+                _n2_now  = float(ctx.get('N2',  0.7809 * M_now))
+                _o2_now  = float(ctx.get('O2',  0.2095 * M_now))
+                _h2o_now = float(ctx.get('H2O', 0.0))
+                _kq_now  = (2.0e-11 * _n2_now * np.exp(130.0 / _t_now) +
+                            3.20e-11 * _o2_now * np.exp(67.0  / _t_now) +
+                            2.14e-10 * _h2o_now)
+                ctx['O1D'] = max(_j1_now, 0.0) * max(_o3_now, 0.0) / max(_kq_now, 1e-30)
+
             try:
                 _compute_rates(ctx, _k_buf)
             except Exception:
@@ -949,6 +988,18 @@ class ScenarioRunner:
             if ctx_j.get('JH2O2',  0.0) > 0: ctx_j['J3']  = ctx_j['JH2O2']
             if ctx_j.get('J11', 0.0) == 0.0 and ctx_j.get('JHCHO_R', 0.0) > 0: ctx_j['J11'] = ctx_j['JHCHO_R']
             if ctx_j.get('J12', 0.0) == 0.0 and ctx_j.get('JHCHO_M', 0.0) > 0: ctx_j['J12'] = ctx_j['JHCHO_M']
+            # 9b. Recompute O1D PSS using final J1 (Jacobian must match system_ode)
+            if 'O1D' in _pss_species_set:
+                _j1j = float(ctx_j.get('J1', 0.0))
+                _o3j = float(ctx_j.get('O3', 0.0))
+                _tj  = float(ctx_j.get('T', 298.15))
+                _n2j = float(ctx_j.get('N2', 0.7809 * M_now))
+                _o2j = float(ctx_j.get('O2', 0.2095 * M_now))
+                _hwj = float(ctx_j.get('H2O', 0.0))
+                _kqj = (2.0e-11 * _n2j * np.exp(130.0 / _tj) +
+                        3.20e-11 * _o2j * np.exp(67.0  / _tj) +
+                        2.14e-10 * _hwj)
+                ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)
             # 10. Rate constants via precompiled batch function
             try:
                 _compute_rates(ctx_j, _k_buf)
