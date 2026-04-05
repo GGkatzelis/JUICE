@@ -333,31 +333,14 @@ class ScenarioRunner:
             except Exception as e:
                 print(f"  [WARNING] Could not compile O1D PSS expression: {e}")
 
-        # --- PSS species: ground-state O atom, lifetime ~µs (O+O2+M→O3 dominates sink).
-        # Production sources:
-        #   J4 (JNO2): NO2 + hv → NO + O
-        #   J2:        O3  + hv → O          ← must include to preserve O3 ↔ O recycling
-        #   J6:        NO3 + hv → NO2 + O
-        # Sink: O + O2 + M → O3   (k = (5.6e-34*N2 + 6.0e-34*O2) * (T/300)^-2.6 * O2)
-        # PSS: [O] = (J4*NO2 + J2*O3 + J6*NO3) / k_sink
-        # NOTE: J2*O3 must be included — it cancels the O3 + hv → O consumption in the O3 ODE.
-        #       Omitting it breaks the O3 budget by ~J2*O3 ≈ 2e-5 * 1e12 = 2e7 molec/cm³/s.
-        if 'O' in all_species:
-            all_species.discard('O')
-            self._pss_species.add('O')
-            _o_pss = (
-                "(np.maximum(JNO2, 0.0)*np.maximum(NO2, 0.0)"
-                " + np.maximum(J2, 0.0)*np.maximum(O3, 0.0)"
-                " + np.maximum(J6, 0.0)*np.maximum(NO3, 0.0)) / "
-                "np.maximum("
-                "(5.6e-34 * N2 + 6.0e-34 * O2) * ((T / 300.0) ** -2.6) * O2"
-                ", 1e-30)"
-            )
-            try:
-                self.var_assignments.append(('O', compile(_o_pss, '<O_pss>', 'eval')))
-                print("  [PSS] O atom removed from ODE state → (J4·NO2+J2·O3+J6·NO3)/k_O+O2+M analytical expression added")
-            except Exception as e:
-                print(f"  [WARNING] Could not compile O atom PSS expression: {e}")
+        # --- O atom: kept in ODE (NOT PSS) ---
+        # FACSIMILE also integrates O in the ODE, so both models share the same numerical
+        # treatment. Applying PSS in JUICE but not FACSIMILE makes the O→O3 production
+        # rate diverge and breaks O3 agreement (tested: PSS caused O3 slope ±50% swings).
+        # The ODE O value may be stiff (~76× PSS analytically) but agrees with FACSIMILE
+        # exactly because both run the same reactions at the same numerical rates.
+        # Post-processing (_export_results) replaces O in the output CSV with the PSS
+        # formula for a physically meaningful reported value without affecting chemistry.
 
         self.mechanism.species = sorted(list(all_species))
 
@@ -831,22 +814,7 @@ class ScenarioRunner:
                             2.14e-10 * _h2o_now)
                 ctx['O1D'] = max(_j1_now, 0.0) * max(_o3_now, 0.0) / max(_kq_now, 1e-30)
 
-            # --- Recompute O atom PSS (production = J4*NO2 + J2*O3 + J6*NO3, sink=O+O2+M) ---
-            if 'O' in _pss_species_set:
-                _j4_now  = float(ctx.get('J4',   ctx.get('JNO2', 0.0)))
-                _j2_now  = float(ctx.get('J2',   0.0))   # O3 + hv → O
-                _j6_now  = float(ctx.get('J6',   0.0))   # NO3 + hv → NO2 + O
-                _no2_now = float(ctx.get('NO2',  0.0))
-                _o3_now  = float(ctx.get('O3',   0.0))
-                _no3_now = float(ctx.get('NO3',  0.0))
-                _t_now   = float(ctx.get('T',    298.15))
-                _n2_now  = float(ctx.get('N2',   0.7809 * M_now))
-                _o2_now  = float(ctx.get('O2',   0.2095 * M_now))
-                _ks_now  = (5.6e-34 * _n2_now + 6.0e-34 * _o2_now) * ((_t_now / 300.0) ** -2.6) * _o2_now
-                _o_prod  = (max(_j4_now,0.0)*max(_no2_now,0.0) +
-                            max(_j2_now,0.0)*max(_o3_now,0.0) +
-                            max(_j6_now,0.0)*max(_no3_now,0.0))
-                ctx['O'] = _o_prod / max(_ks_now, 1e-30)
+            # O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
 
             try:
                 _compute_rates(ctx, _k_buf)
@@ -1044,22 +1012,7 @@ class ScenarioRunner:
                         2.14e-10 * _hwj)
                 ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)
 
-            # 9c. Recompute O atom PSS (Jacobian must match system_ode)
-            if 'O' in _pss_species_set:
-                _j4j   = float(ctx_j.get('J4',  ctx_j.get('JNO2', 0.0)))
-                _j2j   = float(ctx_j.get('J2',  0.0))
-                _j6j   = float(ctx_j.get('J6',  0.0))
-                _no2j  = float(ctx_j.get('NO2', 0.0))
-                _o3j   = float(ctx_j.get('O3',  0.0))
-                _no3j  = float(ctx_j.get('NO3', 0.0))
-                _tj    = float(ctx_j.get('T',   298.15))
-                _n2j   = float(ctx_j.get('N2',  0.7809 * M_now))
-                _o2j   = float(ctx_j.get('O2',  0.2095 * M_now))
-                _ksj   = (5.6e-34 * _n2j + 6.0e-34 * _o2j) * ((_tj / 300.0) ** -2.6) * _o2j
-                _o_prodj = (max(_j4j,0.0)*max(_no2j,0.0) +
-                            max(_j2j,0.0)*max(_o3j,0.0) +
-                            max(_j6j,0.0)*max(_no3j,0.0))
-                ctx_j['O'] = _o_prodj / max(_ksj, 1e-30)
+            # 9c. O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
 
             # 10. Rate constants via precompiled batch function
             try:
