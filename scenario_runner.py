@@ -1416,7 +1416,8 @@ class ScenarioRunner:
                         "O2": 0.2095 * M_now, "N2": 0.7809 * M_now,
                         "np": np, "exp": np.exp, "EXP": np.exp,
                         "LOG10": np.log10, "log10": np.log10,
-                        "LOG": np.log, "SQRT": np.sqrt,
+                        "LOG": np.log, "log": np.log, "SQRT": np.sqrt,
+                        "COS": np.cos, "SIN": np.sin, "TAN": np.tan,
                         "AMAX": np.maximum, "AMIN": np.minimum})
             for fn, func in _kmt_funcs:
                 ctx[fn.upper()] = lambda *args, f=func, _T=T_now, _M=M_now: f(*args, _T, _M)
