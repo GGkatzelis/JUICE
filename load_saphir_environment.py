@@ -26,6 +26,16 @@ def load_saphir_environment(file_path):
 
     providers = {}
     for col in df.columns:
-        providers[col] = interp1d(df['time'], df[col], fill_value="extrapolate")
+        # Q-prefixed switch columns (QNO, QH2O, qVCP2, …) are discrete duty-cycle
+        # signals that FACSIMILE treats as piecewise-constant (each row's value
+        # applies for its full duration). Linear interpolation produces an
+        # unphysical triangular ramp that delivers the same integrated mass over
+        # a wider time window, causing peak under-shoot for fast-titrating species
+        # like NO. Use 'previous' (zero-order hold) for these to match FACSIMILE.
+        if col.lower().startswith('q') and col.lower() != 'q_seed':
+            providers[col] = interp1d(df['time'], df[col], kind='previous',
+                                      fill_value="extrapolate", bounds_error=False)
+        else:
+            providers[col] = interp1d(df['time'], df[col], fill_value="extrapolate")
 
     return providers, df['time'].min(), df['time'].max(), headers
