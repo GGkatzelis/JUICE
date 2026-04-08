@@ -148,6 +148,61 @@ class ScenarioRunner:
                 except Exception as e:
                     print(f"[WARNING] Could not compile parameter {p_name}: {e}")
                     
+        # Post-process all accumulated reactions using the fully-populated rates_map.
+        # When files are parsed in sequence, a later SAPHIR override file may update
+        # rates_map entries for reactions already materialised in an earlier .mech file.
+        # Re-applying the final rates_map here ensures those overrides take effect.
+        def _rxn_canon(r):
+            reac_str = '+'.join(str(x) for x in r.reactants)
+            prod_str  = '+'.join(str(x) for x in r.products)
+            return EasyParser._canon_rxn_key(reac_str, prod_str)
+
+        for rxn in self.mechanism.reactions:
+            reac_str = '+'.join(str(x) for x in rxn.reactants)
+            prod_str  = '+'.join(str(x) for x in rxn.products)
+            raw_key   = reac_str.replace(' ', '').upper() + '-->' + prod_str.replace(' ', '').upper()
+            canon_key = _rxn_canon(rxn)
+            final_rate = parser.rates_map.get(raw_key) or parser.rates_map.get(canon_key)
+            if final_rate is None:
+                # FACSIMILE rate-inheritance: bare reaction with no explicit rate
+                # inherits the -/->-disabled rate for the same reactant pair.
+                reac_key = frozenset(r.upper() for r in rxn.reactants)
+                final_rate = parser._reactant_fallback_rates.get(reac_key)
+            if final_rate is not None:
+                rxn.rate_expression = final_rate
+
+        # Remove reactions disabled by -/-> across all parsed files.
+        # These are typically FACSIMILE override lines that replace an MCM reaction
+        # with a SAPHIR-specific version (e.g. NO3+hv→NO2+O disabled, replaced by
+        # NO3+hv→NO2+O3).  The parser may have materialised the original reaction in
+        # an earlier file before encountering the -/-> in a later include file.
+        if parser.disabled_rxn_keys:
+            before_d = len(self.mechanism.reactions)
+            self.mechanism.reactions = [
+                r for r in self.mechanism.reactions
+                if _rxn_canon(r) not in parser.disabled_rxn_keys
+            ]
+            removed_d = before_d - len(self.mechanism.reactions)
+            if removed_d:
+                print(f"  ... Removed {removed_d} reaction(s) disabled by -/-> notation")
+
+        # Deduplicate reactions by canon key: when the same reaction (same reactants+
+        # products) appears in multiple files (e.g. MCM phot.mech AND saphir override),
+        # keep only the LAST occurrence so the later SAPHIR file's version wins.
+        # This mirrors the single-file _rxn_map deduplication in EasyParser.parse().
+        seen_canon = {}
+        for i, rxn in enumerate(self.mechanism.reactions):
+            seen_canon[_rxn_canon(rxn)] = i          # last index wins
+        dedup_indices = set(seen_canon.values())
+        before_dd = len(self.mechanism.reactions)
+        self.mechanism.reactions = [
+            r for i, r in enumerate(self.mechanism.reactions)
+            if i in dedup_indices
+        ]
+        removed_dd = before_dd - len(self.mechanism.reactions)
+        if removed_dd:
+            print(f"  ... Deduplicated {removed_dd} reaction(s) (multi-file overrides)")
+
         # Apply blocked_parameters: explicit suppression from GUI Chemistry Overview tab
         blocked_params = {p.upper() for p in self.cfg.get('blocked_parameters', [])}
         if blocked_params:
@@ -161,6 +216,18 @@ class ScenarioRunner:
             j_clean = j_expr.upper().replace('@', '**')
             try: self.var_assignments.append((j_target.upper(), compile(j_clean, '<string>', 'eval')))
             except: pass
+
+        # Detect whether the imported mechanism contains explicit per-species
+        # dilution reactions ([SPECIES + DIL → ]). If so, the analytical
+        # dilution path must be skipped to avoid double-counting (the explicit
+        # reactions and the analytical decay use the same DILUTE rate).
+        self._has_explicit_dil = any(
+            any(r.strip().upper().split('*')[-1].strip() == 'DIL' for r in rxn.reactants)
+            for rxn in self.mechanism.reactions
+        )
+        if self._has_explicit_dil:
+            print(f"  [Dilution] Detected explicit +DIL reactions in mechanism — "
+                  f"analytical dilution disabled to avoid double-counting")
 
         # IDL-mode computed parameters (DILUTE, DIL, …) — evaluated each ODE step,
         # overriding the ctx_data DILUTE=0 stub so explicit +DIL reactions use the
@@ -272,6 +339,11 @@ class ScenarioRunner:
         self._tr_specs = {}  # burst_idx → {'uid', 'sp1', 'sp2', 'spa', 'fast_frac'}
         for b_idx, b in enumerate(self.cfg.get('burst_injections', [])):
             if b.get('profile', 'Gaussian') != 'TwoReaction':
+                continue
+            # IDL bursts are informational summaries — the actual delivery is
+            # handled by the [QSIG]→TARGET injection_reactions chain. Skipping
+            # avoids double-injection.
+            if b.get('source') == 'IDL':
                 continue
             if not b.get('target') or not b.get('ppb') or b['ppb'] == '':
                 continue
@@ -566,6 +638,10 @@ class ScenarioRunner:
         min_dur = 3600.0
         for b_idx, b in enumerate(self.cfg.get('burst_injections', [])):
             if not b.get('target') or not b.get('ppb') or b['ppb'] == "": continue
+            # IDL bursts are informational summaries — the [QSIG]→TARGET chain
+            # in injection_reactions is the actual delivery. Skip to avoid 2x.
+            if b.get('source') == 'IDL':
+                continue
             target  = b['target'].upper()
             profile = b.get('profile', 'Gaussian')
 
@@ -791,15 +867,16 @@ class ScenarioRunner:
 
             # --- PHOTOLYSIS AUTO-LINKER (runs AFTER var_assignments as fallback) ---
             # Measured j-values always beat JSCALE/PHTFKT approximations.
-            # J7 and J3 are defined in anorg.mcm331.phot.rate as JSCALE*l*HV (non-zero),
-            # so the ==0 guard would prevent the override — they must be unconditional.
-            # MCM J-numbering: J1=JO1D (O3->O1D), J4=JNO2, J7=JHONO, J3=JH2O2
+            # J7, J3, J11, J12 are defined in anorg.mcm331.phot.rate as JSCALE*l*HV
+            # (non-zero during day), so the ==0 guard would prevent the override —
+            # all measured J overrides must be unconditional.
+            # MCM J-numbering: J1=JO1D, J4=JNO2, J7=JHONO, J3=JH2O2, J11=JHCHO_R, J12=JHCHO_M
             if ctx.get('JO1D',   0.0) > 0: ctx['J1']  = ctx['JO1D']
             if ctx.get('JNO2',   0.0) > 0: ctx['J4']  = ctx['JNO2']
             if ctx.get('JHONO',  0.0) > 0: ctx['J7']  = ctx['JHONO']   # unconditional: beats JSCALE approx
             if ctx.get('JH2O2',  0.0) > 0: ctx['J3']  = ctx['JH2O2']   # unconditional: beats JSCALE approx
-            if ctx.get('J11', 0.0) == 0.0 and ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R']
-            if ctx.get('J12', 0.0) == 0.0 and ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M']
+            if ctx.get('JHCHO_R',0.0) > 0: ctx['J11'] = ctx['JHCHO_R'] # unconditional: measured > PHTFKT by ~35%
+            if ctx.get('JHCHO_M',0.0) > 0: ctx['J12'] = ctx['JHCHO_M'] # unconditional: measured > PHTFKT by ~27%
 
             # --- Recompute O1D PSS using final J1 (post-autolinker) ---
             if 'O1D' in _pss_species_set:
@@ -834,10 +911,9 @@ class ScenarioRunner:
                     for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                     for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
-            # Analytical dilution: applied only when NOT in IDL explicit-dilution mode.
-            # In IDL mode the .dil.mech/.dil.rate files are commented out and dilution
-            # is handled via explicit per-species k[SPECIES+DIL-->] reactions above.
-            if self.cfg.get('analytical_dilution', True):
+            # Analytical dilution: applied only when explicit +DIL reactions are
+            # NOT already handling it. We detect this at setup via _has_explicit_dil.
+            if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
                 _flow = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
                 k_dil = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
                 dydt -= y * k_dil
@@ -997,8 +1073,8 @@ class ScenarioRunner:
             if ctx_j.get('JNO2',   0.0) > 0: ctx_j['J4']  = ctx_j['JNO2']
             if ctx_j.get('JHONO',  0.0) > 0: ctx_j['J7']  = ctx_j['JHONO']
             if ctx_j.get('JH2O2',  0.0) > 0: ctx_j['J3']  = ctx_j['JH2O2']
-            if ctx_j.get('J11', 0.0) == 0.0 and ctx_j.get('JHCHO_R', 0.0) > 0: ctx_j['J11'] = ctx_j['JHCHO_R']
-            if ctx_j.get('J12', 0.0) == 0.0 and ctx_j.get('JHCHO_M', 0.0) > 0: ctx_j['J12'] = ctx_j['JHCHO_M']
+            if ctx_j.get('JHCHO_R', 0.0) > 0: ctx_j['J11'] = ctx_j['JHCHO_R']  # unconditional
+            if ctx_j.get('JHCHO_M', 0.0) > 0: ctx_j['J12'] = ctx_j['JHCHO_M']  # unconditional
             # 9b. Recompute O1D PSS using final J1 (Jacobian must match system_ode)
             if 'O1D' in _pss_species_set:
                 _j1j = float(ctx_j.get('J1', 0.0))
@@ -1037,7 +1113,7 @@ class ScenarioRunner:
             y_col    = np.maximum(y[_jac_cols], 1e-40)
             jac_data = _jac_factors * _v_buf[_jac_rxn_idxs] / y_col
             # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil (only in analytical mode)
-            if self.cfg.get('analytical_dilution', True):
+            if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
                 _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
                 k_dil    = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
                 dil_idx  = np.arange(N, dtype=np.int32)
@@ -1213,11 +1289,13 @@ class ScenarioRunner:
             df['O1D'] = np.where(_kq > 0, _j1 * _o3 / np.maximum(_kq, 1e-30), 0.0)
             print("  [O1D] Replaced ODE output with pseudo-steady-state (J1·O3/k_quench)")
 
-        # --- O atom pseudo-steady-state correction ----------------------------------
-        # Ground-state O lifetime ~µs.
-        # PSS: [O] = (J4·NO2 + J2·O3 + J6·NO3) / k_sink   where k_sink = (5.6e-34·N2 + 6.0e-34·O2)·(T/300)^-2.6·O2
-        # J2·O3 must be included to preserve the O3 ↔ O recycling loop.
-        if 'O' in df.columns:
+        # --- O atom export: disabled (was post-process PSS overwrite) ---------------
+        # FACSIMILE keeps O in the ODE state and reports values O(~10²) molec/cm³,
+        # which is ~100× smaller than the analytical PSS J4·NO2/k_O+O2+M (~10⁴).
+        # The PSS overwrite produced spurious +10880% bias in the diagnostic.
+        # Per commit 5da582f, JUICE keeps O in the ODE — leave the raw ODE state in
+        # the export so comparisons reflect what the solver actually computes.
+        if False and 'O' in df.columns:
             _T   = (df['SAPHIR_TEMP'].values if 'SAPHIR_TEMP' in df.columns else
                     df['SAPHIR_T'].values     if 'SAPHIR_T'    in df.columns else
                     np.full(len(df), 298.15))
@@ -1376,6 +1454,8 @@ class ScenarioRunner:
             if ctx.get('JNO2', 0) > 0: ctx['J4'] = ctx['JNO2']
             if ctx.get('JHONO', 0) > 0: ctx['J7'] = ctx['JHONO']
             if ctx.get('JH2O2', 0) > 0: ctx['J3'] = ctx['JH2O2']
+            if ctx.get('JHCHO_R', 0) > 0: ctx['J11'] = ctx['JHCHO_R']  # unconditional
+            if ctx.get('JHCHO_M', 0) > 0: ctx['J12'] = ctx['JHCHO_M']  # unconditional
 
             try:
                 _compute_rates(ctx, _k_loc)
