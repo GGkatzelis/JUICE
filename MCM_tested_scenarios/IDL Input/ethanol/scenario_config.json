@@ -1,5 +1,6 @@
 {
-    "folder": "C:/Users/g.gkatzelis/Desktop/My Folders/My Coding/Python/GitHub/MCM_SAPHIR_Tool/MCM_tested_scenarios/IDL Input/ethanol",
+    "folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\ethanol",
+    "chemistry_folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\ethanol\\chemistry",
     "chamber_vol": 276.0,
     "mechanism_files": [
         "anorg.mcm331.dark.rate",
@@ -18,14 +19,6 @@
         "saphir.jmeasured_02.incl"
     ],
     "env_map": {
-        "TEMP": {
-            "type": "SAPHIR File",
-            "value": "t"
-        },
-        "PRESS": {
-            "type": "Fixed Constant",
-            "value": "1006.5"
-        },
         "JNO2": {
             "type": "SAPHIR File",
             "value": "jNO2"
@@ -33,6 +26,34 @@
         "JO1D": {
             "type": "SAPHIR File",
             "value": "jO1D"
+        },
+        "JHCHO_m": {
+            "type": "SAPHIR File",
+            "value": "jHCHO_m"
+        },
+        "JHCHO_r": {
+            "type": "SAPHIR File",
+            "value": "jHCHO_r"
+        },
+        "JH2O2": {
+            "type": "SAPHIR File",
+            "value": "jH2O2"
+        },
+        "JHONO": {
+            "type": "SAPHIR File",
+            "value": "jHONO"
+        },
+        "TEMP": {
+            "type": "SAPHIR File",
+            "value": "t"
+        },
+        "SZ": {
+            "type": "SAPHIR File",
+            "value": "sz"
+        },
+        "HV": {
+            "type": "SAPHIR File",
+            "value": "hv"
         },
         "FLOW": {
             "type": "SAPHIR File",
@@ -42,20 +63,12 @@
             "type": "SAPHIR File",
             "value": "H2O"
         },
-        "HV": {
-            "type": "SAPHIR File",
-            "value": "hv"
-        },
-        "SZ": {
-            "type": "SAPHIR File",
-            "value": "sz"
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1006.5"
         }
     },
     "j_scalings": {
-        "J_CH3CHO": "JSCALE * 7.344e-6 * HV",
-        "J_HNO3": "JSCALE * 9.312e-7 * HV",
-        "J_NO3": "JSCALE * 1.747e-1 * HV",
-        "J_NO3CH2CHO": "JSCALE * 1.87695e-4 * HV",
         "JCL2": "0.262*JNO2",
         "JCLNO2": "0.040*JNO2",
         "JCLONO2": "0.005*JNO2"
@@ -84,29 +97,32 @@
             "rate": "M*1e-6/3600*0.01"
         }
     ],
-    "burst_injections": [],
-    "custom_reactions": [],
-    "chamber_source_reactions": [
+    "burst_injections": [
         {
-            "reactants": "",
-            "products": "HONO",
-            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (HV*2.6*1.1*0.7)",
-            "comment": "[IDL] SHONO=HV*2.6*1.1*0.7 -> HONO (chamber photolytic source) | k=4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2  *  SHONO=HV*2.6*1.1*0.7",
-            "group": "Chamber Source"
+            "name": "NO (IDL)",
+            "target": "NO",
+            "ppb": "8.1",
+            "start_utc": "09.07.2024 11:49:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*8.1",
+            "t90_frac": "0.5"
         },
         {
-            "reactants": "",
-            "products": "HCHO",
-            "rate": "(2.8e6) * (HV*1)",
-            "comment": "[IDL] SHCHO=HV*1 -> HCHO (chamber photolytic source) | k=2.8e6  *  SHCHO=HV*1",
-            "group": "Chamber Source"
-        },
-        {
-            "reactants": "H2O",
-            "products": "HONO",
-            "rate": "1e-012",
-            "comment": "[IDL] H2O \u2192 HONO (wall dark source) | k=1e-012  [H2O from ENZ via env_map]",
-            "group": "Chamber Source"
+            "name": "VOCIN1 (IDL)",
+            "target": "VOCIN1",
+            "ppb": "591.43",
+            "start_utc": "09.07.2024 11:10:00",
+            "duration_s": "120",
+            "profile": "TwoReaction",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*575*180/175",
+            "t90_frac": "0.5",
+            "k_fast": "0.016667",
+            "k_slow": "0.000556",
+            "k_delivery": "0.016667",
+            "fast_frac": "0.9"
         }
     ],
     "injection_reactions": [
@@ -114,60 +130,114 @@
             "reactants": "QNO",
             "products": "NO",
             "rate": "(M*1e-9/60*8.1) * QNO",
-            "comment": "[IDL] QNO injection | k[QNO --> NO] = M*1e-9/60*8.1",
-            "group": "IDL Injection"
+            "label": "QNO injection",
+            "group": "IDL Injection",
+            "comment": "k[QNO --> NO] = M*1e-9/60*8.1"
         },
         {
             "reactants": "QNO",
             "products": "NO2",
             "rate": "(M*1e-9/60*0.7) * QNO",
-            "comment": "[IDL] QNO injection | k[QNO --> NO2] = M*1e-9/60*0.7",
-            "group": "IDL Injection"
+            "label": "QNO injection",
+            "group": "IDL Injection",
+            "comment": "k[QNO --> NO2] = M*1e-9/60*0.7"
         },
         {
             "reactants": "QVCP2",
             "products": "0.9*VOCin1+0.1*VOCin2",
             "rate": "(M*1e-9/60*575*180/175) * QVCP2",
-            "comment": "[IDL] QVOC injection | k[QVOC --> 0.9*VOCin1+0.1*VOCin2] = M*1e-9/60*575*180/175",
-            "group": "IDL Injection"
+            "label": "QVOC injection",
+            "group": "IDL Injection",
+            "comment": "k[QVOC --> 0.9*VOCin1+0.1*VOCin2] = M*1e-9/60*575*180/175"
         },
         {
             "reactants": "VOCIN1",
             "products": "VOCin_all",
             "rate": "1./60",
-            "comment": "[IDL] VOCIN1 chain | k[VOCIN1 --> VOCin_all] = 1./60",
-            "group": "IDL Injection"
+            "label": "VOCIN1 chain",
+            "group": "IDL Injection",
+            "comment": "k[VOCIN1 --> VOCin_all] = 1./60"
         },
         {
             "reactants": "VOCIN2",
             "products": "VOCin_all",
             "rate": "1./1800",
-            "comment": "[IDL] VOCIN2 chain | k[VOCIN2 --> VOCin_all] = 1./1800",
-            "group": "IDL Injection"
+            "label": "VOCIN2 chain",
+            "group": "IDL Injection",
+            "comment": "k[VOCIN2 --> VOCin_all] = 1./1800"
         },
         {
             "reactants": "VOCIN_ALL",
             "products": "C2H5OH",
             "rate": "1./60",
-            "comment": "[IDL] VOCIN_ALL chain | k[VOCIN_ALL --> C2H5OH] = 1./60",
-            "group": "IDL Injection"
+            "label": "VOCIN_ALL chain",
+            "group": "IDL Injection",
+            "comment": "k[VOCIN_ALL --> C2H5OH] = 1./60"
         },
         {
             "reactants": "QH2O",
             "products": "CO",
             "rate": "(M*1e-9/60*0.5) * QH2O",
-            "comment": "[IDL] QH2O impurity: CO | k[QH2O --> CO] = M*1e-9/60*0.5",
-            "group": "IDL Injection"
+            "label": "QH2O impurity: CO",
+            "group": "IDL Injection",
+            "comment": "k[QH2O --> CO] = M*1e-9/60*0.5"
         },
         {
             "reactants": "QH2O",
             "products": "NO2",
             "rate": "(M*1e-9/60*0.12) * QH2O",
-            "comment": "[IDL] QH2O impurity: NO2 | k[QH2O --> NO2] = M*1e-9/60*0.12",
-            "group": "IDL Injection"
+            "label": "QH2O impurity: NO2",
+            "group": "IDL Injection",
+            "comment": "k[QH2O --> NO2] = M*1e-9/60*0.12"
         }
     ],
+    "idl_dilution_reactions": [],
+    "idl_parameters": {
+        "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
+        "DIL": "1.",
+        "WALLDEP": "1."
+    },
+    "analytical_dilution": true,
+    "chamber_source_reactions": [
+        {
+            "reactants": "",
+            "products": "HONO",
+            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (HV*2.6*1.1*0.7)",
+            "label": "SHONO=HV*2.6*1.1*0.7 -> HONO (chamber photolytic source)",
+            "group": "Chamber Source",
+            "comment": "k=4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2  *  SHONO=HV*2.6*1.1*0.7"
+        },
+        {
+            "reactants": "",
+            "products": "HCHO",
+            "rate": "(2.8e6) * (HV*1)",
+            "label": "SHCHO=HV*1 -> HCHO (chamber photolytic source)",
+            "group": "Chamber Source",
+            "comment": "k=2.8e6  *  SHCHO=HV*1"
+        },
+        {
+            "reactants": "H2O",
+            "products": "HONO",
+            "rate": "1e-012",
+            "label": "H2O \u2192 HONO (wall dark source)",
+            "group": "Chamber Source",
+            "comment": "k=1e-012  [H2O from ENZ via env_map]"
+        }
+    ],
+    "custom_reactions": [],
     "excluded_reactions": [],
     "blocked_parameters": [],
-    "h2o_injection_impurities": []
+    "h2o_injection_impurities": [],
+    "_skipped": [
+        "FUNCTION definition 'WVC2RH': FACSIMILE-only macro, not needed in Python ODE",
+        "FILES[] directive: FACSIMILE file config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FUNCTION definition 'TROE': FACSIMILE-only macro, not needed in Python ODE",
+        "zero-rate injection: QO3 --> O3  (k=M*1e-9/60*113*0)",
+        "Y + OH --> HO2: handled as Y-background artifact (y_eqn=230 ppb, k=2.4e-13)",
+        "SNO2 source inactive: no CONST def and INITIAL[SNO2]=0  (k=jno2/5e-3/3600*HV_in/1.6*0.55)",
+        "zero-rate qH2O impurity: QH2O --> HONO  (k=M*1e-9/60*0.)",
+        "zero-rate qH2O impurity: QH2O --> NO  (k=M*1e-9/60*0.0)"
+    ]
 }

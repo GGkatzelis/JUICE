@@ -8,6 +8,13 @@ class EasyParser:
         self.base_path = base_path
         self.include_dir = include_dir
         self.rates_map = {}
+        # Canon keys of reactions explicitly disabled by -/-> across ALL parse() calls.
+        # scenario_runner uses this to retroactively drop already-materialised reactions.
+        self.disabled_rxn_keys = set()
+        # Fallback rates: when -/-> disables A+B→C, a replacement bare reaction
+        # A+B→D with no explicit k[] definition inherits the disabled rate.
+        # Maps frozenset(reactant_names_upper) → rate_expression.
+        self._reactant_fallback_rates = {}
 
     @staticmethod
     def _canon_rxn_key(lhs: str, rhs: str) -> str:
@@ -94,6 +101,34 @@ class EasyParser:
             if not clean_line:
                 return
 
+            # FACSIMILE "-/->" notation: disables a reaction (rate forced to 0.0).
+            # Store the canon key in rates_map so pass 2 skips it and any earlier
+            # definition (e.g. MCM k[...]=PHTFKT) is overridden to 0.
+            if '-/->' in line_for_rxn and '=' not in line_for_rxn and not is_commented:
+                left_d, right_d = line_for_rxn.split('->',  1)   # splits on first '->'
+                left_d = left_d.rstrip('-/')                      # strip trailing -/
+                right_d = right_d.lstrip('>')                     # strip leading >
+                canon_d = self._canon_rxn_key(left_d, right_d)
+                raw_d = (left_d.replace(' ', '').upper()
+                         + '-->' + right_d.replace(' ', '').upper())
+                # Capture original rate BEFORE zeroing — replacement reactions with the
+                # same reactant pair (different products) can inherit it (FACSIMILE
+                # rate-inheritance convention).
+                original_rate = (self.rates_map.get(raw_d)
+                                 or self.rates_map.get(canon_d))
+                if original_rate and original_rate != '0.0':
+                    reac_key = frozenset(
+                        t.upper() for t in left_d.replace(' ', '').split('+') if t)
+                    self._reactant_fallback_rates[reac_key] = original_rate
+                # Zero both the canon key (sorted) and the natural-order raw key so
+                # that the pass-2 lookup (which checks raw key first) also returns 0.0.
+                self.rates_map[canon_d] = "0.0"
+                self.rates_map[raw_d]   = "0.0"
+                # Track across all parse() calls so scenario_runner can retroactively
+                # drop reactions that were materialised in an earlier file parse.
+                self.disabled_rxn_keys.add(canon_d)
+                return
+
             # Parameter definitions
             if ('=' in clean_line
                     and not clean_line.lower().startswith(('k[', 'initial', 'facs', 'files'))
@@ -117,17 +152,36 @@ class EasyParser:
                 rate_param_name = f"J{j_num}"
                 j_arg = args.split(',')[0].strip()
                 self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
-                self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
+                raw_rxn_key = rxn_str.replace(' ', '').upper()
+                self.rates_map[raw_rxn_key] = rate_param_name
+                # Also store canon key so -/-> inheritance lookup can find it.
+                if '-->' in raw_rxn_key:
+                    lhs_p, rhs_p = raw_rxn_key.split('-->', 1)
+                    canon_p = self._canon_rxn_key(lhs_p, rhs_p)
+                    if canon_p != raw_rxn_key:
+                        self.rates_map[canon_p] = rate_param_name
                 return
 
             # PHOTMMSC without J<N>
             phot_no_j_match = re.search(r'k\[(.*?)\]\s*=\s*PHOTMMSC\((.*?)\)', line_for_rxn, re.I)
             if phot_no_j_match:
                 rxn_str, args = phot_no_j_match.groups()
-                rate_param_name = f"J_{rxn_str.split('+')[0].strip()}"
+                # Build a unique parameter name from the full reaction key so that
+                # different PHOTMMSC branches (e.g. NO3+hv→NO and NO3+hv→NO2+O3)
+                # each get their own J parameter and don't overwrite each other.
+                raw_rxn_key = rxn_str.replace(' ', '').upper()
+                # Replace arrow and '+' to get a valid Python identifier
+                param_suffix = raw_rxn_key.replace('-->', '_').replace('+', '_')
+                rate_param_name = f"J_{param_suffix}"
                 j_arg = args.split(',')[0].strip()
                 self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
-                self.rates_map[rxn_str.replace(' ', '').upper()] = rate_param_name
+                self.rates_map[raw_rxn_key] = rate_param_name
+                # Also store canon key.
+                if '-->' in raw_rxn_key:
+                    lhs_p, rhs_p = raw_rxn_key.split('-->', 1)
+                    canon_p = self._canon_rxn_key(lhs_p, rhs_p)
+                    if canon_p != raw_rxn_key:
+                        self.rates_map[canon_p] = rate_param_name
                 return
 
             # INITIAL conditions
@@ -173,7 +227,13 @@ class EasyParser:
                 prods = process_side(right)
                 key = line_for_rxn.replace(' ', '').upper()
                 canon_key = self._canon_rxn_key(left, right)
-                rate = self.rates_map.get(key, self.rates_map.get(canon_key, "0.0"))
+                rate = self.rates_map.get(key) or self.rates_map.get(canon_key)
+                if rate is None:
+                    # FACSIMILE rate-inheritance: bare reaction with no explicit k[]
+                    # inherits the rate of a -/->-disabled reaction with same reactants.
+                    reac_key = frozenset(
+                        t.upper() for t in left.replace(' ', '').split('+') if t)
+                    rate = self._reactant_fallback_rates.get(reac_key, "0.0")
                 self._rxn_map[canon_key] = (reacs, prods, rate)
 
             elif line_for_rxn.startswith('%'):
@@ -193,8 +253,11 @@ class EasyParser:
         for line in lines:
             _parse_line_pass2(line)
 
-        # Materialise reactions from dedup map (preserves insertion order of last occurrence)
-        for reacs, prods, rate_expr in self._rxn_map.values():
-            self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
+        # Materialise reactions from dedup map (preserves insertion order of last occurrence).
+        # Skip reactions disabled by -/-> within this same file (or any previously
+        # parsed file — disabled_rxn_keys persists across calls).
+        for canon_key, (reacs, prods, rate_expr) in self._rxn_map.items():
+            if canon_key not in self.disabled_rxn_keys:
+                self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
 
         return self.mech

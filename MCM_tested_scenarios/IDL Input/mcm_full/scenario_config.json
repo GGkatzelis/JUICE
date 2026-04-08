@@ -1,5 +1,6 @@
 {
-    "folder": "C:/Users/g.gkatzelis/Desktop/My Folders/My Coding/Python/GitHub/MCM_SAPHIR_Tool/MCM_tested_scenarios/IDL Input/mcm_full",
+    "folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\mcm_full",
+    "chemistry_folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\mcm_full\\chemistry",
     "chamber_vol": 276.0,
     "mechanism_files": [
         "anorg/anorg.mcm331.dark.rate",
@@ -15,14 +16,6 @@
         "anorg/saphir.jmeasured_02.incl"
     ],
     "env_map": {
-        "TEMP": {
-            "type": "SAPHIR File",
-            "value": "t"
-        },
-        "PRESS": {
-            "type": "Fixed Constant",
-            "value": "1006.5"
-        },
         "JNO2": {
             "type": "SAPHIR File",
             "value": "jNO2"
@@ -31,30 +24,44 @@
             "type": "SAPHIR File",
             "value": "jO1D"
         },
-        "H2O": {
+        "JHCHO_m": {
             "type": "SAPHIR File",
-            "value": "H2O"
+            "value": "jHCHO_m"
+        },
+        "JHCHO_r": {
+            "type": "SAPHIR File",
+            "value": "jHCHO_r"
+        },
+        "JH2O2": {
+            "type": "SAPHIR File",
+            "value": "jH2O2"
+        },
+        "JHONO": {
+            "type": "SAPHIR File",
+            "value": "jHONO"
+        },
+        "TEMP": {
+            "type": "SAPHIR File",
+            "value": "t"
+        },
+        "SZ": {
+            "type": "SAPHIR File",
+            "value": "sz"
         },
         "HV": {
             "type": "SAPHIR File",
             "value": "hv"
         },
-        "SZ": {
+        "H2O": {
             "type": "SAPHIR File",
-            "value": "sz"
+            "value": "H2O"
+        },
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1006.5"
         }
     },
-    "j_scalings": {
-        "J52": "PHTFKT(1.907D-06,1.244,-0.335)",
-        "J53": "PHTFKT(2.485D-06,1.196,-0.328)",
-        "J54": "PHTFKT(4.095D-06,1.111,-0.316)",
-        "J55": "PHTFKT(1.135D-05,0.974,-0.309)",
-        "J56": "PHTFKT(4.365D-05,1.089,-0.323)",
-        "J_CH3CHO": "JSCALE * 7.344e-6 * HV",
-        "J_HNO3": "JSCALE * 9.312e-7 * HV",
-        "J_NO3": "JSCALE * 1.747e-1 * HV",
-        "J_NO3CH2CHO": "JSCALE * 1.87695e-4 * HV"
-    },
+    "j_scalings": {},
     "artifacts": {
         "active": true,
         "scale": "1.0",
@@ -73,29 +80,102 @@
         "CO": 12.0
     },
     "continuous_sources": [],
-    "burst_injections": [],
-    "custom_reactions": [],
-    "chamber_source_reactions": [
+    "burst_injections": [
         {
-            "reactants": "",
-            "products": "HONO+XNOy",
-            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (2.6*0.85) * HV",
-            "comment": "[IDL] SHONO=2.6*0.85 -> HONO (chamber photolytic source) | k=4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2  *  SHONO=2.6*0.85",
-            "group": "Chamber Source"
+            "name": "NO (IDL)",
+            "target": "NO",
+            "ppb": "6.6",
+            "start_utc": "10.07.2024 09:54:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*6.6",
+            "t90_frac": "0.5"
         },
         {
-            "reactants": "",
-            "products": "HCHO",
-            "rate": "2.8e6",
-            "comment": "[IDL] QSHCHO+HV=1 -> HCHO (chamber photolytic source) | k=2.8e6  *  QSHCHO+HV=1",
-            "group": "Chamber Source"
+            "name": "VOCIN1 (IDL)",
+            "target": "VOCIN1",
+            "ppb": "23.34",
+            "start_utc": "10.07.2024 08:45:00",
+            "duration_s": "300",
+            "profile": "TwoReaction",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*23.34",
+            "t90_frac": "0.5",
+            "k_fast": "0.016667",
+            "k_slow": "0.000556",
+            "k_delivery": "1/(3600*SOA_decay)",
+            "fast_frac": "0.9"
         },
         {
-            "reactants": "H2O",
-            "products": "HONO",
-            "rate": "1e-012/2",
-            "comment": "[IDL] H2O \u2192 HONO (wall dark source) | k=1e-012/2  [H2O from ENZ via env_map]",
-            "group": "Chamber Source"
+            "name": "C2H4 (IDL)",
+            "target": "C2H4",
+            "ppb": "11.0",
+            "start_utc": "10.07.2024 08:57:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*11",
+            "t90_frac": "0.5"
+        },
+        {
+            "name": "C3H6 (IDL)",
+            "target": "C3H6",
+            "ppb": "6.0",
+            "start_utc": "10.07.2024 09:12:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*6",
+            "t90_frac": "0.5"
+        },
+        {
+            "name": "TBUT2ENE (IDL)",
+            "target": "TBUT2ENE",
+            "ppb": "1.0",
+            "start_utc": "10.07.2024 09:26:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*1",
+            "t90_frac": "0.5"
+        },
+        {
+            "name": "C4H6 (IDL)",
+            "target": "C4H6",
+            "ppb": "1.16",
+            "start_utc": "10.07.2024 09:32:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*1.16",
+            "t90_frac": "0.5"
+        },
+        {
+            "name": "MEPROPENE (IDL)",
+            "target": "MEPROPENE",
+            "ppb": "1.5",
+            "start_utc": "10.07.2024 09:45:00",
+            "duration_s": "300",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*1.5",
+            "t90_frac": "0.5"
+        },
+        {
+            "name": "SOA_SEED (IDL)",
+            "target": "SOA_SEED",
+            "ppb": "?",
+            "start_utc": "10.07.2024 06:40:00",
+            "duration_s": "600",
+            "profile": "TwoReaction",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60/(136*2.3/48*1.97)*0.57",
+            "t90_frac": "0.5",
+            "k_fast": "0.016667",
+            "k_slow": "0.000556",
+            "k_delivery": "1/(3600*SOA_decay)",
+            "fast_frac": "0.9"
         }
     ],
     "injection_reactions": [
@@ -103,116 +183,357 @@
             "reactants": "QNO",
             "products": "NO+XNOy",
             "rate": "(M*1e-9/60*6.6) * QNO",
-            "comment": "[IDL] QNO injection | k[QNO --> NO+XNOy] = M*1e-9/60*6.6",
-            "group": "IDL Injection"
+            "label": "QNO injection",
+            "group": "IDL Injection",
+            "comment": "k[QNO --> NO+XNOy] = M*1e-9/60*6.6"
         },
         {
             "reactants": "QNO",
             "products": "NO2+XNOy",
             "rate": "(M*1e-9/60*0.1) * QNO",
-            "comment": "[IDL] QNO injection | k[QNO --> NO2+XNOy] = M*1e-9/60*0.1",
-            "group": "IDL Injection"
+            "label": "QNO injection",
+            "group": "IDL Injection",
+            "comment": "k[QNO --> NO2+XNOy] = M*1e-9/60*0.1"
         },
         {
             "reactants": "QVOC",
             "products": "0.9*VOCin1+0.1*VOCin2",
             "rate": "(M*1e-9/60*23.34) * QVOC",
-            "comment": "[IDL] QVOC injection | k[QVOC --> 0.9*VOCin1+0.1*VOCin2] = M*1e-9/60*23.34",
-            "group": "IDL Injection"
+            "label": "QVOC injection",
+            "group": "IDL Injection",
+            "comment": "k[QVOC --> 0.9*VOCin1+0.1*VOCin2] = M*1e-9/60*23.34"
         },
         {
             "reactants": "QVOC",
             "products": "0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12",
             "rate": "(M*1e-9/60*23.34) * QVOC",
-            "comment": "[IDL] QVOCIN_ALL injection | k[QVOCIN_ALL --> 0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12] = M*1e-9/60*23.34",
-            "group": "IDL Injection"
+            "label": "QVOCIN_ALL injection",
+            "group": "IDL Injection",
+            "comment": "k[QVOCIN_ALL --> 0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12] = M*1e-9/60*23.34"
         },
         {
             "reactants": "Q_C2H4",
             "products": "C2H4",
             "rate": "(M*1e-9/60*11) * Q_C2H4",
-            "comment": "[IDL] Q_C2H4 injection | k[Q_C2H4 --> C2H4] = M*1e-9/60*11",
-            "group": "IDL Injection"
+            "label": "Q_C2H4 injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_C2H4 --> C2H4] = M*1e-9/60*11"
         },
         {
             "reactants": "Q_C3H6",
             "products": "C3H6",
             "rate": "(M*1e-9/60*6) * Q_C3H6",
-            "comment": "[IDL] Q_C3H6 injection | k[Q_C3H6 --> C3H6] = M*1e-9/60*6",
-            "group": "IDL Injection"
+            "label": "Q_C3H6 injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_C3H6 --> C3H6] = M*1e-9/60*6"
         },
         {
             "reactants": "Q_TBUT2ENE",
             "products": "TBUT2ENE",
             "rate": "(M*1e-9/60*1) * Q_TBUT2ENE",
-            "comment": "[IDL] Q_TBUT2ENE injection | k[Q_TBUT2ENE --> TBUT2ENE] = M*1e-9/60*1",
-            "group": "IDL Injection"
+            "label": "Q_TBUT2ENE injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_TBUT2ENE --> TBUT2ENE] = M*1e-9/60*1"
         },
         {
             "reactants": "Q_C4H6",
             "products": "C4H6",
             "rate": "(M*1e-9/60*1.16) * Q_C4H6",
-            "comment": "[IDL] Q_C4H6 injection | k[Q_C4H6 --> C4H6] = M*1e-9/60*1.16",
-            "group": "IDL Injection"
+            "label": "Q_C4H6 injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_C4H6 --> C4H6] = M*1e-9/60*1.16"
         },
         {
             "reactants": "Q_MEPROPENE",
             "products": "MEPROPENE",
             "rate": "(M*1e-9/60*1.5) * Q_MEPROPENE",
-            "comment": "[IDL] Q_MEPROPENE injection | k[Q_MEPROPENE --> MEPROPENE] = M*1e-9/60*1.5",
-            "group": "IDL Injection"
+            "label": "Q_MEPROPENE injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_MEPROPENE --> MEPROPENE] = M*1e-9/60*1.5"
         },
         {
             "reactants": "Q_SEED",
             "products": "SOA_seed",
             "rate": "(M*1e-9/60/(136*2.3/48*1.97)*0.57) * Q_SEED",
-            "comment": "[IDL] Q_SEED injection | k[Q_SEED --> SOA_seed] = M*1e-9/60/(136*2.3/48*1.97)*0.57",
-            "group": "IDL Injection"
+            "label": "Q_SEED injection",
+            "group": "IDL Injection",
+            "comment": "k[Q_SEED --> SOA_seed] = M*1e-9/60/(136*2.3/48*1.97)*0.57"
         },
         {
             "reactants": "VOCIN1",
             "products": "qVOCin_all",
             "rate": "1./60",
-            "comment": "[IDL] VOCIN1 chain | k[VOCIN1 --> qVOCin_all] = 1./60",
-            "group": "IDL Injection"
+            "label": "VOCIN1 chain",
+            "group": "IDL Injection",
+            "comment": "k[VOCIN1 --> qVOCin_all] = 1./60"
         },
         {
             "reactants": "VOCIN2",
             "products": "qVOCin_all",
             "rate": "1./1800",
-            "comment": "[IDL] VOCIN2 chain | k[VOCIN2 --> qVOCin_all] = 1./1800",
-            "group": "IDL Injection"
+            "label": "VOCIN2 chain",
+            "group": "IDL Injection",
+            "comment": "k[VOCIN2 --> qVOCin_all] = 1./1800"
         },
         {
             "reactants": "SOA_SEED",
             "products": "",
             "rate": "1/(3600*SOA_decay)",
-            "comment": "[IDL] SOA_SEED chain | k[SOA_SEED --> ] = 1/(3600*SOA_decay)",
-            "group": "IDL Injection"
+            "label": "SOA_SEED chain",
+            "group": "IDL Injection",
+            "comment": "k[SOA_SEED --> ] = 1/(3600*SOA_decay)"
         },
         {
             "reactants": "QH2O",
             "products": "HONO+XNOy",
             "rate": "(M*1e-9/60*0.05) * QH2O",
-            "comment": "[IDL] QH2O impurity: HONO | k[QH2O --> HONO+XNOy] = M*1e-9/60*0.05",
-            "group": "IDL Injection"
+            "label": "QH2O impurity: HONO",
+            "group": "IDL Injection",
+            "comment": "k[QH2O --> HONO+XNOy] = M*1e-9/60*0.05"
         },
         {
             "reactants": "QH2O",
             "products": "CO",
             "rate": "(M*1e-9/60*0.5) * QH2O",
-            "comment": "[IDL] QH2O impurity: CO | k[QH2O --> CO] = M*1e-9/60*0.5",
-            "group": "IDL Injection"
+            "label": "QH2O impurity: CO",
+            "group": "IDL Injection",
+            "comment": "k[QH2O --> CO] = M*1e-9/60*0.5"
         },
         {
             "reactants": "QH2O",
             "products": "NO2+XNOy",
             "rate": "(M*1e-9/60*0.1) * QH2O",
-            "comment": "[IDL] QH2O impurity: NO2 | k[QH2O --> NO2+XNOy] = M*1e-9/60*0.1",
-            "group": "IDL Injection"
+            "label": "QH2O impurity: NO2",
+            "group": "IDL Injection",
+            "comment": "k[QH2O --> NO2+XNOy] = M*1e-9/60*0.1"
         }
     ],
-    "excluded_reactions": [],
+    "idl_dilution_reactions": [
+        {
+            "reactants": "XNOY",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "XNOY dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[XNOY+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "NA",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "NA dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[NA+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "X_LIMONENE",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "X_LIMONENE dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[X_LIMONENE+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "SOA_NC12H26_OH",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "SOA_NC12H26_OH dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[SOA_NC12H26_OH+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "SOA_LIM_O3",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "SOA_LIM_O3 dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[SOA_LIM_O3+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "SOA_LIM_OH",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "SOA_LIM_OH dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[SOA_LIM_OH+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "SOA_LIM_NO3",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "SOA_LIM_NO3 dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[SOA_LIM_NO3+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        },
+        {
+            "reactants": "SOA_SEED",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "SOA_SEED dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[SOA_SEED+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        }
+    ],
+    "idl_parameters": {
+        "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
+        "DIL": "1.",
+        "WALLDEP": "1."
+    },
+    "analytical_dilution": false,
+    "chamber_source_reactions": [
+        {
+            "reactants": "",
+            "products": "HONO+XNOy",
+            "rate": "(4.7e13 * (1. + (RH/11.6)**2) * exp(-3950./T) * JNO2) * (2.6*0.85) * HV",
+            "label": "SHONO=2.6*0.85 -> HONO (chamber photolytic source)",
+            "group": "Chamber Source",
+            "comment": "k=4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2  *  SHONO=2.6*0.85"
+        },
+        {
+            "reactants": "",
+            "products": "HCHO",
+            "rate": "2.8e6",
+            "label": "QSHCHO+HV=1 -> HCHO (chamber photolytic source)",
+            "group": "Chamber Source",
+            "comment": "k=2.8e6  *  QSHCHO+HV=1"
+        },
+        {
+            "reactants": "H2O",
+            "products": "HONO",
+            "rate": "1e-012/2",
+            "label": "H2O \u2192 HONO (wall dark source)",
+            "group": "Chamber Source",
+            "comment": "k=1e-012/2  [H2O from ENZ via env_map]"
+        }
+    ],
+    "custom_reactions": [
+        {
+            "reactants": "X_LIMONENE",
+            "products": "",
+            "rate": "1/(3600*20)",
+            "group": "EASY Reaction",
+            "comment": "[EASY] X_LIMONENE \u2192  | k=1/(3600*20)"
+        },
+        {
+            "reactants": "LIMONENE+O3",
+            "products": "SOA_LIM_O3",
+            "rate": "2.80D-15*EXP(-770/((T)))*(0.25)",
+            "group": "EASY Reaction",
+            "comment": "[EASY] LIMONENE+O3 \u2192 SOA_LIM_O3 | k=2.80D-15*EXP(-770/(T))*gamma_limonene"
+        },
+        {
+            "reactants": "LIMONENE+OH",
+            "products": "SOA_LIM_OH",
+            "rate": "4.28D-11*EXP(401/((T)))*(0.25)",
+            "group": "EASY Reaction",
+            "comment": "[EASY] LIMONENE+OH \u2192 SOA_LIM_OH | k=4.28D-11*EXP(401/(T))*gamma_limonene"
+        },
+        {
+            "reactants": "LIMONENE+NO3",
+            "products": "SOA_LIM_NO3",
+            "rate": "1.22D-11*(0.25)",
+            "group": "EASY Reaction",
+            "comment": "[EASY] LIMONENE+NO3 \u2192 SOA_LIM_NO3 | k=1.22D-11*gamma_limonene"
+        },
+        {
+            "reactants": "NC12H26+OH",
+            "products": "SOA_NC12H26_OH",
+            "rate": "1.39D-11*(0.12)/2.2",
+            "group": "EASY Reaction",
+            "comment": "[EASY] NC12H26+OH \u2192 SOA_NC12H26_OH | k=1.39D-11*gamma_dodecane/2.2"
+        },
+        {
+            "reactants": "SOA_NC12H26_OH",
+            "products": "",
+            "rate": "1/(3600*(10))",
+            "group": "EASY Reaction",
+            "comment": "[EASY] SOA_NC12H26_OH \u2192  | k=1/(3600*SOA_decay)"
+        },
+        {
+            "reactants": "SOA_LIM_O3",
+            "products": "",
+            "rate": "1/(3600*(10))",
+            "group": "EASY Reaction",
+            "comment": "[EASY] SOA_LIM_O3 \u2192  | k=1/(3600*SOA_decay)"
+        },
+        {
+            "reactants": "SOA_LIM_OH",
+            "products": "",
+            "rate": "1/(3600*(10))",
+            "group": "EASY Reaction",
+            "comment": "[EASY] SOA_LIM_OH \u2192  | k=1/(3600*SOA_decay)"
+        },
+        {
+            "reactants": "SOA_LIM_NO3",
+            "products": "",
+            "rate": "1/(3600*(10))",
+            "group": "EASY Reaction",
+            "comment": "[EASY] SOA_LIM_NO3 \u2192  | k=1/(3600*SOA_decay)"
+        }
+    ],
+    "excluded_reactions": [
+        {
+            "reactants": "LIMONENE+O3",
+            "products": "LIMOOA",
+            "action": "Modify Rate",
+            "rate": "2.80D-15*EXP(-770/((T)))*0.730*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+O3-->LIMOOA] = 2.80D-15*EXP(-770/(T))*0.730*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "LIMONENE+O3",
+            "products": "LIMOOB",
+            "action": "Modify Rate",
+            "rate": "2.80D-15*EXP(-770/((T)))*0.270*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+O3-->LIMOOB] = 2.80D-15*EXP(-770/(T))*0.270*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "LIMONENE+OH",
+            "products": "LIMAO2",
+            "action": "Modify Rate",
+            "rate": "4.28D-11*EXP(401/((T)))*0.408*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+OH-->LIMAO2] = 4.28D-11*EXP(401/(T))*0.408*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "LIMONENE+OH",
+            "products": "LIMBO2",
+            "action": "Modify Rate",
+            "rate": "4.28D-11*EXP(401/((T)))*0.222*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+OH-->LIMBO2] = 4.28D-11*EXP(401/(T))*0.222*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "LIMONENE+OH",
+            "products": "LIMCO2",
+            "action": "Modify Rate",
+            "rate": "4.28D-11*EXP(401/((T)))*0.370*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+OH-->LIMCO2] = 4.28D-11*EXP(401/(T))*0.370*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "LIMONENE+NO3",
+            "products": "NLIMO2",
+            "action": "Modify Rate",
+            "rate": "1.22D-11*(1-(0.25))",
+            "comment": "[EASY override] k[LIMONENE+NO3-->NLIMO2] = 1.22D-11*(1-gamma_limonene)"
+        },
+        {
+            "reactants": "NC12H26+OH",
+            "products": "DDECO2",
+            "action": "Modify Rate",
+            "rate": "1.39D-11*(1-(0.12))/2.2",
+            "comment": "[EASY override] k[NC12H26+OH-->DDECO2] = 1.39D-11*(1-gamma_dodecane)/2.2"
+        }
+    ],
     "blocked_parameters": [],
-    "h2o_injection_impurities": []
+    "h2o_injection_impurities": [],
+    "_skipped": [
+        "FUNCTION definition 'WVC2RH': FACSIMILE-only macro, not needed in Python ODE",
+        "FLOW = INPUT(dilute): excluded from env_map (dilution inactive)",
+        "FILES[] directive: FACSIMILE file config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FUNCTION definition 'TROE': FACSIMILE-only macro, not needed in Python ODE",
+        "zero-rate injection: QO3 --> O3  (k=M*1e-9/60*113*0)",
+        "Y + OH --> HO2: handled as Y-background artifact (y_eqn=200 ppb, k=2.4e-13)",
+        "SNO2 source inactive: no CONST def and INITIAL[SNO2]=0  (k=jno2/5e-3/3600*HV_in/1.6*0.55)",
+        "zero-rate qH2O impurity: QH2O --> NO+XNOy  (k=M*1e-9/60*0.0)"
+    ]
 }
