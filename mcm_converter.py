@@ -488,6 +488,103 @@ def _write_incl_file(path: Path, used: set[str], input_filename: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Precursor-subset graph walk (IDL /INITIAL= equivalent)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _strip_coeff(token: str) -> str:
+    """Strip a leading stoichiometric coefficient: '2*HO2' -> 'HO2'."""
+    t = token.strip()
+    if '*' in t:
+        return t.split('*')[-1].strip()
+    return t
+
+
+def _parse_mech_sides(mech_line: str) -> tuple[list[str], list[str]]:
+    """Split a mech line ' A + B  -->  C + D ' into ([A, B], [C, D]).
+
+    Strips stoichiometric prefixes from each species name.
+    """
+    if '-->' not in mech_line:
+        return [], []
+    lhs_str, rhs_str = mech_line.split('-->', 1)
+    lhs = [_strip_coeff(t) for t in lhs_str.split('+') if t.strip()]
+    rhs = [_strip_coeff(t) for t in rhs_str.split('+') if t.strip()]
+    return [t for t in lhs if t], [t for t in rhs if t]
+
+
+def _graph_walk_filter(
+    reactions: list[tuple[str, str]],
+    precursors: list[str],
+    *,
+    source: bool = True,
+    dark: bool = False,
+    dil: bool = True,
+) -> tuple[list[tuple[str, str]], set[str]]:
+    """Filter reactions to only those reachable from the precursor set.
+
+    Mirrors the IDL `/INITIAL=` graph-walk:
+      1. Build initial valid_species = precursors + always-valid extras
+         (H2O if /DIL, HONO+HCHO if /SOURCE, hv if not /DARK)
+      2. Iterate: any reaction whose reactants are ALL valid becomes valid;
+         all its products are added to valid_species. Repeat to fixed point.
+      3. Return the subset of reactions whose all-reactants-valid condition
+         was satisfied, plus the final valid_species set.
+
+    Args:
+        reactions: list of (mech_line, rate_def) tuples — pass the full
+                   merged set of VOC reactions + inorganic core reactions
+        precursors: species names the user wants to study (e.g. ['C2H5OH'])
+
+    Returns:
+        (filtered_reactions, valid_species_set)
+    """
+    valid = {s.upper() for s in precursors}
+    # IDL /INITIAL implicit additions:
+    if dil:
+        valid.add('H2O')
+    if source:
+        valid.add('HONO')
+        valid.add('HCHO')
+    if not dark:
+        valid.add('HV')
+        valid.add('hv')  # IDL preserves the lowercase 'hv' literal in the mech
+    # M / O2 / N2 are bulk gases — always valid (they appear in anorg reactants)
+    valid.update({'M', 'O2', 'N2'})
+
+    # Pre-parse all reactions once
+    parsed = []  # (mech, rate, reactants_set, products_set)
+    for mech, rate in reactions:
+        lhs, rhs = _parse_mech_sides(mech)
+        parsed.append((mech, rate, lhs, rhs))
+
+    valid_idx = set()
+    while True:
+        added = False
+        for i, (_, _, lhs, _) in enumerate(parsed):
+            if i in valid_idx:
+                continue
+            # Empty LHS → can't decide; treat as invalid (zeroth-order sources
+            # don't appear in MCM standard reactions)
+            if not lhs:
+                continue
+            if all(r.upper() in {v.upper() for v in valid} for r in lhs):
+                valid_idx.add(i)
+                added = True
+                # Add products
+                for p in parsed[i][3]:
+                    if p.upper() not in {v.upper() for v in valid}:
+                        valid.add(p)
+                        added = True
+        if not added:
+            break
+
+    filtered = [(parsed[i][0], parsed[i][1]) for i in sorted(valid_idx)]
+    # Drop the special hv tokens from valid set before returning (IDL does this)
+    valid_clean = {s for s in valid if s.upper() != 'HV'}
+    return filtered, valid_clean
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SAPHIR-mode output writers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -543,12 +640,16 @@ def _write_dil_files(output_dir: Path, stem: str, variables: list[str], source: 
 
 def _write_easy_temp(output_dir: Path, stem: str, input_filename: str,
                      dark: bool, source: bool, walldep: bool, bgreac: bool,
-                     dil: bool, measured: bool) -> Path:
+                     dil: bool, measured: bool, include_anorg: bool = True) -> Path:
     """Emit the master `<stem>.saphir.easy_temp` EASY input file.
 
     This is the entry point that JUICE / FACSIMILE consumes — it #includes
     the .mech, .rate, .ro2.incl, .incl, .dil.mech, .dil.rate files plus
     boilerplate for the SAPHIR-specific chemistry blocks.
+
+    When include_anorg=False (precursor/init mode), the standalone anorg
+    files are not #include'd because the inorganic core has been inlined
+    into the per-mech .init.mech/.init.rate files (and graph-walk filtered).
     """
     from datetime import datetime
     timestamp = datetime.now().strftime('%a %b %d %H:%M:%S %Y')
@@ -565,14 +666,17 @@ def _write_easy_temp(output_dir: Path, stem: str, input_filename: str,
         ';   3) Save the new file with a DOS compatible name',
         '   ',
         '; INCLUDES: ',
-        '#include anorg.mcm331.dark.rate   ; dark anorganic reactions',
-        '#include anorg.mcm331.dark.mech   ; rate constants of dark reactions',
     ]
-    if not dark:
+    if include_anorg:
         lines += [
-            '#include anorg.mcm331.phot.rate   ; anorganic photolysis reactions',
-            '#include anorg.mcm331.phot.mech   ; anorganic photolysis frequencies',
+            '#include anorg.mcm331.dark.rate   ; dark anorganic reactions',
+            '#include anorg.mcm331.dark.mech   ; rate constants of dark reactions',
         ]
+        if not dark:
+            lines += [
+                '#include anorg.mcm331.phot.rate   ; anorganic photolysis reactions',
+                '#include anorg.mcm331.phot.mech   ; anorganic photolysis frequencies',
+            ]
     lines += [
         f'#include {stem}.incl ; MCM3-spezific constants and functions ',
         f'#include {stem}.ro2.incl ; RO2 species',
@@ -725,6 +829,7 @@ def convert_mcm_file(
     source: bool | None = None,
     bgreac: bool | None = None,
     dil: bool | None = None,
+    precursors: list[str] | None = None,
 ) -> dict:
     """Convert a raw MCM .fac file into EASY include files.
 
@@ -737,6 +842,12 @@ def convert_mcm_file(
         measured: use measured J-values from ENZ file (jno2/jo1d/jhcho/...)
         walldep, source, bgreac, dil: individual SAPHIR sub-switches; default
                 None means "follow saphir flag". Set to True/False to override.
+        precursors: list of precursor species names (e.g. ['C2H5OH']). If
+                given, applies the IDL /INITIAL= graph walk: only reactions
+                reachable from the precursor set are kept, the inorganic core
+                is inlined into the per-mech file (no separate anorg files),
+                output filenames get a '.init.' insert, and the RO2 / dilution
+                lists are filtered to only the reachable species.
 
     Returns a dict with the output file paths and counts.
     """
@@ -747,6 +858,8 @@ def convert_mcm_file(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = input_path.stem
+    init_mode = bool(precursors)
+    init_tag = '.init' if init_mode else ''
 
     # Resolve SAPHIR sub-switches
     if saphir:
@@ -768,28 +881,49 @@ def convert_mcm_file(
     raw_rxns = _extract_reactions(lines)
 
     # Convert VOC reactions
-    reactions = []
+    voc_reactions = []
     for rate_raw, mech_raw in raw_rxns:
-        reactions.extend(_convert_reaction(rate_raw, mech_raw))
+        voc_reactions.extend(_convert_reaction(rate_raw, mech_raw))
 
-    # For .incl constant detection, scan both VOC rates AND inorganic rates so
-    # that J1-J8 / KMTxx referenced by the inorganic core get emitted in .incl.
+    # ── Precursor mode: graph-walk filter ───────────────────────────────────
+    if init_mode:
+        # Merge VOC reactions with the inorganic core so the walk can
+        # reach inorganic chemistry through degradation products.
+        inorganic = list(INORGANIC_DARK)
+        if not dark:
+            inorganic += list(INORGANIC_PHOT)
+        merged = voc_reactions + inorganic
+
+        filtered, valid_species = _graph_walk_filter(
+            merged, precursors, source=source, dark=dark, dil=dil)
+        if not filtered:
+            raise RuntimeError(
+                f"Graph walk found NO reactions reachable from precursors "
+                f"{precursors}. Check spelling and that the species exists "
+                f"in {input_path.name}.")
+        reactions = filtered
+        # Restrict variables list and RO2 pool to the reachable subset
+        variables = sorted(s for s in valid_species if s)
+        ro2_species = [r for r in ro2_species if r.upper() in valid_species]
+    else:
+        reactions = voc_reactions
+
+    # For .incl constant detection
     rate_defs_for_scan = [r for _, r in reactions]
-    if saphir:
+    if saphir and not init_mode:
+        # In non-init mode the inorganic core lives in separate anorg files
+        # but we still scan its rates so e.g. KMT01 referenced by the anorg
+        # block gets emitted in our .incl too.
         rate_defs_for_scan += [r for _, r in INORGANIC_DARK]
-        if source:
-            rate_defs_for_scan += [r for _, r in INORGANIC_SOURCE_DARK]
         if not dark:
             rate_defs_for_scan += [r for _, r in INORGANIC_PHOT]
-            if source:
-                rate_defs_for_scan += [r for _, r in INORGANIC_SOURCE_PHOT]
     used = _find_used_constants(rate_defs_for_scan)
 
     # ── Write VOC chemistry files ────────────────────────────────────────────
-    mech_path = output_dir / f'{stem}.mech'
-    rate_path = output_dir / f'{stem}.rate'
-    ro2_path  = output_dir / f'{stem}.ro2.incl'
-    incl_path = output_dir / f'{stem}.incl'
+    mech_path = output_dir / f'{stem}{init_tag}.mech'
+    rate_path = output_dir / f'{stem}{init_tag}.rate'
+    ro2_path  = output_dir / f'{stem}{init_tag}.ro2.incl'
+    incl_path = output_dir / f'{stem}{init_tag}.incl'
 
     _write_mech_file(mech_path, reactions)
     _write_rate_file(rate_path, reactions)
@@ -806,26 +940,34 @@ def convert_mcm_file(
         'n_ro2':       len(ro2_species),
         'n_constants': len(used),
     }
+    if init_mode:
+        result['precursors'] = list(precursors)
 
     # ── SAPHIR-mode extras ───────────────────────────────────────────────────
     if saphir:
-        _write_anorg_files(output_dir, dark=dark, source=source)
-        result['anorg_dark_mech'] = output_dir / 'anorg.mcm331.dark.mech'
-        result['anorg_dark_rate'] = output_dir / 'anorg.mcm331.dark.rate'
-        if not dark:
-            result['anorg_phot_mech'] = output_dir / 'anorg.mcm331.phot.mech'
-            result['anorg_phot_rate'] = output_dir / 'anorg.mcm331.phot.rate'
+        # In init mode we do NOT emit the standalone anorg files — the
+        # inorganic core is already inlined into the .init.mech/.rate file
+        # and the easy_temp does not #include them.
+        if not init_mode:
+            _write_anorg_files(output_dir, dark=dark, source=source)
+            result['anorg_dark_mech'] = output_dir / 'anorg.mcm331.dark.mech'
+            result['anorg_dark_rate'] = output_dir / 'anorg.mcm331.dark.rate'
+            if not dark:
+                result['anorg_phot_mech'] = output_dir / 'anorg.mcm331.phot.mech'
+                result['anorg_phot_rate'] = output_dir / 'anorg.mcm331.phot.rate'
 
         if dil:
-            n_dil = _write_dil_files(output_dir, stem, variables, source=source)
-            result['dil_mech'] = output_dir / f'{stem}.dil.mech'
-            result['dil_rate'] = output_dir / f'{stem}.dil.rate'
+            dil_stem = f'{stem}{init_tag}'
+            n_dil = _write_dil_files(output_dir, dil_stem, variables, source=source)
+            result['dil_mech'] = output_dir / f'{dil_stem}.dil.mech'
+            result['dil_rate'] = output_dir / f'{dil_stem}.dil.rate'
             result['n_dil_species'] = n_dil
 
         easy_temp = _write_easy_temp(
-            output_dir, stem, input_path.name,
+            output_dir, stem + init_tag, input_path.name,
             dark=dark, source=source, walldep=walldep,
-            bgreac=bgreac, dil=dil, measured=measured)
+            bgreac=bgreac, dil=dil, measured=measured,
+            include_anorg=not init_mode)
         result['easy_temp'] = easy_temp
 
     return result
@@ -839,11 +981,21 @@ if __name__ == '__main__':
     ap.add_argument('--saphir', action='store_true', help='Enable SAPHIR mode (walldep, source, bgreac, dil, easy_temp)')
     ap.add_argument('--dark', action='store_true', help='Disable photolysis')
     ap.add_argument('--measured', action='store_true', help='Use measured J values from ENZ file')
+    ap.add_argument('--precursors', default=None,
+                    help='Comma-separated list of precursor species (e.g. C2H5OH or "C2H5OH,CH4"). '
+                         'Triggers IDL /INITIAL= graph walk: only reactions reachable from the '
+                         'precursor set are kept; output filenames get a .init insert; the '
+                         'inorganic core is inlined into the per-mech file.')
     args = ap.parse_args()
+
+    precursors = None
+    if args.precursors:
+        precursors = [s.strip() for s in args.precursors.split(',') if s.strip()]
 
     result = convert_mcm_file(
         args.input, args.output_dir,
-        saphir=args.saphir, dark=args.dark, measured=args.measured)
+        saphir=args.saphir, dark=args.dark, measured=args.measured,
+        precursors=precursors)
 
     print(f"[mcm_converter] Wrote:")
     for k in ('mech', 'rate', 'ro2', 'incl'):
@@ -853,10 +1005,8 @@ if __name__ == '__main__':
         if 'dil_mech' in result:
             print(f"  {result['dil_mech']}  ({result['n_dil_species']} species)")
             print(f"  {result['dil_rate']}")
-        print(f"  {result['anorg_dark_mech']}")
-        print(f"  {result['anorg_dark_rate']}")
-        if 'anorg_phot_mech' in result:
-            print(f"  {result['anorg_phot_mech']}")
-            print(f"  {result['anorg_phot_rate']}")
+        for k in ('anorg_dark_mech', 'anorg_dark_rate', 'anorg_phot_mech', 'anorg_phot_rate'):
+            if k in result:
+                print(f"  {result[k]}")
     print(f"  species: {result['n_species']}  reactions: {result['n_reactions']}"
           f"  RO2 pool: {result['n_ro2']}  constants: {result['n_constants']}")
