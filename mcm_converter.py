@@ -815,6 +815,21 @@ def _write_easy_temp(output_dir: Path, stem: str, input_filename: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Lightweight species peek (for GUI validation before full conversion)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def list_species(input_path: str | Path) -> list[str]:
+    """Quickly extract the species list from a raw MCM .fac file.
+
+    Parses only the VARIABLE block — much faster than a full conversion.
+    Used by the GUI to validate user-supplied precursor names before
+    running convert_mcm_file().
+    """
+    raw_lines = _read_lines(Path(input_path))
+    return _extract_variable_block(raw_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
