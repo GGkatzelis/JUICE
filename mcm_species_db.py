@@ -154,6 +154,66 @@ def _load_tsv(path: str) -> dict[str, MCMSpecies]:
 # ---------------------------------------------------------------------------
 MCM_DB: dict[str, MCMSpecies] = _load_tsv(_TSV_FILE)
 
+
+# ---------------------------------------------------------------------------
+# Formula → species name reverse index (built lazily on first use)
+# ---------------------------------------------------------------------------
+_FORMULA_INDEX: dict | None = None
+
+
+def _normalise_formula(formula: str) -> str:
+    """Canonicalise a chemical formula for lookup.
+
+    Parses into atom counts then re-emits in Hill order:
+    C first, H second, then other elements alphabetically. So 'C5H8',
+    'H8C5', 'C5 H8', 'c5h8' all canonicalise to 'C5H8'.
+    """
+    # Normalise case: capitalise atom symbols (h8c5 → H8C5)
+    # Two-letter atoms (Cl, Br, Si) need special handling
+    s = formula.strip()
+    s = re.sub(r'\bcl\b', 'Cl', s, flags=re.I)
+    s = re.sub(r'\bbr\b', 'Br', s, flags=re.I)
+    # Then upper-case single letters
+    s = re.sub(r'(?<![a-zA-Z])([cChHnNoOsSfFpP])', lambda m: m.group(1).upper(), s)
+    counts = _parse_formula(s)
+    if not counts:
+        return ''
+    out = []
+    if 'n_C' in counts:
+        out.append('C' + (str(counts['n_C']) if counts['n_C'] > 1 else ''))
+    if 'n_H' in counts:
+        out.append('H' + (str(counts['n_H']) if counts['n_H'] > 1 else ''))
+    rest = sorted(k for k in counts if k not in ('n_C', 'n_H'))
+    for k in rest:
+        sym = k.replace('n_', '')
+        out.append(sym + (str(counts[k]) if counts[k] > 1 else ''))
+    return ''.join(out)
+
+
+def lookup_by_formula(formula: str) -> list[MCMSpecies]:
+    """Return all MCM species matching the given chemical formula.
+
+    The formula is canonicalised in Hill order before lookup, so 'C5H8',
+    'c5h8', 'H8C5', 'C5 H8' all return the same species list. Results
+    are sorted by name.
+    """
+    global _FORMULA_INDEX
+    if _FORMULA_INDEX is None:
+        _FORMULA_INDEX = {}
+        for sp in MCM_DB.values():
+            key = _normalise_formula(sp.formula)
+            if key:
+                _FORMULA_INDEX.setdefault(key, []).append(sp.name)
+        for k in _FORMULA_INDEX:
+            _FORMULA_INDEX[k].sort()
+
+    canon = _normalise_formula(formula)
+    if not canon:
+        return []
+    names = _FORMULA_INDEX.get(canon, [])
+    return [MCM_DB[n] for n in names]
+
+
 # ---------------------------------------------------------------------------
 # Known zero-carbon inorganic/boundary species not in the MCM TSV export.
 # These are SAPHIR measurement columns, model constraints, or atmospheric
