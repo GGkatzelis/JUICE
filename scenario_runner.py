@@ -1134,34 +1134,59 @@ class ScenarioRunner:
         self.eval_count = 0
         self.real_start_time = time.time()
 
-        # --- DETECT HV DISCONTINUITY EVENTS ---
-        # BDF uses polynomial history from past steps. When HV switches 0↔1 (roof
-        # opens/closes), photolysis rates jump discontinuously and the stored history
-        # becomes inconsistent. We detect these transition times and split the
-        # integration at each one, re-initialising the solver with a clean y0 so BDF
-        # always starts from a smooth region.
-        hv_func = self.ctx_data.get('HV')
+        # --- DETECT DISCONTINUITY EVENTS (HV + Q-signal injections) ---
+        # BDF uses polynomial history from past steps. Discontinuous jumps in
+        # forcing functions (HV 0↔1, Q-signals 0↔active) corrupt the history
+        # and cause the solver to overshoot/undershoot across the boundary.
+        # We detect these transitions and split the integration at each one,
+        # re-initialising the solver with a clean y0 from smooth regions.
         event_times = []
-        if hv_func is not None:
-            # Sample HV on a fine grid to find 0↔1 transitions
-            hv_probe = np.linspace(self.t_start, self.t_end, 5000)
-            hv_vals  = np.array([float(hv_func(t)) for t in hv_probe])
-            for i in range(1, len(hv_probe)):
-                if (hv_vals[i - 1] < 0.5) != (hv_vals[i] < 0.5):
-                    # Bisect to find the exact crossing time within ~1s
-                    lo, hi = hv_probe[i - 1], hv_probe[i]
+
+        # Helper: scan a piecewise-constant signal for 0↔nonzero transitions
+        def _find_transitions(func, label, threshold=0.001):
+            probe_t = np.linspace(self.t_start, self.t_end, 5000)
+            vals = np.array([float(func(t)) for t in probe_t])
+            transitions = []
+            for i in range(1, len(probe_t)):
+                was_active = abs(vals[i - 1]) > threshold
+                now_active = abs(vals[i])     > threshold
+                if was_active != now_active:
+                    # Bisect to ~1s precision
+                    lo, hi = probe_t[i - 1], probe_t[i]
                     for _ in range(10):
                         mid = 0.5 * (lo + hi)
-                        if (float(hv_func(lo)) < 0.5) != (float(hv_func(mid)) < 0.5):
+                        lo_active = abs(float(func(lo))) > threshold
+                        mid_active = abs(float(func(mid))) > threshold
+                        if lo_active != mid_active:
                             hi = mid
                         else:
                             lo = mid
-                    event_times.append(0.5 * (lo + hi))
+                    transitions.append(0.5 * (lo + hi))
+            return transitions
+
+        # HV transitions (roof open/close)
+        hv_func = self.ctx_data.get('HV')
+        if hv_func is not None:
+            hv_trans = _find_transitions(hv_func, 'HV', threshold=0.5)
+            event_times.extend(hv_trans)
+
+        # Q-signal injection transitions (QNO, QVOC, Q_C2H4, etc.)
+        q_transitions = 0
+        for key, func in self.ctx_data.items():
+            if key.lower().startswith('q') and key.lower() != 'q_seed':
+                try:
+                    q_trans = _find_transitions(func, key)
+                    event_times.extend(q_trans)
+                    q_transitions += len(q_trans)
+                except Exception:
+                    pass
 
         if event_times:
-            print(f">>> [SOLVER] {len(event_times)} HV transition(s) detected — splitting integration for clean BDF restart.")
+            n_hv = len(hv_trans) if hv_func else 0
+            print(f">>> [SOLVER] Discontinuity events: {n_hv} HV + {q_transitions} injection — "
+                  f"splitting integration for clean BDF restarts.")
         else:
-            print(f">>> [SOLVER] No HV transitions detected.")
+            print(f">>> [SOLVER] No discontinuity events detected.")
 
         # Build list of (t0, t1) segment boundaries
         boundaries = sorted(set([self.t_start] + event_times + [self.t_end]))
