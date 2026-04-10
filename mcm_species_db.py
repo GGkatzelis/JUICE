@@ -22,7 +22,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Path to the TSV (same directory as this file)
 # ---------------------------------------------------------------------------
-_DB_DIR = os.path.join(os.path.dirname(__file__), "MCM species formula")
+_DB_DIR = os.path.join(os.path.dirname(__file__), "MCM_database")
 _TSV_FILE = os.path.join(_DB_DIR, "mcm_export_species.tsv")
 
 
