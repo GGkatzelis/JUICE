@@ -26,19 +26,10 @@ def load_saphir_environment(file_path):
 
     providers = {}
     for col in df.columns:
-        # FACSIMILE treats ALL ENZ columns as piecewise-constant (zero-order
-        # hold). For columns that are physically smooth (T, J-rates, SZ, H2O,
-        # FLOW), the row-to-row changes are small measurement updates and
-        # linear interpolation gives equivalent results without requiring BDF
-        # restarts at every ENZ row. For genuine switch columns (Q-signals,
-        # HV), piecewise-constant is essential.
-        # Use kind='previous' for switch columns, linear for smooth signals.
-        lc = col.lower()
-        is_switch = (lc.startswith('q') and lc != 'q_seed') or lc == 'hv'
-        if is_switch:
-            providers[col] = interp1d(df['time'], df[col], kind='previous',
-                                      fill_value="extrapolate", bounds_error=False)
-        else:
-            providers[col] = interp1d(df['time'], df[col], fill_value="extrapolate")
+        # FACSIMILE treats ALL ENZ columns as piecewise-constant: each row's
+        # value applies until the next row (zero-order hold). Use kind='previous'
+        # for all columns to match this convention exactly.
+        providers[col] = interp1d(df['time'], df[col], kind='previous',
+                                  fill_value="extrapolate", bounds_error=False)
 
     return providers, df['time'].min(), df['time'].max(), headers

@@ -1163,10 +1163,9 @@ class ScenarioRunner:
         self.real_start_time = time.time()
 
         # --- DETECT DISCONTINUITY EVENTS IN ALL ENZ COLUMNS ---
-        # All ENZ columns are now piecewise-constant (kind='previous').
-        # BDF uses polynomial history from past steps; any step-change in a
-        # forcing function corrupts the history. We detect ALL value jumps
-        # across ALL ENZ columns and split the integration at each one.
+        # All ENZ columns use piecewise-constant interpolation (kind='previous').
+        # BDF polynomial history becomes inconsistent at step changes. We detect
+        # value jumps across ALL columns and split integration at each one.
         event_times = []
         n_events_by_col = {}
 
@@ -1176,13 +1175,11 @@ class ScenarioRunner:
             vals = np.array([float(func(t)) for t in probe_t])
             transitions = []
             for i in range(1, len(probe_t)):
-                # Detect any change in value (relative or absolute)
                 v0, v1 = vals[i - 1], vals[i]
                 if v0 == v1:
                     continue
                 rel = abs(v1 - v0) / max(abs(v0), abs(v1), 1e-30)
                 if rel > 1e-6 or abs(v1 - v0) > 1e-10:
-                    # Bisect to find the exact step time (~1s precision)
                     lo, hi = probe_t[i - 1], probe_t[i]
                     for _ in range(10):
                         mid = 0.5 * (lo + hi)
@@ -1193,24 +1190,18 @@ class ScenarioRunner:
                     transitions.append(0.5 * (lo + hi))
             return transitions
 
-        # Only scan columns with genuine step-function behaviour:
-        # HV (roof open/close, 0↔1) and Q-signals (injection switches, 0↔active).
-        # T, J-rates, SZ, H2O, FLOW are physically smooth signals sampled
-        # discretely — the BDF solver handles piecewise-constant updates on
-        # these without needing restarts (the row-to-row changes are small
-        # enough that the polynomial history stays valid).
         for key, func in self.ctx_data.items():
-            k = key.upper()
-            if k == 'HV' or (k.startswith('Q') and k != 'Q_SEED'):
-                try:
-                    trans = _find_step_changes(func, key)
-                    if trans:
-                        event_times.extend(trans)
-                        n_events_by_col[key] = len(trans)
-                except Exception:
-                    pass
+            if key.upper() == 'TIME':
+                continue
+            try:
+                trans = _find_step_changes(func, key)
+                if trans:
+                    event_times.extend(trans)
+                    n_events_by_col[key] = len(trans)
+            except Exception:
+                pass
 
-        # Deduplicate events that land at nearly the same time
+        # Deduplicate events within 0.5s
         if event_times:
             event_times = sorted(set(event_times))
             deduped = [event_times[0]]
