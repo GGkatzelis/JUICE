@@ -937,16 +937,11 @@ class ScenarioRunner:
                 k_dil = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
                 dydt -= y * k_dil
 
-            # Thermal expansion correction: when temperature changes, air
-            # density M changes and all concentrations (molec/cm³) must adjust
-            # to conserve mixing ratios (ppb). FACSIMILE does this implicitly;
-            # in JUICE we apply it explicitly:  dy/dt += y * (1/M) * dM/dt.
-            # At constant P this equals  dy/dt -= y * (1/T) * dT/dt.
-            _dt_probe = 0.5  # seconds
-            _M_fwd = self.get_M(t_abs + _dt_probe)
-            _dMdt_over_M = (_M_fwd - M_now) / (_dt_probe * M_now)
-            if abs(_dMdt_over_M) > 1e-15:
-                dydt += y * _dMdt_over_M
+            # Thermal expansion is handled by instantaneous y rescaling at
+            # segment boundaries (see below), not as a continuous ODE term.
+            # With piecewise-constant T, dM/dt is zero within each segment
+            # and a delta function at the boundary — a continuous correction
+            # cannot capture this correctly.
 
             for s in cont_sources:
                 dydt[s['idx']] += eval(s['code'], globals(), ctx)
@@ -1143,16 +1138,11 @@ class ScenarioRunner:
             # where factor = sign_affected * coeff_reactant_rj (precomputed)
             y_col    = np.maximum(y[_jac_cols], 1e-40)
             jac_data = _jac_factors * _v_buf[_jac_rxn_idxs] / y_col
-            # Dilution + thermal expansion diagonal terms
+            # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil (only in analytical mode)
             diag_rate = 0.0
             if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
                 _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
                 diag_rate -= (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
-            # Thermal expansion: d(dydt_i)/d(y_i) += dM/dt / M
-            _M_fwd_j = self.get_M(t_abs + 0.5)
-            _dMdt_M_j = (_M_fwd_j - M_now) / (0.5 * M_now)
-            if abs(_dMdt_M_j) > 1e-15:
-                diag_rate += _dMdt_M_j
             if diag_rate != 0.0:
                 dil_idx  = np.arange(N, dtype=np.int32)
                 dil_data = np.full(N, diag_rate)
@@ -1172,57 +1162,61 @@ class ScenarioRunner:
         self.eval_count = 0
         self.real_start_time = time.time()
 
-        # --- DETECT DISCONTINUITY EVENTS (HV + Q-signal injections) ---
-        # BDF uses polynomial history from past steps. Discontinuous jumps in
-        # forcing functions (HV 0↔1, Q-signals 0↔active) corrupt the history
-        # and cause the solver to overshoot/undershoot across the boundary.
-        # We detect these transitions and split the integration at each one,
-        # re-initialising the solver with a clean y0 from smooth regions.
+        # --- DETECT DISCONTINUITY EVENTS IN ALL ENZ COLUMNS ---
+        # All ENZ columns are now piecewise-constant (kind='previous').
+        # BDF uses polynomial history from past steps; any step-change in a
+        # forcing function corrupts the history. We detect ALL value jumps
+        # across ALL ENZ columns and split the integration at each one.
         event_times = []
+        n_events_by_col = {}
 
-        # Helper: scan a piecewise-constant signal for 0↔nonzero transitions
-        def _find_transitions(func, label, threshold=0.001):
+        def _find_step_changes(func, label):
+            """Scan a piecewise-constant signal for any value jumps."""
             probe_t = np.linspace(self.t_start, self.t_end, 5000)
             vals = np.array([float(func(t)) for t in probe_t])
             transitions = []
             for i in range(1, len(probe_t)):
-                was_active = abs(vals[i - 1]) > threshold
-                now_active = abs(vals[i])     > threshold
-                if was_active != now_active:
-                    # Bisect to ~1s precision
+                # Detect any change in value (relative or absolute)
+                v0, v1 = vals[i - 1], vals[i]
+                if v0 == v1:
+                    continue
+                rel = abs(v1 - v0) / max(abs(v0), abs(v1), 1e-30)
+                if rel > 1e-6 or abs(v1 - v0) > 1e-10:
+                    # Bisect to find the exact step time (~1s precision)
                     lo, hi = probe_t[i - 1], probe_t[i]
                     for _ in range(10):
                         mid = 0.5 * (lo + hi)
-                        lo_active = abs(float(func(lo))) > threshold
-                        mid_active = abs(float(func(mid))) > threshold
-                        if lo_active != mid_active:
+                        if float(func(lo)) != float(func(mid)):
                             hi = mid
                         else:
                             lo = mid
                     transitions.append(0.5 * (lo + hi))
             return transitions
 
-        # HV transitions (roof open/close)
-        hv_func = self.ctx_data.get('HV')
-        if hv_func is not None:
-            hv_trans = _find_transitions(hv_func, 'HV', threshold=0.5)
-            event_times.extend(hv_trans)
-
-        # Q-signal injection transitions (QNO, QVOC, Q_C2H4, etc.)
-        q_transitions = 0
         for key, func in self.ctx_data.items():
-            if key.lower().startswith('q') and key.lower() != 'q_seed':
-                try:
-                    q_trans = _find_transitions(func, key)
-                    event_times.extend(q_trans)
-                    q_transitions += len(q_trans)
-                except Exception:
-                    pass
+            if key.upper() == 'TIME':
+                continue
+            try:
+                trans = _find_step_changes(func, key)
+                if trans:
+                    event_times.extend(trans)
+                    n_events_by_col[key] = len(trans)
+            except Exception:
+                pass
+
+        # Deduplicate events that land at nearly the same time
+        if event_times:
+            event_times = sorted(set(event_times))
+            deduped = [event_times[0]]
+            for t in event_times[1:]:
+                if t - deduped[-1] > 0.5:
+                    deduped.append(t)
+            event_times = deduped
 
         if event_times:
-            n_hv = len(hv_trans) if hv_func else 0
-            print(f">>> [SOLVER] Discontinuity events: {n_hv} HV + {q_transitions} injection — "
-                  f"splitting integration for clean BDF restarts.")
+            summary = ', '.join(f'{k}:{v}' for k, v in sorted(n_events_by_col.items()))
+            print(f">>> [SOLVER] {len(event_times)} discontinuity event(s) detected "
+                  f"({summary}) — splitting integration for clean BDF restarts.")
         else:
             print(f">>> [SOLVER] No discontinuity events detected.")
 
@@ -1277,6 +1271,17 @@ class ScenarioRunner:
             seg_t_list.append(seg_sol.t[skip:] + _t_offset)
             seg_y_list.append(seg_sol.y[:, skip:])
             y_seg = seg_sol.y[:, -1]
+
+            # Thermal expansion: rescale concentrations at segment boundary
+            # to conserve mixing ratios when M changes due to T step.
+            # With piecewise-constant T, M is constant within each segment
+            # but may jump at the boundary. FACSIMILE does this implicitly.
+            if seg_idx < len(boundaries) - 2:
+                t_next = boundaries[seg_idx + 1]
+                M_end  = self.get_M(t1)        # M at end of this segment
+                M_next = self.get_M(t_next + 0.01)  # M at start of next segment
+                if M_end > 0 and abs(M_next / M_end - 1.0) > 1e-10:
+                    y_seg = y_seg * (M_next / M_end)
 
         # Stitch segments into a single solution object
         all_t = np.concatenate(seg_t_list)
