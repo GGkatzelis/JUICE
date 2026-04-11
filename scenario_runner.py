@@ -68,7 +68,13 @@ class ScenarioRunner:
             traceback.print_exc()
 
     def _setup_environment(self):
-        enz_file = next(f for f in os.listdir(self.root) if 'kammer' in f.lower() and f.endswith('.enz'))
+        # Look for ENZ file: prefer 'kammer*.enz', fall back to any '*.enz'
+        enz_candidates = [f for f in os.listdir(self.root) if f.lower().endswith('.enz')]
+        enz_file = next((f for f in enz_candidates if 'kammer' in f.lower()), None)
+        if enz_file is None:
+            enz_file = enz_candidates[0] if enz_candidates else None
+        if enz_file is None:
+            raise FileNotFoundError(f"No .enz file found in {self.root}")
         enz_path = os.path.join(self.root, enz_file)
         providers, t_min, t_max, headers = load_saphir_environment(enz_path)
         
@@ -116,9 +122,21 @@ class ScenarioRunner:
                 self.ctx_data[internal_key] = lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v
 
     def get_M(self, t):
-        temp = self.ctx_data['TEMP'](t)
-        press = self.ctx_data['PRESS'](t)
-        return (press * 100) / (1.3806e-23 * temp) * 1e-6
+        temp_fn = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
+        press_fn = self.ctx_data.get('PRESS') or self.ctx_data.get('P')
+        if temp_fn is None:
+            raise KeyError("No temperature source found in ctx_data (expected 'TEMP' or 'T')")
+        if press_fn is None:
+            raise KeyError("No pressure source found in ctx_data (expected 'PRESS' or 'P')")
+        temp = temp_fn(t)
+        press = press_fn(t)
+        # Use the EASY/FACSIMILE DENSITY convention: M = P / (T * 1.379e-19)
+        # where P is in hPa and the constant 1.379e-19 = kB in hPa·cm³/K.
+        # This matches the EASY DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)] macro
+        # used in every MCM .incl file. Using the exact kB (1.380649e-23 J/K)
+        # instead would introduce a 0.116% offset in M that propagates into
+        # every M-dependent rate expression.
+        return press / (temp * 1.379e-19)
 
     def _build_mechanism(self):
         chem_path = os.path.join(self.root, "chemistry")
@@ -743,7 +761,8 @@ class ScenarioRunner:
             t_abs = t + _t_offset   # convert relative solver time → absolute interpolation time
             dydt = np.zeros(self.solver.num_species)
             M_now = self.get_M(t_abs)
-            T_now = self.ctx_data['TEMP'](t_abs)
+            _temp_fn = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
+            T_now = _temp_fn(t_abs)
 
             ctx = SafeDict()
 
@@ -995,7 +1014,8 @@ class ScenarioRunner:
             y = np.maximum(y_raw, 0.0)
             t_abs = t + _t_offset   # convert relative solver time → absolute interpolation time
             M_now = self.get_M(t_abs)
-            T_now = self.ctx_data['TEMP'](t_abs)
+            _temp_fn_j = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
+            T_now = _temp_fn_j(t_abs)
             ctx_j = SafeDict()
             # 1. Load all measured/environmental inputs
             for k, v_func in self.ctx_data.items():
