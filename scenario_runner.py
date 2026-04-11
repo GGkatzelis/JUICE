@@ -1193,16 +1193,22 @@ class ScenarioRunner:
                     transitions.append(0.5 * (lo + hi))
             return transitions
 
+        # Only scan columns with genuine step-function behaviour:
+        # HV (roof open/close, 0↔1) and Q-signals (injection switches, 0↔active).
+        # T, J-rates, SZ, H2O, FLOW are physically smooth signals sampled
+        # discretely — the BDF solver handles piecewise-constant updates on
+        # these without needing restarts (the row-to-row changes are small
+        # enough that the polynomial history stays valid).
         for key, func in self.ctx_data.items():
-            if key.upper() == 'TIME':
-                continue
-            try:
-                trans = _find_step_changes(func, key)
-                if trans:
-                    event_times.extend(trans)
-                    n_events_by_col[key] = len(trans)
-            except Exception:
-                pass
+            k = key.upper()
+            if k == 'HV' or (k.startswith('Q') and k != 'Q_SEED'):
+                try:
+                    trans = _find_step_changes(func, key)
+                    if trans:
+                        event_times.extend(trans)
+                        n_events_by_col[key] = len(trans)
+                except Exception:
+                    pass
 
         # Deduplicate events that land at nearly the same time
         if event_times:
