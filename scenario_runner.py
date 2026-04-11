@@ -937,6 +937,17 @@ class ScenarioRunner:
                 k_dil = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
                 dydt -= y * k_dil
 
+            # Thermal expansion correction: when temperature changes, air
+            # density M changes and all concentrations (molec/cm³) must adjust
+            # to conserve mixing ratios (ppb). FACSIMILE does this implicitly;
+            # in JUICE we apply it explicitly:  dy/dt += y * (1/M) * dM/dt.
+            # At constant P this equals  dy/dt -= y * (1/T) * dT/dt.
+            _dt_probe = 0.5  # seconds
+            _M_fwd = self.get_M(t_abs + _dt_probe)
+            _dMdt_over_M = (_M_fwd - M_now) / (_dt_probe * M_now)
+            if abs(_dMdt_over_M) > 1e-15:
+                dydt += y * _dMdt_over_M
+
             for s in cont_sources:
                 dydt[s['idx']] += eval(s['code'], globals(), ctx)
 
@@ -1132,12 +1143,19 @@ class ScenarioRunner:
             # where factor = sign_affected * coeff_reactant_rj (precomputed)
             y_col    = np.maximum(y[_jac_cols], 1e-40)
             jac_data = _jac_factors * _v_buf[_jac_rxn_idxs] / y_col
-            # Dilution diagonal: d(dydt[i])/d(y[i]) -= k_dil (only in analytical mode)
+            # Dilution + thermal expansion diagonal terms
+            diag_rate = 0.0
             if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
                 _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
-                k_dil    = (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
+                diag_rate -= (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
+            # Thermal expansion: d(dydt_i)/d(y_i) += dM/dt / M
+            _M_fwd_j = self.get_M(t_abs + 0.5)
+            _dMdt_M_j = (_M_fwd_j - M_now) / (0.5 * M_now)
+            if abs(_dMdt_M_j) > 1e-15:
+                diag_rate += _dMdt_M_j
+            if diag_rate != 0.0:
                 dil_idx  = np.arange(N, dtype=np.int32)
-                dil_data = np.full(N, -k_dil)
+                dil_data = np.full(N, diag_rate)
                 rows = np.concatenate([_jac_rows, dil_idx])
                 cols = np.concatenate([_jac_cols, dil_idx])
                 d    = np.concatenate([jac_data, dil_data])
