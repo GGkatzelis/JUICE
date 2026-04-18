@@ -427,6 +427,11 @@ Hovering over any scatter circle (VBS or mass-defect) shows a yellow popup:
 - Line 2: plot-specific coordinates (`LogC*=…  OSc=…` or `mass=…  defect=…`)
 - Line 3: concentration in the selected unit
 
+### Playback & video export
+- **▶ Play button:** animates the snapshot cursor from the current time to experiment end using a `QTimer` at 10 fps. Automatically switches to snapshot mode. Button toggles to ⏸ Pause while running. If the cursor is already at the end, Play restarts from t₀.
+- **Duration dropdown** (15 s / 30 s / 1 min / 2 min / 5 min): wall-clock time for full playback. Step size = `(t_end − t_cursor) / (duration · fps)`.
+- **🎥 Save video button:** exports the animation as MP4 or GIF. Uses `QWidget.grab()` to screenshot the entire tab contents frame-by-frame, converts to a numpy RGB array, and writes via `imageio.get_writer`. MP4 output requires `imageio-ffmpeg` on PATH; GIF output has no extra dependency. Frame count = `duration × fps`; `macro_block_size=1` so arbitrary widget dimensions work.
+
 ### Scientific formulas
 
 **LogC*** — Li et al., *ACP* **16**, 3327 (2016), doi:10.5194/acp-16-3327-2016. Coefficient set selected by heteroatom composition (CH, CHO, CHN, CHON, CHOS, CHONS). Identical implementation to `nnmf/parsing.py::calc_vol` in the sister NNMF project.

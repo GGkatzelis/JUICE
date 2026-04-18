@@ -39,7 +39,7 @@ try:
                                  QTabWidget, QFileDialog, QDialog, QDialogButtonBox,
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
                                  QInputDialog, QMessageBox, QAbstractItemView, QSpinBox)
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -3153,10 +3153,40 @@ class ResultsViewer(QMainWindow):
         self._cs_size_combo.setCurrentIndex(1)
         ctrl.addWidget(self._cs_size_combo)
 
+        # Playback controls
+        ctrl.addSpacing(10)
+        self._cs_play_btn = QPushButton("▶ Play")
+        self._cs_play_btn.setCheckable(True)
+        self._cs_play_btn.setToolTip(
+            "Animate the cursor from start to end of the experiment.\n"
+            "All four panels update live. Forces snapshot mode."
+        )
+        self._cs_play_btn.clicked.connect(self._cs_toggle_play)
+        ctrl.addWidget(self._cs_play_btn)
+
+        ctrl.addWidget(QLabel("Duration:"))
+        self._cs_duration_combo = QComboBox()
+        self._cs_duration_combo.addItems(["15 s", "30 s", "1 min", "2 min", "5 min"])
+        self._cs_duration_combo.setCurrentIndex(1)  # 30s default
+        self._cs_duration_combo.setToolTip("Wall-clock duration for the full experiment playback.")
+        ctrl.addWidget(self._cs_duration_combo)
+
+        self._cs_save_video_btn = QPushButton("🎥 Save video…")
+        self._cs_save_video_btn.setToolTip(
+            "Export the animation as MP4 (requires ffmpeg) or GIF by grabbing\n"
+            "the tab contents frame-by-frame."
+        )
+        self._cs_save_video_btn.clicked.connect(self._cs_save_video)
+        ctrl.addWidget(self._cs_save_video_btn)
+
+        ctrl.addSpacing(10)
         self._cs_radical_lbl = QLabel("")
         self._cs_radical_lbl.setStyleSheet("color: #333; font-family: monospace; font-size: 10px;")
         ctrl.addWidget(self._cs_radical_lbl, 1)
         outer_layout.addLayout(ctrl, 0)
+
+        # Tab-level widget for video frame grabbing (grabs outer + toolbar)
+        self._cs_tab_widget = outer
 
         # ── 2×2 grid of plots ─────────────────────────────────────────────
         grid_widget = QWidget()
@@ -3203,6 +3233,12 @@ class ResultsViewer(QMainWindow):
         self._cs_pan_anchor = None
         self._cs_vbs_annot = None
         self._cs_md_annot = None
+
+        # Animation state
+        self._cs_timer = QTimer(self)
+        self._cs_timer.timeout.connect(self._cs_on_play_tick)
+        self._cs_step_hours = 0.0     # how much to advance per tick
+        self._cs_anim_fps = 10        # target frames per second for playback
 
         # Wire up controls
         self._cs_mode_combo.currentIndexChanged.connect(self._cs_redraw_all)
@@ -3569,6 +3605,143 @@ class ResultsViewer(QMainWindow):
             import traceback
             traceback.print_exc()
             QMessageBox.warning(self, "Chemical Space", f"Redraw failed:\n{e}")
+
+    # ── Mouse interaction on timeseries ──────────────────────────────────
+
+    # ── Playback / animation ─────────────────────────────────────────────
+
+    @staticmethod
+    def _cs_parse_duration(s):
+        """'30 s' / '1 min' / '2 min' → wall-clock seconds."""
+        s = s.strip().lower().replace(' ', '')
+        if s.endswith('min'):
+            return float(s[:-3]) * 60.0
+        if s.endswith('s'):
+            return float(s[:-1])
+        try:
+            return float(s)
+        except ValueError:
+            return 30.0
+
+    def _cs_toggle_play(self):
+        """Start or pause live-playback of the snapshot cursor."""
+        if self._cs_timer.isActive():
+            self._cs_timer.stop()
+            self._cs_play_btn.setText("▶ Play")
+            self._cs_play_btn.setChecked(False)
+            return
+
+        # Animation makes sense only in Snapshot mode
+        if self._cs_mode_combo.currentIndex() != 0:
+            self._cs_mode_combo.setCurrentIndex(0)
+
+        t = self.df.index.values.astype(float)
+        # If cursor is at (or past) the end, restart from the beginning
+        if self._cs_time_point >= t[-1] - 1e-6:
+            self._cs_time_point = float(t[0])
+
+        duration_s = self._cs_parse_duration(self._cs_duration_combo.currentText())
+        fps = self._cs_anim_fps
+        total_hours = float(t[-1]) - self._cs_time_point
+        self._cs_step_hours = total_hours / max(duration_s * fps, 1.0)
+        self._cs_timer.start(int(1000 / fps))
+        self._cs_play_btn.setText("⏸ Pause")
+        self._cs_play_btn.setChecked(True)
+
+    def _cs_on_play_tick(self):
+        """One animation frame — advance cursor and redraw all panels."""
+        t = self.df.index.values.astype(float)
+        self._cs_time_point += self._cs_step_hours
+        if self._cs_time_point >= t[-1]:
+            self._cs_time_point = float(t[-1])
+            self._cs_timer.stop()
+            self._cs_play_btn.setText("▶ Play")
+            self._cs_play_btn.setChecked(False)
+        self._cs_redraw_all()
+
+    def _cs_save_video(self):
+        """Export the animation to MP4 or GIF by grabbing the tab widget
+        frame-by-frame. Requires `imageio`; MP4 further requires ffmpeg
+        available on PATH (`imageio-ffmpeg` plugin handles this)."""
+        try:
+            import imageio.v2 as imageio
+        except ImportError:
+            QMessageBox.warning(self, "Missing package",
+                "Saving video requires the `imageio` package.\n"
+                "Install with:  pip install imageio imageio-ffmpeg")
+            return
+
+        # Pause any live playback
+        if self._cs_timer.isActive():
+            self._cs_timer.stop()
+            self._cs_play_btn.setText("▶ Play")
+            self._cs_play_btn.setChecked(False)
+
+        # Ask for output file
+        start_dir = (os.path.dirname(self.csv_path) if self.csv_path else os.getcwd())
+        default_name = "chemspace_animation.mp4"
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Save animation", os.path.join(start_dir, default_name),
+            "MP4 video (*.mp4);;GIF animation (*.gif)"
+        )
+        if not out_path:
+            return
+
+        # Build frame timeline from duration setting
+        duration_s = self._cs_parse_duration(self._cs_duration_combo.currentText())
+        fps = self._cs_anim_fps
+        n_frames = max(int(duration_s * fps), 2)
+        t = self.df.index.values.astype(float)
+        frame_times = np.linspace(float(t[0]), float(t[-1]), n_frames)
+
+        # Force snapshot mode
+        if self._cs_mode_combo.currentIndex() != 0:
+            self._cs_mode_combo.setCurrentIndex(0)
+
+        # Choose writer
+        is_gif = out_path.lower().endswith('.gif')
+        try:
+            if is_gif:
+                writer = imageio.get_writer(out_path, mode='I', duration=1.0 / fps, loop=0)
+            else:
+                writer = imageio.get_writer(out_path, fps=fps, codec='libx264',
+                                            quality=8, macro_block_size=1)
+        except Exception as e:
+            QMessageBox.critical(self, "Video writer failed",
+                f"Could not open {out_path} for writing:\n{e}\n\n"
+                "For MP4 output, ensure `imageio-ffmpeg` is installed:\n"
+                "  pip install imageio-ffmpeg")
+            return
+
+        # Progress feedback via window title; render frames
+        old_title = self.windowTitle()
+        try:
+            for i, tp in enumerate(frame_times):
+                self._cs_time_point = float(tp)
+                self._cs_redraw_all()
+                QApplication.processEvents()
+                # Grab the tab widget as a QImage → numpy array
+                pix = self._cs_tab_widget.grab()
+                img = pix.toImage().convertToFormat(
+                    __import__('PyQt6.QtGui', fromlist=['QImage']).QImage.Format.Format_RGB888)
+                w, h = img.width(), img.height()
+                ptr = img.bits()
+                ptr.setsize(img.sizeInBytes())
+                arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, img.bytesPerLine()))[:, :w*3].reshape((h, w, 3))
+                writer.append_data(arr.copy())
+                if i % max(fps, 1) == 0:
+                    self.setWindowTitle(f"{old_title}  —  rendering frame {i+1}/{n_frames}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Render error", f"Frame export failed:\n{e}")
+        finally:
+            try: writer.close()
+            except Exception: pass
+            self.setWindowTitle(old_title)
+
+        QMessageBox.information(self, "Animation saved",
+            f"Wrote {n_frames} frames at {fps} fps →\n{out_path}")
 
     # ── Mouse interaction on timeseries ──────────────────────────────────
 
