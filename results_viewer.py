@@ -3055,30 +3055,48 @@ class ResultsViewer(QMainWindow):
             # Simpler radical rule: ends with O2 / has is_peroxy flag / is OH/HO2
             is_radical = bool(entry.is_peroxy) or col.upper() in {'OH', 'HO2'} or col.upper().endswith('O2')
             rows.append({
-                'name':  col,
-                'nC':    entry.n_C, 'nH': entry.n_H, 'nO': entry.n_O, 'nN': entry.n_N,
-                'mass':  entry.mass,
-                'class': self._cs_classify(entry.n_C, entry.n_H, entry.n_O, entry.n_N),
-                'logc':  self._cs_calc_logc_star(entry.n_C, entry.n_O, entry.n_N),
-                'osc':   self._cs_calc_osc(entry.n_C, entry.n_H, entry.n_O),
+                'name':    col,
+                'formula': entry.formula or '',
+                'nC':      entry.n_C, 'nH': entry.n_H, 'nO': entry.n_O, 'nN': entry.n_N,
+                'mass':    entry.mass,
+                'class':   self._cs_classify(entry.n_C, entry.n_H, entry.n_O, entry.n_N),
+                'logc':    self._cs_calc_logc_star(entry.n_C, entry.n_O, entry.n_N),
+                'osc':     self._cs_calc_osc(entry.n_C, entry.n_H, entry.n_O),
                 'is_radical': is_radical,
             })
         self._cs_species_table = pd.DataFrame(rows)
         return self._cs_species_table
 
     def _cs_current_window(self):
-        """Return (t_lo, t_hi) in hours since midnight for the current time selector."""
-        if not hasattr(self, '_cs_time_range'):
+        """Return (t_lo, t_hi) in hours since midnight for the current time selector.
+        Snapshot mode → zero-width window at _cs_time_point.
+        Window mode    → the draggable _cs_time_range."""
+        mode_window = (hasattr(self, '_cs_mode_combo')
+                       and self._cs_mode_combo.currentIndex() == 1)
+        if mode_window:
+            if not hasattr(self, '_cs_time_range'):
+                t = self.df.index.values.astype(float)
+                return (float(t[0]), float(t[-1]))
+            return self._cs_time_range
+        # Snapshot
+        if not hasattr(self, '_cs_time_point'):
             t = self.df.index.values.astype(float)
-            return (float(t[0]), float(t[-1]))
-        return self._cs_time_range
+            return (float(t[len(t)//2]), float(t[len(t)//2]))
+        return (self._cs_time_point, self._cs_time_point)
 
     def _cs_avg_conc_ppb(self, species):
-        """Average concentration (ppb) of a species over the current time window."""
+        """Concentration (ppb) of a species, averaged over the current window
+        or nearest-timestep lookup in snapshot mode."""
         if species not in self.df.columns or 'M' not in self.df.columns:
             return np.nan
-        t_lo, t_hi = self._cs_current_window()
         t = self.df.index.values.astype(float)
+        t_lo, t_hi = self._cs_current_window()
+        if t_lo == t_hi:
+            # Snapshot: nearest row
+            idx = int(np.argmin(np.abs(t - t_lo)))
+            v = float(self.df[species].values[idx])
+            m = float(self.df['M'].values[idx])
+            return v / m * 1e9 if m > 0 else np.nan
         mask = (t >= t_lo) & (t <= t_hi)
         if mask.sum() == 0:
             return np.nan
@@ -3089,11 +3107,15 @@ class ResultsViewer(QMainWindow):
         return float(np.nanmean(ppb))
 
     def _cs_avg_conc_molec(self, species):
-        """Average concentration (molec/cm³) of a species over the current time window."""
+        """Concentration (molec/cm³) of a species, averaged over the current window
+        or nearest-timestep lookup in snapshot mode."""
         if species not in self.df.columns:
             return np.nan
-        t_lo, t_hi = self._cs_current_window()
         t = self.df.index.values.astype(float)
+        t_lo, t_hi = self._cs_current_window()
+        if t_lo == t_hi:
+            idx = int(np.argmin(np.abs(t - t_lo)))
+            return float(self.df[species].values[idx])
         mask = (t >= t_lo) & (t <= t_hi)
         if mask.sum() == 0:
             return np.nan
@@ -3113,7 +3135,7 @@ class ResultsViewer(QMainWindow):
         ctrl.addWidget(QLabel("Mode:"))
         self._cs_mode_combo = QComboBox()
         self._cs_mode_combo.addItems(["Snapshot (single time)", "Window (time range)"])
-        self._cs_mode_combo.setCurrentIndex(1)
+        self._cs_mode_combo.setCurrentIndex(0)  # Snapshot is the default
         self._cs_mode_combo.setToolTip(
             "Snapshot: all plots reflect chamber state at one instant.\n"
             "Window: all plots show averages over a draggable time range."
@@ -3180,6 +3202,7 @@ class ResultsViewer(QMainWindow):
         self._cs_drag = None   # 'left', 'right', 'point', 'pan'
         self._cs_pan_anchor = None
         self._cs_vbs_annot = None
+        self._cs_md_annot = None
 
         # Wire up controls
         self._cs_mode_combo.currentIndexChanged.connect(self._cs_redraw_all)
@@ -3191,8 +3214,11 @@ class ResultsViewer(QMainWindow):
         self._cs_ts_canvas.mpl_connect('motion_notify_event',  self._cs_on_motion)
         self._cs_ts_canvas.mpl_connect('button_release_event', self._cs_on_release)
 
-        # Hover tooltip on VBS
-        self._cs_vbs_canvas.mpl_connect('motion_notify_event', self._cs_on_vbs_hover)
+        # Hover tooltips on VBS and mass defect plots
+        self._cs_vbs_canvas.mpl_connect(
+            'motion_notify_event', lambda e: self._cs_on_scatter_hover(e, 'vbs'))
+        self._cs_fam_canvas.mpl_connect(
+            'motion_notify_event', lambda e: self._cs_on_scatter_hover(e, 'md'))
 
         self.right_tabs.addTab(outer, "Chemical Space")
         self._cs_redraw_all()
@@ -3374,15 +3400,18 @@ class ResultsViewer(QMainWindow):
         self._cs_vbs_canvas.draw()
 
     def _cs_draw_c_o_distribution(self):
-        """Bottom-left panel: species count / concentration by nC and nO (grouped bars)."""
+        """Bottom-left panel: two stacked bar plots, both with nC on the x-axis.
+        Left subplot: bars stacked by oxygen number (nO).
+        Right subplot: bars stacked by CHO family class.
+        Matches the NNMF project convention for compound composition breakdown."""
         self._cs_co_fig.clear()
         gs = self._cs_co_fig.add_gridspec(1, 2, wspace=0.3)
-        ax_c = self._cs_co_fig.add_subplot(gs[0])
-        ax_o = self._cs_co_fig.add_subplot(gs[1])
+        ax_no = self._cs_co_fig.add_subplot(gs[0])  # stacked by nO
+        ax_cl = self._cs_co_fig.add_subplot(gs[1])  # stacked by class
 
         spc = self._cs_species_with_conc()
         if spc.empty:
-            for ax in (ax_c, ax_o):
+            for ax in (ax_no, ax_cl):
                 ax.text(0.5, 0.5, "No data in this time window.", ha='center', va='center',
                         transform=ax.transAxes, color='grey')
                 ax.set_axis_off()
@@ -3390,87 +3419,113 @@ class ResultsViewer(QMainWindow):
             return
 
         unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+        x_all = sorted(spc['nC'].unique())
 
-        # Stacked-by-class bars over carbon number
-        def _stacked_bar(ax, atom_col, xlabel):
-            grp = (spc.groupby([atom_col, 'class'])['unit_val'].sum()
-                      .unstack(fill_value=0))
-            x = grp.index.values
-            bottoms = np.zeros(len(x))
-            for cls in self._CS_CLASS_ORDER:
-                if cls not in grp.columns:
-                    continue
-                vals = grp[cls].values
-                ax.bar(x, vals, bottom=bottoms, color=self._CS_CLASS_COLORS[cls],
-                       edgecolor='k', linewidth=0.3, label=cls)
-                bottoms = bottoms + vals
-            ax.set_xlabel(xlabel, fontsize=9)
-            ax.set_ylabel(f"Total conc. ({unit_lbl})", fontsize=9)
-            ax.grid(True, axis='y', ls='--', alpha=0.35)
-            ax.set_xticks(x)
+        # ── LEFT: nC vs Σconc, stacked by nO ─────────────────────────
+        grp_no = (spc.groupby(['nC', 'nO'])['unit_val'].sum().unstack(fill_value=0))
+        grp_no = grp_no.reindex(x_all, fill_value=0)
+        n_levels = sorted(grp_no.columns)
+        cmap = _mcm.get_cmap('viridis')
+        bottoms = np.zeros(len(x_all))
+        for no in n_levels:
+            color = cmap(no / max(max(n_levels), 1))
+            vals = grp_no[no].values
+            ax_no.bar(x_all, vals, bottom=bottoms, color=color,
+                      edgecolor='k', linewidth=0.3, label=f"nO={int(no)}")
+            bottoms = bottoms + vals
+        ax_no.set_xlabel("Number of carbon atoms (nC)", fontsize=9)
+        ax_no.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=9)
+        ax_no.set_title("Stacked by oxygen number", fontsize=9)
+        ax_no.set_xticks(x_all)
+        ax_no.grid(True, axis='y', ls='--', alpha=0.35)
+        if n_levels:
+            ax_no.legend(fontsize=6, loc='upper right', ncol=2, framealpha=0.85,
+                         title='nO', title_fontsize=7).set_draggable(True)
 
-        _stacked_bar(ax_c, 'nC', "Number of carbon atoms (nC)")
-        _stacked_bar(ax_o, 'nO', "Number of oxygen atoms (nO)")
+        # ── RIGHT: nC vs Σconc, stacked by CHO family class ──────────
+        grp_cl = (spc.groupby(['nC', 'class'])['unit_val'].sum().unstack(fill_value=0))
+        grp_cl = grp_cl.reindex(x_all, fill_value=0)
+        bottoms = np.zeros(len(x_all))
+        for cls in self._CS_CLASS_ORDER:
+            if cls not in grp_cl.columns:
+                continue
+            vals = grp_cl[cls].values
+            ax_cl.bar(x_all, vals, bottom=bottoms,
+                      color=self._CS_CLASS_COLORS[cls],
+                      edgecolor='k', linewidth=0.3, label=cls)
+            bottoms = bottoms + vals
+        ax_cl.set_xlabel("Number of carbon atoms (nC)", fontsize=9)
+        ax_cl.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=9)
+        ax_cl.set_title("Stacked by CHO family", fontsize=9)
+        ax_cl.set_xticks(x_all)
+        ax_cl.grid(True, axis='y', ls='--', alpha=0.35)
+        if ax_cl.get_legend_handles_labels()[0]:
+            ax_cl.legend(fontsize=7, loc='upper right', framealpha=0.85).set_draggable(True)
 
-        # Shared legend
-        handles, labels = ax_c.get_legend_handles_labels()
-        if handles:
-            ax_c.legend(fontsize=7, loc='upper right', framealpha=0.85).set_draggable(True)
-
-        self._cs_co_fig.suptitle("Composition by atom count", fontsize=10, fontweight='bold', y=0.99)
+        self._cs_co_fig.suptitle("Composition by carbon number",
+                                  fontsize=10, fontweight='bold', y=0.99)
         self._cs_co_fig.tight_layout(pad=0.6)
         self._cs_co_canvas.draw()
 
     def _cs_draw_family_pie(self):
-        """Bottom-right panel: pie/bar of compound families (CH, CHO, CHON1/2/3+)."""
+        """Bottom-right panel: mass defect plot — molecular mass vs mass defect
+        (mass − round(mass)). Circles sized and coloured like the VBS panel.
+        Classic tool for distinguishing CH/CHO/CHON families by their intrinsic
+        hydrogen/oxygen content relative to integer mass."""
         self._cs_fam_fig.clear()
-        gs = self._cs_fam_fig.add_gridspec(1, 2, wspace=0.25,
-                                            width_ratios=[1.1, 1.4])
-        ax_pie = self._cs_fam_fig.add_subplot(gs[0])
-        ax_bar = self._cs_fam_fig.add_subplot(gs[1])
+        ax = self._cs_fam_fig.add_subplot(111)
 
         spc = self._cs_species_with_conc()
-        if spc.empty:
-            for ax in (ax_pie, ax_bar):
-                ax.text(0.5, 0.5, "No data in this time window.", ha='center', va='center',
-                        transform=ax.transAxes, color='grey')
-                ax.set_axis_off()
+        if spc.empty or not np.any(np.isfinite(spc['mass'])):
+            ax.text(0.5, 0.5, "No data in this time window.", ha='center', va='center',
+                    transform=ax.transAxes, color='grey')
+            ax.set_axis_off()
             self._cs_fam_canvas.draw()
             return
 
+        # Mass defect: exact mass − nominal integer mass
+        masses = spc['mass'].values
+        defect = masses - np.round(masses)
+
+        # Size scaling — same rule as VBS
+        vals = spc['unit_val'].values
+        if self._cs_size_combo.currentText() == 'log10':
+            s_raw = np.log10(np.maximum(vals, 1e-6))
+            s_lo, s_hi = np.nanmin(s_raw), np.nanmax(s_raw)
+            s_norm = (s_raw - s_lo) / max(s_hi - s_lo, 1e-9)
+        else:
+            s_hi = np.nanmax(vals)
+            s_norm = vals / max(s_hi, 1e-9)
+        sizes = 30 + 300 * s_norm
+
+        # Color by family class (consistent with other panels)
+        colors = [self._CS_CLASS_COLORS.get(c, '#7f7f7f') for c in spc['class']]
+        sc = ax.scatter(masses, defect, s=sizes, c=colors,
+                        alpha=0.55, edgecolors='k', linewidths=0.4, zorder=2)
+
+        # Cache scatter for hover tooltips
+        self._cs_md_scatter = sc
+        self._cs_md_species = spc.reset_index(drop=True)
+
+        # Reference line at zero defect
+        ax.axhline(0.0, color='k', lw=0.6, ls='--', alpha=0.5, zorder=1)
+
         unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+        ax.set_xlabel("Molecular mass  (g/mol)", fontsize=9)
+        ax.set_ylabel("Mass defect  (m − round(m))", fontsize=9)
+        ax.set_title(f"Mass defect plot  (N={len(spc)} species, sized by {unit_lbl})",
+                     fontsize=10, fontweight='bold')
+        ax.grid(True, ls='--', alpha=0.3)
 
-        # Totals per class (use selected unit)
-        totals = spc.groupby('class')['unit_val'].sum()
-        totals = totals.reindex([c for c in self._CS_CLASS_ORDER if c in totals.index])
-        colors = [self._CS_CLASS_COLORS[c] for c in totals.index]
+        from matplotlib.lines import Line2D
+        legend_handles = [Line2D([0],[0], marker='o', color='w',
+                                 markerfacecolor=self._CS_CLASS_COLORS[c],
+                                 markersize=8, label=c)
+                          for c in self._CS_CLASS_ORDER if c in spc['class'].values]
+        if legend_handles:
+            ax.legend(handles=legend_handles, loc='lower right', fontsize=8,
+                      framealpha=0.85).set_draggable(True)
 
-        # Pie: fraction by concentration
-        if totals.sum() > 0:
-            ax_pie.pie(totals.values, labels=totals.index, autopct='%1.0f%%',
-                       colors=colors, startangle=90,
-                       wedgeprops={'edgecolor': 'k', 'linewidth': 0.4})
-            ax_pie.set_title(f"Concentration fraction\n({unit_lbl})", fontsize=9)
-
-        # Bar: count of species + concentration side-by-side
-        counts = spc['class'].value_counts().reindex(
-            [c for c in self._CS_CLASS_ORDER if c in spc['class'].values], fill_value=0)
-        x = np.arange(len(counts))
-        w = 0.4
-        ax_bar.bar(x - w/2, counts.values, width=w, color=colors,
-                   edgecolor='k', linewidth=0.3, label='# species')
-        ax_bar2 = ax_bar.twinx()
-        ax_bar2.bar(x + w/2, totals.reindex(counts.index, fill_value=0).values,
-                    width=w, color=colors, edgecolor='k', linewidth=0.3,
-                    alpha=0.55, label=f'Σ {unit_lbl}')
-        ax_bar.set_xticks(x)
-        ax_bar.set_xticklabels(counts.index, fontsize=8)
-        ax_bar.set_ylabel("# species", fontsize=9)
-        ax_bar2.set_ylabel(f"Σ conc. ({unit_lbl})", fontsize=9)
-        ax_bar.grid(True, axis='y', ls='--', alpha=0.35)
-
-        self._cs_fam_fig.suptitle("Compound families (CHO classification)",
-                                   fontsize=10, fontweight='bold', y=0.99)
         self._cs_fam_fig.tight_layout(pad=0.6)
         self._cs_fam_canvas.draw()
 
@@ -3589,36 +3644,50 @@ class ResultsViewer(QMainWindow):
         # Heavy redraw at end: all four panels now reflect the new window
         self._cs_redraw_all()
 
-    def _cs_on_vbs_hover(self, event):
-        """Show species name tooltip when hovering over VBS points."""
-        if event.inaxes is None or not hasattr(self, '_cs_vbs_scatter'):
+    def _cs_on_scatter_hover(self, event, kind):
+        """Shared hover handler for VBS ('vbs') and mass-defect ('md') plots.
+        Shows a yellow tooltip with the MCM name, chemical formula, key
+        coordinates, and concentration in the selected unit."""
+        if kind == 'vbs':
+            sc_attr, spc_attr, annot_attr, canvas = ('_cs_vbs_scatter',
+                '_cs_vbs_species', '_cs_vbs_annot', self._cs_vbs_canvas)
+            xy_from = lambda row: (row['logc'], row['osc'])
+            coord_line = lambda row: f"LogC*={row['logc']:.2f}  OSc={row['osc']:.2f}"
+        else:  # 'md'
+            sc_attr, spc_attr, annot_attr, canvas = ('_cs_md_scatter',
+                '_cs_md_species', '_cs_md_annot', self._cs_fam_canvas)
+            xy_from = lambda row: (row['mass'], row['mass'] - round(row['mass']))
+            coord_line = lambda row: (f"mass={row['mass']:.3f}  "
+                                      f"defect={row['mass']-round(row['mass']):+.3f}")
+
+        if event.inaxes is None or not hasattr(self, sc_attr):
             return
-        sc = self._cs_vbs_scatter
+        sc = getattr(self, sc_attr)
         cont, info = sc.contains(event)
         ax = sc.axes
-        if self._cs_vbs_annot is not None:
-            try:
-                self._cs_vbs_annot.remove()
-            except Exception:
-                pass
-            self._cs_vbs_annot = None
+        # Clear previous annotation
+        old = getattr(self, annot_attr, None)
+        if old is not None:
+            try: old.remove()
+            except Exception: pass
+            setattr(self, annot_attr, None)
         if cont and info.get('ind') is not None and len(info['ind']):
             idx = int(info['ind'][0])
-            spc = self._cs_vbs_species
+            spc = getattr(self, spc_attr)
             if idx < len(spc):
                 row = spc.iloc[idx]
                 unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
-                txt = (f"{row['name']}\n"
-                       f"nC={int(row['nC'])} nH={int(row['nH'])} "
-                       f"nO={int(row['nO'])} nN={int(row['nN'])}\n"
-                       f"LogC*={row['logc']:.2f}  OSc={row['osc']:.2f}\n"
+                formula = row.get('formula') or row['name']
+                txt = (f"{row['name']}  ({formula})\n"
+                       f"{coord_line(row)}\n"
                        f"conc={row['unit_val']:.3g} {unit_lbl}")
-                self._cs_vbs_annot = ax.annotate(
-                    txt, xy=(row['logc'], row['osc']),
+                annot = ax.annotate(
+                    txt, xy=xy_from(row),
                     xytext=(10, 10), textcoords='offset points',
                     fontsize=8, bbox=dict(boxstyle='round,pad=0.4',
                                           fc='lightyellow', ec='k', alpha=0.9))
-        self._cs_vbs_canvas.draw_idle()
+                setattr(self, annot_attr, annot)
+        canvas.draw_idle()
 
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
@@ -3723,14 +3792,31 @@ def main():
                         help="Path to the simulation_results.csv file to view.")
     args = parser.parse_args()
 
-    if args.results_csv_path and os.path.exists(args.results_csv_path):
-        print(f">>> [VIEWER] Loading results from: {args.results_csv_path}")
-        show_results(args.results_csv_path)
+    csv_path = args.results_csv_path
+    if csv_path and not os.path.exists(csv_path):
+        print(f"[ERROR] File not found: {csv_path}")
+        csv_path = None
+
+    # No path (or bad path): open a file picker if PyQt is available
+    if not csv_path and HAS_PYQT:
+        app = QApplication.instance() or QApplication(sys.argv)
+        scenarios_root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "MCM_tested_scenarios")
+        start_dir = scenarios_root if os.path.isdir(scenarios_root) else os.getcwd()
+        csv_path, _ = QFileDialog.getOpenFileName(
+            None, "Select simulation_results CSV", start_dir,
+            "Simulation results (simulation_results*.csv);;All CSV (*.csv);;All files (*)"
+        )
+        if not csv_path:
+            print(">>> [VIEWER] No file selected. Exiting.")
+            return
+
+    if csv_path and os.path.exists(csv_path):
+        print(f">>> [VIEWER] Loading results from: {csv_path}")
+        show_results(csv_path)
     else:
-        if args.results_csv_path:
-            print(f"[ERROR] File not found: {args.results_csv_path}")
         print("\nUsage: python results_viewer.py <path_to_simulation_results.csv>")
-        print(">>> [VIEWER] No path provided or path is invalid. Exiting.")
+        print(">>> [VIEWER] No path provided. Exiting.")
 
 
 if __name__ == "__main__":

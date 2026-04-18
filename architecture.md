@@ -410,16 +410,22 @@ New interactive tab in `results_viewer.py` (`_build_chemspace_tab`). Visualises 
 ### Layout
 2×2 grid driven by a shared time selector:
 
-- **Top-left — Injection timeseries:** Auto-detects species listed in `burst_injections`. Gold shading for roof-open periods, red dotted lines at injection start times, steel-blue draggable overlay for time selection. Drag the left edge, right edge, or pan the middle.
-- **Top-right — VBS plot:** LogC* (x) vs OSc (y). Circles coloured by CHO family, sized by average concentration over the selected window. LVOC/SVOC/IVOC/VOC background shading. Hover tooltip shows species name, atom counts, LogC*, OSc, concentration.
-- **Bottom-left — Composition:** Total concentration stacked by CHO family, plotted over nC (carbon number) on the left and nO (oxygen number) on the right.
-- **Bottom-right — Family breakdown:** Pie chart (concentration fraction by CHO family) + dual-axis bar chart (# species and Σ concentration).
+- **Top-left — Injection timeseries:** Auto-detects species listed in `burst_injections`. Gold shading for roof-open periods, red dotted lines at injection start times, steel-blue draggable overlay for time selection. Drag the left edge, right edge, or pan the middle. In snapshot mode the overlay collapses to a single vertical cursor.
+- **Top-right — VBS plot:** LogC* (x) vs OSc (y). Circles coloured by CHO family, sized by concentration (linear or log10). LVOC/SVOC/IVOC/VOC background shading.
+- **Bottom-left — Carbon-number composition:** Two stacked bar plots, both with nC on the x-axis. Left subplot stacked by oxygen number (viridis colour scale). Right subplot stacked by CHO family class (matching the VBS colour scheme). Replaces the earlier nC/nO side-by-side plots — gives a clearer view of composition evolution.
+- **Bottom-right — Mass defect plot:** Exact mass (x) vs mass − round(mass) (y). Circles sized and coloured like the VBS (same family colours, same size scaling). Dashed zero-defect reference line. Classic tool for distinguishing CH / CHO / CHON families by intrinsic hydrogen/oxygen relative to integer mass.
 
 ### Controls
-- **Mode:** Snapshot (single time) vs Window (time range, default).
-- **Units:** ppb ↔ µg/m³ toggle. µg/m³ computed via `ppb · M · mass / 24.45e9` using molar volume 24.45 L/mol at 298 K, 1 atm.
-- **VBS size scale:** linear or log10.
-- **Live radical averages:** OH, HO2, O3, RO2, NO, NO2 averaged over the current window, shown in the control row.
+- **Mode:** Snapshot (single time, default) vs Window (time range). Snapshot uses nearest-row lookup; Window averages across the range.
+- **Units:** ppb ↔ µg/m³ toggle. µg/m³ computed via `ppb · mass / 24.45` using molar volume 24.45 L/mol at 298 K, 1 atm.
+- **VBS/mass-defect size scale:** linear or log10 (applies to both scatter plots).
+- **Live radical averages:** OH, HO2, O3, RO2, NO, NO2 in the selected time, shown in the control row.
+
+### Interactive tooltips
+Hovering over any scatter circle (VBS or mass-defect) shows a yellow popup:
+- Line 1: MCM name + chemical formula (e.g. `CH3CHO  (C2H4O)`, pulled from `MCMSpecies.formula`)
+- Line 2: plot-specific coordinates (`LogC*=…  OSc=…` or `mass=…  defect=…`)
+- Line 3: concentration in the selected unit
 
 ### Scientific formulas
 
