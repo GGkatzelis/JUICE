@@ -76,7 +76,9 @@ class ScenarioRunner:
         if enz_file is None:
             raise FileNotFoundError(f"No .enz file found in {self.root}")
         enz_path = os.path.join(self.root, enz_file)
-        providers, t_min, t_max, headers = load_saphir_environment(enz_path)
+        interp_mode = self.cfg.get('interpolation', 'linear')
+        providers, t_min, t_max, headers = load_saphir_environment(enz_path, interpolation=interp_mode)
+        print(f"  [ENZ] Interpolation mode: {interp_mode}")
         
         self.t_span = np.linspace(t_min, t_max, num=2000)
 
@@ -1216,12 +1218,12 @@ class ScenarioRunner:
         self.eval_count = 0
         self.real_start_time = time.time()
 
-        # --- DETECT DISCONTINUITY EVENTS IN ALL ENZ COLUMNS ---
-        # All ENZ columns use piecewise-constant interpolation (kind='previous').
-        # BDF polynomial history becomes inconsistent at step changes. We detect
-        # value jumps across ALL columns and split integration at each one.
+        # --- DETECT DISCONTINUITY EVENTS IN ENZ COLUMNS ---
+        # Piecewise-constant columns have step changes that require BDF restarts.
+        # Linear-interpolated columns are smooth — only Q-switches/HV need scanning.
         event_times = []
         n_events_by_col = {}
+        _interp_mode = self.cfg.get('interpolation', 'linear')
 
         def _find_step_changes(func, label):
             """Scan a piecewise-constant signal for any value jumps."""
@@ -1244,9 +1246,15 @@ class ScenarioRunner:
                     transitions.append(0.5 * (lo + hi))
             return transitions
 
+        # In linear mode, only scan Q-switch/HV columns (true step functions).
+        # All other columns are smooth → no BDF restarts needed.
+        _q_prefixes = {'Q', 'HV'}
         for key, func in self.ctx_data.items():
             if key.upper() == 'TIME':
                 continue
+            if _interp_mode == 'linear':
+                if not any(key.upper().startswith(p) for p in _q_prefixes):
+                    continue
             try:
                 trans = _find_step_changes(func, key)
                 if trans:
