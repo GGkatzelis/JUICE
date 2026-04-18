@@ -427,10 +427,22 @@ Hovering over any scatter circle (VBS or mass-defect) shows a yellow popup:
 - Line 2: plot-specific coordinates (`LogC*=…  OSc=…` or `mass=…  defect=…`)
 - Line 3: concentration in the selected unit
 
-### Playback & video export
-- **▶ Play button:** animates the snapshot cursor from the current time to experiment end using a `QTimer` at 10 fps. Automatically switches to snapshot mode. Button toggles to ⏸ Pause while running. If the cursor is already at the end, Play restarts from t₀.
-- **Duration dropdown** (15 s / 30 s / 1 min / 2 min / 5 min): wall-clock time for full playback. Step size = `(t_end − t_cursor) / (duration · fps)`.
-- **🎥 Save video button:** exports the animation as MP4 or GIF. Uses `QWidget.grab()` to screenshot the entire tab contents frame-by-frame, converts to a numpy RGB array, and writes via `imageio.get_writer`. MP4 output requires `imageio-ffmpeg` on PATH; GIF output has no extra dependency. Frame count = `duration × fps`; `macro_block_size=1` so arbitrary widget dimensions work.
+### Video export
+Live in-GUI playback was implemented with a QTimer but removed — it crashed on Windows (likely re-entrancy during heavy matplotlib redraws) and was too slow with four panels. The cursor remains fully interactive manually; video is rendered off-screen to a file.
+
+- **Video duration dropdown** (5 s / 10 s / 15 s / 30 s / 45 s / 60 s, default 15 s): wall-clock duration of the output. Full experiment is mapped linearly to this duration.
+- **fps dropdown** (10 / 15 / 20 / 24 / 30, default 15): output frame rate. Lower = faster render.
+- **🎥 Save video button** — pipeline:
+    - Reads pixels straight from each matplotlib canvas's Agg buffer via `fig.canvas.buffer_rgba()`. No `QPixmap` / `QImage` / `.bits()` — that path was the crash source (Qt image memory freed while numpy still held a view).
+    - Composites the four panels into a fixed **1440 × 960** RGB frame: top row 2 × (720 × 540), bottom row 2 × (720 × 420). PIL resizes each figure to the canonical column width.
+    - Writes via `imageio.get_writer` — MP4 (`libx264`, `yuv420p`, `quality=8`) or GIF. MP4 needs `imageio-ffmpeg` (bundles ffmpeg binary, no system install required).
+    - `QProgressDialog` with working Cancel button; partial file removed on cancel.
+    - After render, offers to open the file in the system default player (`os.startfile` / `open` / `xdg-open`).
+
+### Performance optimizations
+These benefit both interactive redraw and video rendering:
+- **Per-frame species table cache** keyed on `(mode, time, units)`. The four draw methods share the cached dataframe instead of recomputing it 4× per frame.
+- **Fixed `subplots_adjust` margins** in every Chemical Space draw method. `tight_layout()` re-measures every tick label / title / legend on every call — by far the single largest cost per redraw.
 
 ### Scientific formulas
 

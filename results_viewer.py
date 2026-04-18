@@ -3153,28 +3153,34 @@ class ResultsViewer(QMainWindow):
         self._cs_size_combo.setCurrentIndex(1)
         ctrl.addWidget(self._cs_size_combo)
 
-        # Playback controls
+        # Video export controls (no live playback — it crashed the GUI).
+        # The cursor remains fully interactive manually; clicking or dragging
+        # on the timeseries in Snapshot mode updates all panels instantly.
         ctrl.addSpacing(10)
-        self._cs_play_btn = QPushButton("▶ Play")
-        self._cs_play_btn.setCheckable(True)
-        self._cs_play_btn.setToolTip(
-            "Animate the cursor from start to end of the experiment.\n"
-            "All four panels update live. Forces snapshot mode."
-        )
-        self._cs_play_btn.clicked.connect(self._cs_toggle_play)
-        ctrl.addWidget(self._cs_play_btn)
-
-        ctrl.addWidget(QLabel("Duration:"))
+        ctrl.addWidget(QLabel("Video duration:"))
         self._cs_duration_combo = QComboBox()
-        self._cs_duration_combo.addItems(["15 s", "30 s", "1 min", "2 min", "5 min"])
-        self._cs_duration_combo.setCurrentIndex(1)  # 30s default
-        self._cs_duration_combo.setToolTip("Wall-clock duration for the full experiment playback.")
+        self._cs_duration_combo.addItems(["5 s", "10 s", "15 s", "30 s", "45 s", "60 s"])
+        self._cs_duration_combo.setCurrentIndex(2)  # 15s default
+        self._cs_duration_combo.setToolTip(
+            "Wall-clock duration of the exported MP4/GIF.\n"
+            "The full experiment is mapped to this duration."
+        )
         ctrl.addWidget(self._cs_duration_combo)
+
+        ctrl.addWidget(QLabel("fps:"))
+        self._cs_fps_combo = QComboBox()
+        self._cs_fps_combo.addItems(["10", "15", "20", "24", "30"])
+        self._cs_fps_combo.setCurrentIndex(1)  # 15 fps default
+        self._cs_fps_combo.setToolTip(
+            "Frames per second in the output file. Lower values render faster\n"
+            "(fewer frames) but look choppier. 15 fps is fine for data animation."
+        )
+        ctrl.addWidget(self._cs_fps_combo)
 
         self._cs_save_video_btn = QPushButton("🎥 Save video…")
         self._cs_save_video_btn.setToolTip(
-            "Export the animation as MP4 (requires ffmpeg) or GIF by grabbing\n"
-            "the tab contents frame-by-frame."
+            "Render an MP4 (or GIF) of the full experiment evolution.\n"
+            "Runs frame-by-frame off-screen; the GUI itself does not animate."
         )
         self._cs_save_video_btn.clicked.connect(self._cs_save_video)
         ctrl.addWidget(self._cs_save_video_btn)
@@ -3234,11 +3240,8 @@ class ResultsViewer(QMainWindow):
         self._cs_vbs_annot = None
         self._cs_md_annot = None
 
-        # Animation state
-        self._cs_timer = QTimer(self)
-        self._cs_timer.timeout.connect(self._cs_on_play_tick)
-        self._cs_step_hours = 0.0     # how much to advance per tick
-        self._cs_anim_fps = 10        # target frames per second for playback
+        # Fallback video fps (user can pick in the dropdown)
+        self._cs_video_fps = 15
 
         # Wire up controls
         self._cs_mode_combo.currentIndexChanged.connect(self._cs_redraw_all)
@@ -3337,7 +3340,7 @@ class ResultsViewer(QMainWindow):
             ax.axvline(t_lo, color='steelblue', lw=1.8, zorder=4)
             ax.axvline(t_hi, color='steelblue', lw=1.8, zorder=4)
         else:
-            ax.axvline(self._cs_time_point, color='steelblue', lw=2.0, zorder=4,
+            ax.axvline(self._cs_time_point, color='black', lw=1.8, ls='--', zorder=4,
                        label='Selected time')
 
         ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
@@ -3346,25 +3349,112 @@ class ResultsViewer(QMainWindow):
         ax.grid(True, ls='--', alpha=0.35)
         if ax.get_legend_handles_labels()[0]:
             ax.legend(loc='upper right', fontsize=7, framealpha=0.85).set_draggable(True)
-        self._cs_ts_fig.tight_layout(pad=0.6)
+        # Fixed margins (faster than tight_layout, which re-computes every call)
+        self._cs_ts_fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.18)
         self._cs_ts_canvas.draw()
 
+    def _cs_global_conc_range(self, unit_key):
+        """Return (v_min_nonzero, v_max) of the selected unit across ALL
+        organic species and ALL time points. Used so that marker sizes in
+        VBS and mass-defect plots reflect *absolute* concentration rather
+        than normalizing to the current snapshot's maximum (which would
+        pin the dominant species at maximum size regardless of decay).
+        Cached on self per unit key; invalidate if the dataframe changes."""
+        cache_attr = f'_cs_global_range_{unit_key}'
+        if hasattr(self, cache_attr):
+            return getattr(self, cache_attr)
+        spc_all = self._cs_build_species_table()
+        spc_all = spc_all[~spc_all['is_radical']]
+        if spc_all.empty or 'M' not in self.df.columns:
+            rv = (1e-6, 1.0)
+            setattr(self, cache_attr, rv)
+            return rv
+        M = self.df['M'].values.astype(float)
+        vmin, vmax = np.inf, -np.inf
+        for _, row in spc_all.iterrows():
+            name = row['name']
+            if name not in self.df.columns:
+                continue
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ppb = np.where(M > 0, self.df[name].values / M * 1e9, np.nan)
+            vals = ppb if unit_key == 'ppb' else ppb * float(row['mass']) / 24.45
+            valid = vals[np.isfinite(vals) & (vals > 0)]
+            if valid.size:
+                vmin = min(vmin, float(valid.min()))
+                vmax = max(vmax, float(valid.max()))
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= 0:
+            rv = (1e-6, 1.0)
+        else:
+            rv = (vmin, vmax)
+        setattr(self, cache_attr, rv)
+        return rv
+
+    def _cs_compute_sizes(self, vals):
+        """Map concentrations (in currently selected unit) to scatter marker
+        areas [10, 500] pt².
+
+        Uses a global dynamic range anchored at the experiment max, and
+        clamps the floor to four orders of magnitude below that. This
+        choice matches typical chamber physics (real concentration changes
+        span 3–4 orders; anything smaller is numerical noise), and keeps
+        a 3–10× concentration change visibly different.
+
+        Log mode: size ∝ clipped log10(conc).
+        Linear mode: size ∝ sqrt(conc) so radius is proportional to
+        concentration and area is proportional to conc (nicer perception
+        of small changes than the raw conc mapping)."""
+        unit_key = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'ugm3'
+        _, v_max = self._cs_global_conc_range(unit_key)
+        vals = np.asarray(vals, dtype=float)
+        # 4-decade dynamic range below the experiment max
+        DYN_RANGE = 4.0
+        v_floor = max(v_max * (10.0 ** (-DYN_RANGE)), 1e-30)
+        if self._cs_size_combo.currentText() == 'log10':
+            s_raw = np.log10(np.maximum(vals, v_floor))
+            s_lo  = np.log10(v_floor)
+            s_hi  = np.log10(max(v_max, v_floor * 10))
+            s_norm = (s_raw - s_lo) / max(s_hi - s_lo, 1e-9)
+        else:
+            # Linear mode with sqrt scaling → area ∝ conc but the scale is
+            # compressed enough that mid-range species are still readable.
+            ratio = np.clip(vals / max(v_max, 1e-30), 0.0, 1.0)
+            s_norm = np.sqrt(ratio)
+        s_norm = np.clip(s_norm, 0.0, 1.0)
+        return 10.0 + 490.0 * s_norm
+
     def _cs_species_with_conc(self):
-        """Return the species table augmented with average concentration (ppb and µg/m³)
-        over the current time window."""
+        """Species table + per-species concentration (ppb and µg/m³) at the
+        current cursor time (snapshot) or averaged over the window.
+
+        All four draw methods call this every frame, so we cache the result
+        keyed on (mode, cursor-time-or-range, units). Without the cache a
+        rendered video would recompute it 4× per frame for ~200 species."""
+        mode_idx = self._cs_mode_combo.currentIndex() if hasattr(self, '_cs_mode_combo') else 0
+        if mode_idx == 0:
+            time_key = round(float(self._cs_time_point), 6)
+        else:
+            lo, hi = self._cs_current_window()
+            time_key = (round(float(lo), 6), round(float(hi), 6))
+        unit_idx = self._cs_units_combo.currentIndex() if hasattr(self, '_cs_units_combo') else 0
+        cache_key = (mode_idx, time_key, unit_idx)
+        if getattr(self, '_cs_spc_cache_key', None) == cache_key:
+            return self._cs_spc_cache
+
         spc = self._cs_build_species_table()
         if spc.empty:
+            self._cs_spc_cache_key = cache_key
+            self._cs_spc_cache = spc
             return spc
-        # Only non-radical organics for the VBS/distribution panels
         spc = spc[~spc['is_radical']].copy()
         conc_ppb = np.array([self._cs_avg_conc_ppb(n) for n in spc['name']])
         conc_ug  = conc_ppb * spc['mass'].values / 24.45   # ppb → µg/m³ at 1 atm, 298 K
         spc['conc_ppb']  = conc_ppb
         spc['conc_ugm3'] = conc_ug
-        # Drop species with NaN or essentially zero concentration
-        unit = 'conc_ppb' if self._cs_units_combo.currentIndex() == 0 else 'conc_ugm3'
+        unit = 'conc_ppb' if unit_idx == 0 else 'conc_ugm3'
         spc = spc[np.isfinite(spc[unit]) & (spc[unit] > 1e-6)].copy()
         spc['unit_val'] = spc[unit]
+        self._cs_spc_cache_key = cache_key
+        self._cs_spc_cache = spc
         return spc
 
     def _cs_draw_vbs(self):
@@ -3390,16 +3480,10 @@ class ResultsViewer(QMainWindow):
         for x, label in [(-2, 'LVOC'), (1, 'SVOC'), (4.5, 'IVOC'), (8.5, 'VOC')]:
             ax.text(x, 2.25, label, ha='center', va='bottom', fontsize=9, color='#444')
 
-        # Size scaling
-        vals = spc['unit_val'].values
-        if self._cs_size_combo.currentText() == 'log10':
-            s_raw = np.log10(np.maximum(vals, 1e-6))
-            s_lo, s_hi = np.nanmin(s_raw), np.nanmax(s_raw)
-            s_norm = (s_raw - s_lo) / max(s_hi - s_lo, 1e-9)
-        else:
-            s_hi = np.nanmax(vals)
-            s_norm = vals / max(s_hi, 1e-9)
-        sizes = 30 + 300 * s_norm
+        # Size scaling — global (across all species, all times) so markers
+        # shrink visibly as concentrations decay instead of staying pinned
+        # at the per-frame maximum.
+        sizes = self._cs_compute_sizes(spc['unit_val'].values)
 
         # Color by class
         colors = [self._CS_CLASS_COLORS.get(c, '#7f7f7f') for c in spc['class']]
@@ -3432,7 +3516,7 @@ class ResultsViewer(QMainWindow):
         ax.text(0.01, -0.14, "Li et al., ACP 16, 3327 (2016) · Kroll et al., Nat. Chem. 3, 133 (2011)",
                 transform=ax.transAxes, fontsize=6, color='#666', style='italic')
 
-        self._cs_vbs_fig.tight_layout(pad=0.6)
+        self._cs_vbs_fig.subplots_adjust(left=0.10, right=0.96, top=0.90, bottom=0.14)
         self._cs_vbs_canvas.draw()
 
     def _cs_draw_c_o_distribution(self):
@@ -3500,7 +3584,7 @@ class ResultsViewer(QMainWindow):
 
         self._cs_co_fig.suptitle("Composition by carbon number",
                                   fontsize=10, fontweight='bold', y=0.99)
-        self._cs_co_fig.tight_layout(pad=0.6)
+        self._cs_co_fig.subplots_adjust(left=0.07, right=0.98, top=0.88, bottom=0.16, wspace=0.28)
         self._cs_co_canvas.draw()
 
     def _cs_draw_family_pie(self):
@@ -3523,16 +3607,8 @@ class ResultsViewer(QMainWindow):
         masses = spc['mass'].values
         defect = masses - np.round(masses)
 
-        # Size scaling — same rule as VBS
-        vals = spc['unit_val'].values
-        if self._cs_size_combo.currentText() == 'log10':
-            s_raw = np.log10(np.maximum(vals, 1e-6))
-            s_lo, s_hi = np.nanmin(s_raw), np.nanmax(s_raw)
-            s_norm = (s_raw - s_lo) / max(s_hi - s_lo, 1e-9)
-        else:
-            s_hi = np.nanmax(vals)
-            s_norm = vals / max(s_hi, 1e-9)
-        sizes = 30 + 300 * s_norm
+        # Size scaling — same global rule as VBS
+        sizes = self._cs_compute_sizes(spc['unit_val'].values)
 
         # Color by family class (consistent with other panels)
         colors = [self._CS_CLASS_COLORS.get(c, '#7f7f7f') for c in spc['class']]
@@ -3562,7 +3638,7 @@ class ResultsViewer(QMainWindow):
             ax.legend(handles=legend_handles, loc='lower right', fontsize=8,
                       framealpha=0.85).set_draggable(True)
 
-        self._cs_fam_fig.tight_layout(pad=0.6)
+        self._cs_fam_fig.subplots_adjust(left=0.10, right=0.96, top=0.90, bottom=0.14)
         self._cs_fam_canvas.draw()
 
     def _cs_update_radical_panel(self):
@@ -3608,7 +3684,11 @@ class ResultsViewer(QMainWindow):
 
     # ── Mouse interaction on timeseries ──────────────────────────────────
 
-    # ── Playback / animation ─────────────────────────────────────────────
+    # ── Video export ────────────────────────────────────────────────────
+    # Live playback has been removed (it crashed the GUI on Windows and was
+    # slow due to the cost of redrawing four matplotlib figures per frame).
+    # Instead: render the animation off-screen to an MP4/GIF file and offer
+    # to open it in the system default player.
 
     @staticmethod
     def _cs_parse_duration(s):
@@ -3621,48 +3701,14 @@ class ResultsViewer(QMainWindow):
         try:
             return float(s)
         except ValueError:
-            return 30.0
-
-    def _cs_toggle_play(self):
-        """Start or pause live-playback of the snapshot cursor."""
-        if self._cs_timer.isActive():
-            self._cs_timer.stop()
-            self._cs_play_btn.setText("▶ Play")
-            self._cs_play_btn.setChecked(False)
-            return
-
-        # Animation makes sense only in Snapshot mode
-        if self._cs_mode_combo.currentIndex() != 0:
-            self._cs_mode_combo.setCurrentIndex(0)
-
-        t = self.df.index.values.astype(float)
-        # If cursor is at (or past) the end, restart from the beginning
-        if self._cs_time_point >= t[-1] - 1e-6:
-            self._cs_time_point = float(t[0])
-
-        duration_s = self._cs_parse_duration(self._cs_duration_combo.currentText())
-        fps = self._cs_anim_fps
-        total_hours = float(t[-1]) - self._cs_time_point
-        self._cs_step_hours = total_hours / max(duration_s * fps, 1.0)
-        self._cs_timer.start(int(1000 / fps))
-        self._cs_play_btn.setText("⏸ Pause")
-        self._cs_play_btn.setChecked(True)
-
-    def _cs_on_play_tick(self):
-        """One animation frame — advance cursor and redraw all panels."""
-        t = self.df.index.values.astype(float)
-        self._cs_time_point += self._cs_step_hours
-        if self._cs_time_point >= t[-1]:
-            self._cs_time_point = float(t[-1])
-            self._cs_timer.stop()
-            self._cs_play_btn.setText("▶ Play")
-            self._cs_play_btn.setChecked(False)
-        self._cs_redraw_all()
+            return 15.0
 
     def _cs_save_video(self):
-        """Export the animation to MP4 or GIF by grabbing the tab widget
-        frame-by-frame. Requires `imageio`; MP4 further requires ffmpeg
-        available on PATH (`imageio-ffmpeg` plugin handles this)."""
+        """Render the full experiment evolution to an MP4 (or GIF) file.
+        The tab widget is grabbed off-screen frame by frame; the GUI itself
+        does not animate. A QProgressDialog provides feedback and allows
+        cancellation. After rendering, the user is offered to open the file
+        in the system default player."""
         try:
             import imageio.v2 as imageio
         except ImportError:
@@ -3671,13 +3717,7 @@ class ResultsViewer(QMainWindow):
                 "Install with:  pip install imageio imageio-ffmpeg")
             return
 
-        # Pause any live playback
-        if self._cs_timer.isActive():
-            self._cs_timer.stop()
-            self._cs_play_btn.setText("▶ Play")
-            self._cs_play_btn.setChecked(False)
-
-        # Ask for output file
+        # Output file
         start_dir = (os.path.dirname(self.csv_path) if self.csv_path else os.getcwd())
         default_name = "chemspace_animation.mp4"
         out_path, _ = QFileDialog.getSaveFileName(
@@ -3687,25 +3727,34 @@ class ResultsViewer(QMainWindow):
         if not out_path:
             return
 
-        # Build frame timeline from duration setting
+        # Build frame timeline — user-chosen wall-clock duration & fps
         duration_s = self._cs_parse_duration(self._cs_duration_combo.currentText())
-        fps = self._cs_anim_fps
+        try:
+            fps = int(self._cs_fps_combo.currentText())
+        except Exception:
+            fps = self._cs_video_fps
         n_frames = max(int(duration_s * fps), 2)
         t = self.df.index.values.astype(float)
         frame_times = np.linspace(float(t[0]), float(t[-1]), n_frames)
 
-        # Force snapshot mode
-        if self._cs_mode_combo.currentIndex() != 0:
+        # Remember state so we can restore after rendering
+        saved_mode = self._cs_mode_combo.currentIndex()
+        saved_tp   = self._cs_time_point
+        # Snapshot mode for rendering
+        if saved_mode != 0:
             self._cs_mode_combo.setCurrentIndex(0)
 
         # Choose writer
         is_gif = out_path.lower().endswith('.gif')
         try:
             if is_gif:
-                writer = imageio.get_writer(out_path, mode='I', duration=1.0 / fps, loop=0)
+                writer = imageio.get_writer(out_path, mode='I',
+                                            duration=1.0 / fps, loop=0)
             else:
-                writer = imageio.get_writer(out_path, fps=fps, codec='libx264',
-                                            quality=8, macro_block_size=1)
+                writer = imageio.get_writer(out_path, fps=fps,
+                                            codec='libx264', quality=8,
+                                            pixelformat='yuv420p',
+                                            macro_block_size=2)
         except Exception as e:
             QMessageBox.critical(self, "Video writer failed",
                 f"Could not open {out_path} for writing:\n{e}\n\n"
@@ -3713,24 +3762,73 @@ class ResultsViewer(QMainWindow):
                 "  pip install imageio-ffmpeg")
             return
 
-        # Progress feedback via window title; render frames
-        old_title = self.windowTitle()
+        from PyQt6.QtWidgets import QProgressDialog
+
+        # Bypass Qt's widget.grab() entirely — it was crashing on repeated calls
+        # (likely QImage buffer ownership + Python GC racing). Read pixel data
+        # straight out of each matplotlib canvas's Agg buffer and composite the
+        # four panels into one frame with numpy/PIL. No Qt image objects touched.
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            QMessageBox.warning(self, "Missing package",
+                "Saving video requires Pillow (installed with matplotlib).")
+            return
+
+        # Fixed output layout: columns 720 px wide, top row 540 px tall,
+        # bottom row 420 px tall → 1440 × 960 frame.
+        COL_W, ROW_H_TOP, ROW_H_BOT = 720, 540, 420
+
+        def _fig_rgb(fig):
+            """Return the figure's Agg buffer as a contiguous (H,W,3) uint8 array."""
+            fig.canvas.draw()
+            w, h = fig.canvas.get_width_height()
+            # buffer_rgba is a memoryview; wrap it and copy to own memory
+            buf = np.asarray(fig.canvas.buffer_rgba()).reshape(h, w, 4)
+            return np.ascontiguousarray(buf[:, :, :3])
+
+        def _resize_rgb(arr, w, h):
+            if arr.shape[0] == h and arr.shape[1] == w:
+                return arr
+            img = PILImage.fromarray(arr).resize((w, h), PILImage.BILINEAR)
+            return np.asarray(img, dtype=np.uint8)
+
+        def _composite_frame():
+            ts  = _resize_rgb(_fig_rgb(self._cs_ts_fig),  COL_W, ROW_H_TOP)
+            vbs = _resize_rgb(_fig_rgb(self._cs_vbs_fig), COL_W, ROW_H_TOP)
+            co  = _resize_rgb(_fig_rgb(self._cs_co_fig),  COL_W, ROW_H_BOT)
+            fam = _resize_rgb(_fig_rgb(self._cs_fam_fig), COL_W, ROW_H_BOT)
+            top = np.hstack([ts, vbs])
+            bot = np.hstack([co, fam])
+            return np.vstack([top, bot])
+
+        # Progress dialog
+        progress = QProgressDialog(f"Rendering {n_frames} frames…",
+                                   "Cancel", 0, n_frames, self)
+        progress.setWindowTitle("Saving video")
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(True)
+
+        rendered_ok = False
+        cancelled = False
+        frame_w = COL_W * 2
+        frame_h = ROW_H_TOP + ROW_H_BOT
         try:
             for i, tp in enumerate(frame_times):
+                if progress.wasCanceled():
+                    cancelled = True
+                    break
                 self._cs_time_point = float(tp)
                 self._cs_redraw_all()
+                arr = _composite_frame()
+                writer.append_data(arr)
+                progress.setValue(i + 1)
+                # Let the progress dialog paint + stay responsive to Cancel.
+                # Keep this OUTSIDE the critical buffer-access section above
+                # so nothing re-enters while Agg is reading pixels.
                 QApplication.processEvents()
-                # Grab the tab widget as a QImage → numpy array
-                pix = self._cs_tab_widget.grab()
-                img = pix.toImage().convertToFormat(
-                    __import__('PyQt6.QtGui', fromlist=['QImage']).QImage.Format.Format_RGB888)
-                w, h = img.width(), img.height()
-                ptr = img.bits()
-                ptr.setsize(img.sizeInBytes())
-                arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, img.bytesPerLine()))[:, :w*3].reshape((h, w, 3))
-                writer.append_data(arr.copy())
-                if i % max(fps, 1) == 0:
-                    self.setWindowTitle(f"{old_title}  —  rendering frame {i+1}/{n_frames}")
+            if not cancelled:
+                rendered_ok = True
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -3738,10 +3836,37 @@ class ResultsViewer(QMainWindow):
         finally:
             try: writer.close()
             except Exception: pass
-            self.setWindowTitle(old_title)
+            progress.close()
+            # Restore UI state
+            self._cs_mode_combo.setCurrentIndex(saved_mode)
+            self._cs_time_point = saved_tp
+            self._cs_redraw_all()
 
-        QMessageBox.information(self, "Animation saved",
-            f"Wrote {n_frames} frames at {fps} fps →\n{out_path}")
+        if cancelled:
+            # Clean up the incomplete file
+            try: os.remove(out_path)
+            except Exception: pass
+            return
+
+        if rendered_ok:
+            ans = QMessageBox.question(
+                self, "Animation saved",
+                f"Wrote {n_frames} frames at {fps} fps ({frame_w}×{frame_h}) to:\n\n"
+                f"{out_path}\n\nOpen it now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if ans == QMessageBox.StandardButton.Yes:
+                try:
+                    if sys.platform.startswith('win'):
+                        os.startfile(out_path)
+                    elif sys.platform == 'darwin':
+                        import subprocess; subprocess.Popen(['open', out_path])
+                    else:
+                        import subprocess; subprocess.Popen(['xdg-open', out_path])
+                except Exception as e:
+                    QMessageBox.warning(self, "Open failed",
+                        f"Could not open the file:\n{e}")
 
     # ── Mouse interaction on timeseries ──────────────────────────────────
 
