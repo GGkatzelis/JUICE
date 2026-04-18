@@ -41,9 +41,10 @@ Decoupled three-stage workflow:
 
 ## 4. Solver Configuration (current)
 
-- **Method:** `Radau` (switched from BDF — see Fix 6 below)
-- **Tolerances:** `rtol=1e-3`, `atol=1e4`, `max_step=60 s`
-- **Zero-clipping:** removed from inside `system_ode`; applied only at CSV export via `np.maximum(self.sol.y, 0.0)`
+- **Method:** scipy BDF with analytical sparse Jacobian (see Section 13 for CVODE attempt)
+- **Tolerances:** `rtol=1e-2`, `atol=1e4`, `max_step=60 s` (piecewise mode); solver auto-adapts in linear mode
+- **Interpolation mode:** selectable via `"interpolation"` key in JSON — `"linear"` (fast, default) or `"piecewise"` (FACSIMILE match). See Section 13.
+- **Zero-clipping:** applied only at CSV export via `np.maximum(self.sol.y, 0.0)`
 
 ## SAPHIR GUI (`saphir_gui.py`)
 
@@ -369,9 +370,74 @@ Always-on wall outgassing added to `continuous_sources`:
 
 1.  **Overlay measured k_OH** — Load actual SAPHIR CRM k_OH measurement file and overlay on Reactivity tab. Likely in the SAPHIR archive NC file (variable TBD). Check if archive has `kOH` or `OH_reactivity` variable for 09.07.2024.
 2.  **Fix FACSIMILE comparison references** — case1/case2 EASY files need correct column names (`qVCP2`→`Injection_Ethanol`, `QNO`→`Injection_NO`) or a corrected ENZ file with those names. Until fixed, FACSIMILE comparison is not valid beyond t < 5.5h. Confirm with Franz whether a corrected FACSIMILE run can be produced.
-3.  **Simple CONST scenario** — [scenario_config - Simple Scenario 1.json](MCM_tested_scenarios/ethanol_scenario/scenario_config%20-%20Simple%20Scenario%201.json) — awaiting colleague confirmation on whether species should be held constant or evolved freely.
-4.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes.
-2.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
-3.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
-4.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
-5.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.
+3.  **Simple CONST scenario** — awaiting colleague confirmation on whether species should be held constant or evolved freely.
+4.  **Test excluded/custom reactions end-to-end** — user to verify add/remove reactions produce correct ODE changes; report results.
+5.  **RHS compilation** — profiling (April 2026) shows 98% of runtime is in the Python RHS function (ctx_build 35%, var_assignments 28%, stoich loop 29%). Compile via Numba JIT or C code generation for 10-50x speedup if FACSIMILE-like performance is required.
+6.  **Batch Processing Pipeline:** CLI or GUI "Batch Mode" to run multiple JSON files sequentially.
+7.  **Data Export & Reporting:** PDF/PNG export buttons in the interactive Matplotlib viewer.
+8.  **Deprecate `mechanism_solver.py`:** Its `calculate` function has been fully migrated into `scenario_runner.py`. Legacy stubs can be safely removed.
+
+## 13. Dual Interpolation Mode (added 2026-04-12)
+
+The `.enz` interpolation mode is now a user-selectable switch in both the GUI bottom bar and the scenario JSON (`"interpolation"` key). Two modes:
+
+### `"linear"` mode (default)
+Smooth linear interpolation for physical variables that evolve continuously between ENZ rows (T, J-rates, H2O, FLOW, SZ, NO/NO2/O3 measurements). Q-switches (valve positions) and HV (roof status) remain piecewise-constant because they are true step functions.
+
+- **Pros:** Physically more realistic for the chamber between samples, very fast (few BDF restarts)
+- **Speed:** ethanol ~18s, mcm_full ~8 min
+- **Caveats:** 4-6% radical deviations vs FACSIMILE (because FACSIMILE uses piecewise-constant)
+
+### `"piecewise"` mode
+All ENZ columns treated as zero-order hold (step functions), matching FACSIMILE/EASY convention exactly. Solver must restart BDF polynomial at every ENZ row boundary (~4500 for ethanol, ~5600 for mcm_full).
+
+- **Pros:** Matches FACSIMILE reference output closely
+- **Speed:** ethanol ~3m 30s, mcm_full ~73 min
+- **Accuracy vs FACSIMILE:** ethanol 11/38 within ±2%, mcm_full 111/404 within ±2%
+
+### Implementation
+- `load_saphir_environment.py` accepts `interpolation='linear'|'piecewise'` parameter. Q-switches/HV always piecewise regardless.
+- `scenario_runner.py` reads `cfg['interpolation']` (default `'linear'`). In linear mode, boundary detection only scans Q-prefixed and HV columns (skipping the smooth ones that would otherwise add thousands of spurious restarts).
+- `saphir_gui.py` bottom-bar `QComboBox` writes `"interpolation"` to JSON and restores it on load.
+
+### CVODE migration attempt (abandoned)
+Between April 2026 we attempted replacing scipy BDF with Assimulo/SUNDIALS CVode (branch `cvode-migration`). Gave only 2x speedup on ethanol (3m33s) and segfaulted on full MCM due to SuperLU memory limits. Profiling revealed the real bottleneck is the Python RHS function, not the solver — so CVODE provided only the solver-side speedup while the dominant ~35,000 Python→C callback cost remained. Branch stashed, not merged. See memory entry `project_cvode_migration.md`.
+
+## 14. Chemical Space Tab (added 2026-04-12)
+
+New interactive tab in `results_viewer.py` (`_build_chemspace_tab`). Visualises the chemical composition of the simulation at a chosen time point or time window.
+
+### Layout
+2×2 grid driven by a shared time selector:
+
+- **Top-left — Injection timeseries:** Auto-detects species listed in `burst_injections`. Gold shading for roof-open periods, red dotted lines at injection start times, steel-blue draggable overlay for time selection. Drag the left edge, right edge, or pan the middle.
+- **Top-right — VBS plot:** LogC* (x) vs OSc (y). Circles coloured by CHO family, sized by average concentration over the selected window. LVOC/SVOC/IVOC/VOC background shading. Hover tooltip shows species name, atom counts, LogC*, OSc, concentration.
+- **Bottom-left — Composition:** Total concentration stacked by CHO family, plotted over nC (carbon number) on the left and nO (oxygen number) on the right.
+- **Bottom-right — Family breakdown:** Pie chart (concentration fraction by CHO family) + dual-axis bar chart (# species and Σ concentration).
+
+### Controls
+- **Mode:** Snapshot (single time) vs Window (time range, default).
+- **Units:** ppb ↔ µg/m³ toggle. µg/m³ computed via `ppb · M · mass / 24.45e9` using molar volume 24.45 L/mol at 298 K, 1 atm.
+- **VBS size scale:** linear or log10.
+- **Live radical averages:** OH, HO2, O3, RO2, NO, NO2 averaged over the current window, shown in the control row.
+
+### Scientific formulas
+
+**LogC*** — Li et al., *ACP* **16**, 3327 (2016), doi:10.5194/acp-16-3327-2016. Coefficient set selected by heteroatom composition (CH, CHO, CHN, CHON, CHOS, CHONS). Identical implementation to `nnmf/parsing.py::calc_vol` in the sister NNMF project.
+
+**OSc** — Kroll et al., *Nat. Chem.* **3**, 133 (2011), OSc = 2·nO/nC − nH/nC. Matches `nnmf/parsing.py::calc_osc`.
+
+**Volatility classes** (Donahue et al., *ACP* 2011):
+- LVOC: log(C*) ∈ [−3.5, −0.5]
+- SVOC: [−0.5, 2.5]
+- IVOC: [2.5, 6.5]
+- VOC: > 6.5
+
+### Species selection rules
+- Only organic species with `nC ≥ 1` (inorganics excluded from VBS/composition).
+- Radicals excluded: any species with `is_peroxy` flag, uppercase name `OH`/`HO2`, or ending in `O2`. Radicals shown as live averages in the control row instead.
+- Concentration threshold: > 1e-6 in the selected unit.
+
+### Benchmark scripts
+- `compare_vs_facsimile.py` — parse FACSIMILE `.cs` and compare against a `simulation_results*.csv`.
+- `run_benchmark.py` — run all test scenarios (scene_01, scene_02, ethanol, mcm_full) in both interpolation modes and save `simulation_results_linear.csv` / `simulation_results_piecewise.csv` in each scenario directory.
