@@ -992,7 +992,10 @@ class ResultsViewer(QMainWindow):
         # Tab 3 – Carbon Budget
         self._build_carbon_tab()
 
-        # Tab 4 – Comparison (last)
+        # Tab 4 – Chemical Space (VBS + molecular distribution)
+        self._build_chemspace_tab()
+
+        # Tab 5 – Comparison (last)
         self._build_comparison_tab()
 
         splitter.addWidget(right_panel)
@@ -2968,6 +2971,654 @@ class ResultsViewer(QMainWindow):
 
         self._nb_fig.tight_layout()
         self._nb_canvas.draw()
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Chemical Space tab (VBS + molecular distribution)
+    # ═════════════════════════════════════════════════════════════════════════
+    # Formulas:
+    #   • Volatility  LogC*  — Li et al., ACP 16, 3327 (2016), doi:10.5194/acp-16-3327-2016
+    #                          "Molecular corridors and parameterizations of volatility..."
+    #   • OSc         — Kroll et al., Nat. Chem. 3, 133 (2011), OSc ≈ 2·nO/nC − nH/nC
+    #   • Only organic species (nC ≥ 1); radicals (RO2, RO, OH, HO2) excluded by default
+    #     because (a) they are not realistic condensable vapours and (b) their
+    #     lifetimes are too short to define a meaningful mixing ratio.  Average radical
+    #     concentrations (OH, HO2, O3, RO2) are shown in a side panel instead.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _cs_calc_logc_star(self, nC, nO, nN, nS=0):
+        """Li et al. 2016 LogC* parameterization (µg/m³ at 300 K).
+        Choses coefficient set based on which heteroatoms are present."""
+        if nC <= 0:
+            return np.nan
+        # CH only
+        if nO == 0 and nN == 0 and nS == 0:
+            n0C, bC, bO, bCO, bN, bS = 23.80, 0.4861, 0.0, 0.0, 0.0, 0.0
+        elif nO > 0 and nN == 0 and nS == 0:      # CHO
+            n0C, bC, bO, bCO, bN, bS = 22.66, 0.4481, 1.656, -0.7790, 0.0, 0.0
+        elif nN > 0 and nO == 0 and nS == 0:      # CHN
+            n0C, bC, bO, bCO, bN, bS = 24.59, 0.4066, 0.0, 0.0, 0.9619, 0.0
+        elif nO > 0 and nN > 0 and nS == 0:       # CHON
+            n0C, bC, bO, bCO, bN, bS = 24.13, 0.3667, 0.7732, -0.07790, 1.114, 0.0
+        elif nO > 0 and nS > 0 and nN == 0:       # CHOS
+            n0C, bC, bO, bCO, bN, bS = 24.06, 0.3637, 1.327, -0.3988, 0.0, 0.7579
+        elif nO > 0 and nN > 0 and nS > 0:        # CHONS
+            n0C, bC, bO, bCO, bN, bS = 28.50, 0.3848, 1.011, 0.2921, 1.053, 1.316
+        else:
+            return np.nan
+        return (n0C - nC)*bC - nO*bO - 2.0*(nC*nO/max(nC+nO, 1))*bCO - nN*bN - nS*bS
+
+    def _cs_calc_osc(self, nC, nH, nO):
+        if nC <= 0:
+            return np.nan
+        return (2.0*nO - nH) / nC
+
+    def _cs_classify(self, nC, nH, nO, nN):
+        """CH / CHO / CHON1 / CHON2 / CHON3+ family classification."""
+        if nC == 0:
+            return "Other"
+        if nO == 0 and nN == 0:
+            return "CH"
+        if nO > 0 and nN == 0:
+            return "CHO"
+        if nN == 1:
+            return "CHON1"
+        if nN == 2:
+            return "CHON2"
+        if nN >= 3:
+            return "CHON3+"
+        return "Other"
+
+    _CS_CLASS_ORDER = ["CH", "CHO", "CHON1", "CHON2", "CHON3+", "Other"]
+    _CS_CLASS_COLORS = {
+        "CH":     "#1f77b4",
+        "CHO":    "#2ca02c",
+        "CHON1":  "#ff7f0e",
+        "CHON2":  "#d62728",
+        "CHON3+": "#9467bd",
+        "Other":  "#7f7f7f",
+    }
+
+    def _cs_build_species_table(self):
+        """Build a table of organic species with their atom counts and derived properties.
+        Returns a pandas DataFrame with columns: name, nC, nH, nO, nN, mass, class, logc, osc, is_radical.
+        Cached on self._cs_species_table after first call."""
+        if hasattr(self, '_cs_species_table'):
+            return self._cs_species_table
+        rows = []
+        for col in self.df.columns:
+            if col.startswith('SAPHIR_') or col in ('M', 'Time_s'):
+                continue
+            entry = MCM_DB.get(col.upper())
+            if entry is None or entry.n_C < 1:
+                continue
+            is_radical = bool(entry.is_peroxy) or col.upper().endswith('O') and col.upper() not in {'HCHO', 'CH3CHO'}
+            # Simpler radical rule: ends with O2 / has is_peroxy flag / is OH/HO2
+            is_radical = bool(entry.is_peroxy) or col.upper() in {'OH', 'HO2'} or col.upper().endswith('O2')
+            rows.append({
+                'name':  col,
+                'nC':    entry.n_C, 'nH': entry.n_H, 'nO': entry.n_O, 'nN': entry.n_N,
+                'mass':  entry.mass,
+                'class': self._cs_classify(entry.n_C, entry.n_H, entry.n_O, entry.n_N),
+                'logc':  self._cs_calc_logc_star(entry.n_C, entry.n_O, entry.n_N),
+                'osc':   self._cs_calc_osc(entry.n_C, entry.n_H, entry.n_O),
+                'is_radical': is_radical,
+            })
+        self._cs_species_table = pd.DataFrame(rows)
+        return self._cs_species_table
+
+    def _cs_current_window(self):
+        """Return (t_lo, t_hi) in hours since midnight for the current time selector."""
+        if not hasattr(self, '_cs_time_range'):
+            t = self.df.index.values.astype(float)
+            return (float(t[0]), float(t[-1]))
+        return self._cs_time_range
+
+    def _cs_avg_conc_ppb(self, species):
+        """Average concentration (ppb) of a species over the current time window."""
+        if species not in self.df.columns or 'M' not in self.df.columns:
+            return np.nan
+        t_lo, t_hi = self._cs_current_window()
+        t = self.df.index.values.astype(float)
+        mask = (t >= t_lo) & (t <= t_hi)
+        if mask.sum() == 0:
+            return np.nan
+        vals = self.df[species].values[mask]   # molec/cm³
+        M    = self.df['M'].values[mask]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ppb = np.where(M > 0, vals / M * 1e9, np.nan)
+        return float(np.nanmean(ppb))
+
+    def _cs_avg_conc_molec(self, species):
+        """Average concentration (molec/cm³) of a species over the current time window."""
+        if species not in self.df.columns:
+            return np.nan
+        t_lo, t_hi = self._cs_current_window()
+        t = self.df.index.values.astype(float)
+        mask = (t >= t_lo) & (t <= t_hi)
+        if mask.sum() == 0:
+            return np.nan
+        return float(np.nanmean(self.df[species].values[mask]))
+
+    def _build_chemspace_tab(self):
+        """Chemical Space tab: injection timeseries (top-left), VBS (top-right),
+        C/O distribution (bottom-left), CHO family groups (bottom-right)."""
+        outer = QWidget()
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(2, 2, 2, 2)
+        outer_layout.setSpacing(2)
+
+        # ── Controls row ──────────────────────────────────────────────────
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+        ctrl.addWidget(QLabel("Mode:"))
+        self._cs_mode_combo = QComboBox()
+        self._cs_mode_combo.addItems(["Snapshot (single time)", "Window (time range)"])
+        self._cs_mode_combo.setCurrentIndex(1)
+        self._cs_mode_combo.setToolTip(
+            "Snapshot: all plots reflect chamber state at one instant.\n"
+            "Window: all plots show averages over a draggable time range."
+        )
+        ctrl.addWidget(self._cs_mode_combo)
+
+        ctrl.addWidget(QLabel("Units:"))
+        self._cs_units_combo = QComboBox()
+        self._cs_units_combo.addItems(["ppb", "µg/m³"])
+        ctrl.addWidget(self._cs_units_combo)
+
+        ctrl.addWidget(QLabel("VBS size scale:"))
+        self._cs_size_combo = QComboBox()
+        self._cs_size_combo.addItems(["linear", "log10"])
+        self._cs_size_combo.setCurrentIndex(1)
+        ctrl.addWidget(self._cs_size_combo)
+
+        self._cs_radical_lbl = QLabel("")
+        self._cs_radical_lbl.setStyleSheet("color: #333; font-family: monospace; font-size: 10px;")
+        ctrl.addWidget(self._cs_radical_lbl, 1)
+        outer_layout.addLayout(ctrl, 0)
+
+        # ── 2×2 grid of plots ─────────────────────────────────────────────
+        grid_widget = QWidget()
+        from PyQt6.QtWidgets import QGridLayout
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(2)
+
+        # Top-left: injection timeseries with slider
+        self._cs_ts_fig = Figure(figsize=(8, 3))
+        self._cs_ts_canvas = FigureCanvas(self._cs_ts_fig)
+        grid.addWidget(self._cs_ts_canvas, 0, 0)
+
+        # Top-right: VBS
+        self._cs_vbs_fig = Figure(figsize=(8, 6))
+        self._cs_vbs_canvas = FigureCanvas(self._cs_vbs_fig)
+        grid.addWidget(self._cs_vbs_canvas, 0, 1)
+
+        # Bottom-left: C/O distribution
+        self._cs_co_fig = Figure(figsize=(8, 4))
+        self._cs_co_canvas = FigureCanvas(self._cs_co_fig)
+        grid.addWidget(self._cs_co_canvas, 1, 0)
+
+        # Bottom-right: family pie
+        self._cs_fam_fig = Figure(figsize=(8, 4))
+        self._cs_fam_canvas = FigureCanvas(self._cs_fam_fig)
+        grid.addWidget(self._cs_fam_canvas, 1, 1)
+
+        # Stretch: top-left is 1/4 of space (small), top-right is dominant
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(0, 1)
+        grid.setRowStretch(1, 1)
+        outer_layout.addWidget(grid_widget, 1)
+
+        # ── Initial draw ──────────────────────────────────────────────────
+        # Default time window: full experiment range
+        t = self.df.index.values.astype(float)
+        self._cs_time_range = (float(t[0]), float(t[-1]))
+        self._cs_time_point = float(t[len(t)//2])
+
+        # Interactive state
+        self._cs_drag = None   # 'left', 'right', 'point', 'pan'
+        self._cs_pan_anchor = None
+        self._cs_vbs_annot = None
+
+        # Wire up controls
+        self._cs_mode_combo.currentIndexChanged.connect(self._cs_redraw_all)
+        self._cs_units_combo.currentIndexChanged.connect(self._cs_redraw_all)
+        self._cs_size_combo.currentIndexChanged.connect(self._cs_redraw_all)
+
+        # Mouse interactions on the timeseries panel
+        self._cs_ts_canvas.mpl_connect('button_press_event',   self._cs_on_press)
+        self._cs_ts_canvas.mpl_connect('motion_notify_event',  self._cs_on_motion)
+        self._cs_ts_canvas.mpl_connect('button_release_event', self._cs_on_release)
+
+        # Hover tooltip on VBS
+        self._cs_vbs_canvas.mpl_connect('motion_notify_event', self._cs_on_vbs_hover)
+
+        self.right_tabs.addTab(outer, "Chemical Space")
+        self._cs_redraw_all()
+
+    # ── Drawing routines ──────────────────────────────────────────────────
+
+    def _cs_draw_injection_ts(self):
+        """Top-left panel: injected species timeseries + roof-open shading + time cursor/range."""
+        self._cs_ts_fig.clear()
+        ax = self._cs_ts_fig.add_subplot(111)
+
+        cfg = self.budget_engine.cfg if (self.budget_engine and self.budget_engine.cfg) else {}
+        bursts = cfg.get('burst_injections', [])
+        # Collect injected target species present in df
+        inj_species = []
+        for b in bursts:
+            tgt = (b.get('target') or '').upper()
+            if tgt and tgt in self.df.columns and tgt not in inj_species:
+                inj_species.append(tgt)
+        # Limit to the top few by peak concentration to avoid clutter
+        if len(inj_species) > 6:
+            peaks = [(sp, np.nanmax(self.df[sp].values / self.df['M'].values * 1e9)) for sp in inj_species]
+            peaks.sort(key=lambda x: -x[1])
+            inj_species = [sp for sp, _ in peaks[:6]]
+
+        t = self.df.index.values.astype(float)
+
+        # Roof-open shading (gold)
+        hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
+        if hv_col is not None:
+            hv = self.df[hv_col].values.astype(float)
+            in_open, start = False, None
+            first_span = True
+            for ti, vi in zip(t, hv):
+                if vi > 0.5 and not in_open:
+                    in_open, start = True, ti
+                elif vi <= 0.5 and in_open:
+                    ax.axvspan(start, ti, color='gold', alpha=0.22, zorder=0,
+                               label='Roof open' if first_span else None)
+                    first_span = False
+                    in_open = False
+            if in_open:
+                ax.axvspan(start, t[-1], color='gold', alpha=0.22, zorder=0,
+                           label='Roof open' if first_span else None)
+
+        # Injection start markers
+        first_inj = True
+        for b in bursts:
+            start_utc = b.get('start_utc')
+            if not start_utc:
+                continue
+            try:
+                ts = pd.to_datetime(start_utc, dayfirst=True)
+                t_inj = (ts.timestamp() - self._midnight_unix) / 3600.0
+                ax.axvline(t_inj, ls=':', color='firebrick', alpha=0.8, lw=1.2,
+                           label='Injection' if first_inj else None, zorder=1)
+                first_inj = False
+            except Exception:
+                pass
+
+        # Plot the injected species
+        if inj_species:
+            if 'M' in self.df.columns:
+                M = self.df['M'].values
+                for sp in inj_species:
+                    ppb = self.df[sp].values / M * 1e9
+                    ax.plot(t, ppb, lw=1.3, label=sp, zorder=2)
+            ax.set_ylabel("ppb", fontsize=9)
+        else:
+            ax.text(0.5, 0.5, "No burst_injections in config.\n"
+                    "Drag on the x-axis to select a time window.",
+                    transform=ax.transAxes, ha='center', va='center', fontsize=9, color='grey')
+
+        # Time selector overlay (current window or point)
+        t_lo, t_hi = self._cs_time_range
+        mode_window = self._cs_mode_combo.currentIndex() == 1
+        if mode_window:
+            ax.axvspan(t_lo, t_hi, color='steelblue', alpha=0.18, zorder=3,
+                       label='Selected window')
+            ax.axvline(t_lo, color='steelblue', lw=1.8, zorder=4)
+            ax.axvline(t_hi, color='steelblue', lw=1.8, zorder=4)
+        else:
+            ax.axvline(self._cs_time_point, color='steelblue', lw=2.0, zorder=4,
+                       label='Selected time')
+
+        ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+        ax.set_xlabel("Time of day (UTC)", fontsize=9)
+        ax.set_title("Injections & roof status   (drag to select time)", fontsize=10, fontweight='bold')
+        ax.grid(True, ls='--', alpha=0.35)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc='upper right', fontsize=7, framealpha=0.85).set_draggable(True)
+        self._cs_ts_fig.tight_layout(pad=0.6)
+        self._cs_ts_canvas.draw()
+
+    def _cs_species_with_conc(self):
+        """Return the species table augmented with average concentration (ppb and µg/m³)
+        over the current time window."""
+        spc = self._cs_build_species_table()
+        if spc.empty:
+            return spc
+        # Only non-radical organics for the VBS/distribution panels
+        spc = spc[~spc['is_radical']].copy()
+        conc_ppb = np.array([self._cs_avg_conc_ppb(n) for n in spc['name']])
+        conc_ug  = conc_ppb * spc['mass'].values / 24.45   # ppb → µg/m³ at 1 atm, 298 K
+        spc['conc_ppb']  = conc_ppb
+        spc['conc_ugm3'] = conc_ug
+        # Drop species with NaN or essentially zero concentration
+        unit = 'conc_ppb' if self._cs_units_combo.currentIndex() == 0 else 'conc_ugm3'
+        spc = spc[np.isfinite(spc[unit]) & (spc[unit] > 1e-6)].copy()
+        spc['unit_val'] = spc[unit]
+        return spc
+
+    def _cs_draw_vbs(self):
+        """Top-right panel: LogC* vs OSc, circles sized/coloured by concentration."""
+        self._cs_vbs_fig.clear()
+        ax = self._cs_vbs_fig.add_subplot(111)
+
+        spc = self._cs_species_with_conc()
+        if spc.empty or not np.any(np.isfinite(spc['logc'])):
+            ax.text(0.5, 0.5, "No organic species with valid LogC* in this time window.",
+                    ha='center', va='center', transform=ax.transAxes, color='grey')
+            ax.set_axis_off()
+            self._cs_vbs_canvas.draw()
+            return
+
+        # Volatility class background shading
+        for (lo, hi), color in [
+            ((-3.5, -0.51), 'dimgrey'),
+            ((-0.5,  2.49), 'darkgrey'),
+            (( 2.5,  6.49), 'lightgrey'),
+        ]:
+            ax.axvspan(lo, hi, color=color, alpha=0.18, zorder=0)
+        for x, label in [(-2, 'LVOC'), (1, 'SVOC'), (4.5, 'IVOC'), (8.5, 'VOC')]:
+            ax.text(x, 2.25, label, ha='center', va='bottom', fontsize=9, color='#444')
+
+        # Size scaling
+        vals = spc['unit_val'].values
+        if self._cs_size_combo.currentText() == 'log10':
+            s_raw = np.log10(np.maximum(vals, 1e-6))
+            s_lo, s_hi = np.nanmin(s_raw), np.nanmax(s_raw)
+            s_norm = (s_raw - s_lo) / max(s_hi - s_lo, 1e-9)
+        else:
+            s_hi = np.nanmax(vals)
+            s_norm = vals / max(s_hi, 1e-9)
+        sizes = 30 + 300 * s_norm
+
+        # Color by class
+        colors = [self._CS_CLASS_COLORS.get(c, '#7f7f7f') for c in spc['class']]
+        sc = ax.scatter(spc['logc'], spc['osc'], s=sizes, c=colors,
+                        alpha=0.55, edgecolors='k', linewidths=0.4, zorder=2)
+        self._cs_vbs_scatter = sc
+        self._cs_vbs_species = spc.reset_index(drop=True)
+
+        ax.set_xlim(-4, 11)
+        ax.set_ylim(-2.5, 2.5)
+        ax.set_xticks(range(-3, 12))
+        ax.set_xticklabels([str(x) if x % 2 == 0 else '' for x in range(-3, 12)])
+        ax.set_xlabel(r"Volatility  $\log_{10}(C^*)$  [µg m$^{-3}$]", fontsize=9)
+        ax.set_ylabel(r"Carbon Oxidation State  $\overline{\mathrm{OS}}_\mathrm{C}$", fontsize=9)
+        unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+        ax.set_title(f"Volatility basis set  (N={len(spc)} species, sized by {unit_lbl})",
+                     fontsize=10, fontweight='bold')
+
+        # Legend for classes
+        from matplotlib.lines import Line2D
+        legend_handles = [Line2D([0],[0], marker='o', color='w',
+                                 markerfacecolor=self._CS_CLASS_COLORS[c],
+                                 markersize=8, label=c)
+                          for c in self._CS_CLASS_ORDER if c in spc['class'].values]
+        if legend_handles:
+            ax.legend(handles=legend_handles, loc='lower right', fontsize=8,
+                      framealpha=0.85).set_draggable(True)
+
+        ax.grid(True, ls='--', alpha=0.3)
+        ax.text(0.01, -0.14, "Li et al., ACP 16, 3327 (2016) · Kroll et al., Nat. Chem. 3, 133 (2011)",
+                transform=ax.transAxes, fontsize=6, color='#666', style='italic')
+
+        self._cs_vbs_fig.tight_layout(pad=0.6)
+        self._cs_vbs_canvas.draw()
+
+    def _cs_draw_c_o_distribution(self):
+        """Bottom-left panel: species count / concentration by nC and nO (grouped bars)."""
+        self._cs_co_fig.clear()
+        gs = self._cs_co_fig.add_gridspec(1, 2, wspace=0.3)
+        ax_c = self._cs_co_fig.add_subplot(gs[0])
+        ax_o = self._cs_co_fig.add_subplot(gs[1])
+
+        spc = self._cs_species_with_conc()
+        if spc.empty:
+            for ax in (ax_c, ax_o):
+                ax.text(0.5, 0.5, "No data in this time window.", ha='center', va='center',
+                        transform=ax.transAxes, color='grey')
+                ax.set_axis_off()
+            self._cs_co_canvas.draw()
+            return
+
+        unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+
+        # Stacked-by-class bars over carbon number
+        def _stacked_bar(ax, atom_col, xlabel):
+            grp = (spc.groupby([atom_col, 'class'])['unit_val'].sum()
+                      .unstack(fill_value=0))
+            x = grp.index.values
+            bottoms = np.zeros(len(x))
+            for cls in self._CS_CLASS_ORDER:
+                if cls not in grp.columns:
+                    continue
+                vals = grp[cls].values
+                ax.bar(x, vals, bottom=bottoms, color=self._CS_CLASS_COLORS[cls],
+                       edgecolor='k', linewidth=0.3, label=cls)
+                bottoms = bottoms + vals
+            ax.set_xlabel(xlabel, fontsize=9)
+            ax.set_ylabel(f"Total conc. ({unit_lbl})", fontsize=9)
+            ax.grid(True, axis='y', ls='--', alpha=0.35)
+            ax.set_xticks(x)
+
+        _stacked_bar(ax_c, 'nC', "Number of carbon atoms (nC)")
+        _stacked_bar(ax_o, 'nO', "Number of oxygen atoms (nO)")
+
+        # Shared legend
+        handles, labels = ax_c.get_legend_handles_labels()
+        if handles:
+            ax_c.legend(fontsize=7, loc='upper right', framealpha=0.85).set_draggable(True)
+
+        self._cs_co_fig.suptitle("Composition by atom count", fontsize=10, fontweight='bold', y=0.99)
+        self._cs_co_fig.tight_layout(pad=0.6)
+        self._cs_co_canvas.draw()
+
+    def _cs_draw_family_pie(self):
+        """Bottom-right panel: pie/bar of compound families (CH, CHO, CHON1/2/3+)."""
+        self._cs_fam_fig.clear()
+        gs = self._cs_fam_fig.add_gridspec(1, 2, wspace=0.25,
+                                            width_ratios=[1.1, 1.4])
+        ax_pie = self._cs_fam_fig.add_subplot(gs[0])
+        ax_bar = self._cs_fam_fig.add_subplot(gs[1])
+
+        spc = self._cs_species_with_conc()
+        if spc.empty:
+            for ax in (ax_pie, ax_bar):
+                ax.text(0.5, 0.5, "No data in this time window.", ha='center', va='center',
+                        transform=ax.transAxes, color='grey')
+                ax.set_axis_off()
+            self._cs_fam_canvas.draw()
+            return
+
+        unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+
+        # Totals per class (use selected unit)
+        totals = spc.groupby('class')['unit_val'].sum()
+        totals = totals.reindex([c for c in self._CS_CLASS_ORDER if c in totals.index])
+        colors = [self._CS_CLASS_COLORS[c] for c in totals.index]
+
+        # Pie: fraction by concentration
+        if totals.sum() > 0:
+            ax_pie.pie(totals.values, labels=totals.index, autopct='%1.0f%%',
+                       colors=colors, startangle=90,
+                       wedgeprops={'edgecolor': 'k', 'linewidth': 0.4})
+            ax_pie.set_title(f"Concentration fraction\n({unit_lbl})", fontsize=9)
+
+        # Bar: count of species + concentration side-by-side
+        counts = spc['class'].value_counts().reindex(
+            [c for c in self._CS_CLASS_ORDER if c in spc['class'].values], fill_value=0)
+        x = np.arange(len(counts))
+        w = 0.4
+        ax_bar.bar(x - w/2, counts.values, width=w, color=colors,
+                   edgecolor='k', linewidth=0.3, label='# species')
+        ax_bar2 = ax_bar.twinx()
+        ax_bar2.bar(x + w/2, totals.reindex(counts.index, fill_value=0).values,
+                    width=w, color=colors, edgecolor='k', linewidth=0.3,
+                    alpha=0.55, label=f'Σ {unit_lbl}')
+        ax_bar.set_xticks(x)
+        ax_bar.set_xticklabels(counts.index, fontsize=8)
+        ax_bar.set_ylabel("# species", fontsize=9)
+        ax_bar2.set_ylabel(f"Σ conc. ({unit_lbl})", fontsize=9)
+        ax_bar.grid(True, axis='y', ls='--', alpha=0.35)
+
+        self._cs_fam_fig.suptitle("Compound families (CHO classification)",
+                                   fontsize=10, fontweight='bold', y=0.99)
+        self._cs_fam_fig.tight_layout(pad=0.6)
+        self._cs_fam_canvas.draw()
+
+    def _cs_update_radical_panel(self):
+        """Update the radical-averages label in the control row."""
+        lines = []
+        for sp, lbl, unit in [('OH',   'OH',   'molec/cm³'),
+                              ('HO2',  'HO2',  'molec/cm³'),
+                              ('O3',   'O3',   'ppb'),
+                              ('RO2',  'RO2',  'ppb'),
+                              ('NO',   'NO',   'ppb'),
+                              ('NO2',  'NO2',  'ppb')]:
+            if sp not in self.df.columns:
+                continue
+            if unit == 'molec/cm³':
+                v = self._cs_avg_conc_molec(sp)
+                if np.isfinite(v):
+                    lines.append(f"{lbl}={v:.2e} {unit}")
+            else:
+                v = self._cs_avg_conc_ppb(sp)
+                if np.isfinite(v):
+                    lines.append(f"{lbl}={v:.3g} {unit}")
+        # Show time window context
+        t_lo, t_hi = self._cs_current_window()
+        mode = self._cs_mode_combo.currentText()
+        if mode.startswith("Snapshot"):
+            header = f"@ t={self._cs_time_point:.2f}h  |  "
+        else:
+            header = f"window {t_lo:.2f}–{t_hi:.2f}h  |  "
+        self._cs_radical_lbl.setText(header + "  ".join(lines))
+
+    def _cs_redraw_all(self):
+        """Redraw all four panels from scratch (call after any state change)."""
+        try:
+            self._cs_draw_injection_ts()
+            self._cs_draw_vbs()
+            self._cs_draw_c_o_distribution()
+            self._cs_draw_family_pie()
+            self._cs_update_radical_panel()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.warning(self, "Chemical Space", f"Redraw failed:\n{e}")
+
+    # ── Mouse interaction on timeseries ──────────────────────────────────
+
+    def _cs_on_press(self, event):
+        if event.inaxes is None or event.xdata is None:
+            return
+        x = float(event.xdata)
+        mode_window = self._cs_mode_combo.currentIndex() == 1
+        if mode_window:
+            t_lo, t_hi = self._cs_time_range
+            ax = event.inaxes
+            # Pixels-per-hour for click tolerance
+            width_px = ax.bbox.width
+            xlim = ax.get_xlim()
+            hr_per_px = (xlim[1] - xlim[0]) / max(width_px, 1)
+            tol = hr_per_px * 5  # 5 pixels
+            # Check which edge (or inside)
+            if abs(x - t_lo) < tol:
+                self._cs_drag = 'left'
+            elif abs(x - t_hi) < tol:
+                self._cs_drag = 'right'
+            elif t_lo < x < t_hi:
+                self._cs_drag = 'pan'
+                self._cs_pan_anchor = (x, t_lo, t_hi)
+            else:
+                # Click outside: move the nearest edge there
+                if abs(x - t_lo) < abs(x - t_hi):
+                    self._cs_time_range = (x, t_hi)
+                    self._cs_drag = 'left'
+                else:
+                    self._cs_time_range = (t_lo, x)
+                    self._cs_drag = 'right'
+                self._cs_redraw_all()
+        else:
+            self._cs_time_point = x
+            self._cs_drag = 'point'
+            self._cs_redraw_all()
+
+    def _cs_on_motion(self, event):
+        if self._cs_drag is None or event.inaxes is None or event.xdata is None:
+            return
+        x = float(event.xdata)
+        t_arr = self.df.index.values.astype(float)
+        t_min, t_max = float(t_arr[0]), float(t_arr[-1])
+        x = max(t_min, min(t_max, x))
+        t_lo, t_hi = self._cs_time_range
+        if self._cs_drag == 'left':
+            t_lo = min(x, t_hi - 0.01)
+            self._cs_time_range = (t_lo, t_hi)
+        elif self._cs_drag == 'right':
+            t_hi = max(x, t_lo + 0.01)
+            self._cs_time_range = (t_lo, t_hi)
+        elif self._cs_drag == 'pan':
+            anchor_x, anchor_lo, anchor_hi = self._cs_pan_anchor
+            dx = x - anchor_x
+            width = anchor_hi - anchor_lo
+            new_lo = max(t_min, anchor_lo + dx)
+            new_hi = new_lo + width
+            if new_hi > t_max:
+                new_hi = t_max
+                new_lo = new_hi - width
+            self._cs_time_range = (new_lo, new_hi)
+        elif self._cs_drag == 'point':
+            self._cs_time_point = x
+        # Light redraw during drag: just the timeseries overlay
+        self._cs_draw_injection_ts()
+
+    def _cs_on_release(self, event):
+        if self._cs_drag is None:
+            return
+        self._cs_drag = None
+        self._cs_pan_anchor = None
+        # Heavy redraw at end: all four panels now reflect the new window
+        self._cs_redraw_all()
+
+    def _cs_on_vbs_hover(self, event):
+        """Show species name tooltip when hovering over VBS points."""
+        if event.inaxes is None or not hasattr(self, '_cs_vbs_scatter'):
+            return
+        sc = self._cs_vbs_scatter
+        cont, info = sc.contains(event)
+        ax = sc.axes
+        if self._cs_vbs_annot is not None:
+            try:
+                self._cs_vbs_annot.remove()
+            except Exception:
+                pass
+            self._cs_vbs_annot = None
+        if cont and info.get('ind') is not None and len(info['ind']):
+            idx = int(info['ind'][0])
+            spc = self._cs_vbs_species
+            if idx < len(spc):
+                row = spc.iloc[idx]
+                unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+                txt = (f"{row['name']}\n"
+                       f"nC={int(row['nC'])} nH={int(row['nH'])} "
+                       f"nO={int(row['nO'])} nN={int(row['nN'])}\n"
+                       f"LogC*={row['logc']:.2f}  OSc={row['osc']:.2f}\n"
+                       f"conc={row['unit_val']:.3g} {unit_lbl}")
+                self._cs_vbs_annot = ax.annotate(
+                    txt, xy=(row['logc'], row['osc']),
+                    xytext=(10, 10), textcoords='offset points',
+                    fontsize=8, bbox=dict(boxstyle='round,pad=0.4',
+                                          fc='lightyellow', ec='k', alpha=0.9))
+        self._cs_vbs_canvas.draw_idle()
 
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
