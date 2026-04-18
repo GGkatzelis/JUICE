@@ -1,0 +1,86 @@
+{
+    "folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_03",
+    "chemistry_folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_03\\chemistry",
+    "chamber_vol": 276.0,
+    "mechanism_files": [
+        "anorg.mcm331.dark.rate",
+        "anorg.mcm331.dark.mech",
+        "anorg.mcm331.phot.rate",
+        "anorg.mcm331.phot.mech",
+        "j_clear_sky.incl",
+        "anorg.fac.dil.mech",
+        "anorg.fac.dil.rate",
+        "saphir.jmeasured_02.incl"
+    ],
+    "env_map": {
+        "TEMP": {
+            "type": "SAPHIR File",
+            "value": "t"
+        },
+        "HV": {
+            "type": "SAPHIR File",
+            "value": "hv"
+        },
+        "JNO2": {
+            "type": "Fixed Constant",
+            "value": "8.263960e-03"
+        },
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1000.0"
+        },
+        "O2": {
+            "type": "Fixed Constant",
+            "value": "1.0"
+        },
+        "N2": {
+            "type": "Fixed Constant",
+            "value": "1.0"
+        }
+    },
+    "j_scalings": {},
+    "artifacts": {
+        "active": true,
+        "scale": "1.0",
+        "hono_active": false,
+        "hono_eqn": "",
+        "hcho_active": false,
+        "hcho_eqn": "",
+        "no2_active": false,
+        "no2_eqn": "",
+        "y_active": false,
+        "y_eqn": "",
+        "wall_active": false,
+        "dark_hono": ""
+    },
+    "initials": {
+        "NO2": 10.0,
+        "CO": 2500.0
+    },
+    "continuous_sources": [],
+    "burst_injections": [],
+    "injection_reactions": [],
+    "idl_dilution_reactions": [],
+    "idl_parameters": {
+        "FLOW": "10",
+        "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
+        "DIL": "1.",
+        "SZA": "30",
+        "SZ": "30",
+        "H2O": "1e-2*M*0.02"
+    },
+    "analytical_dilution": true,
+    "chamber_source_reactions": [],
+    "custom_reactions": [],
+    "excluded_reactions": [],
+    "blocked_parameters": [],
+    "h2o_injection_impurities": [],
+    "_skipped": [
+        "FUNCTION definition 'WVC2RH': FACSIMILE-only macro, not needed in Python ODE",
+        "FUNCTION definition 'CONST': FACSIMILE-only macro, not needed in Python ODE",
+        "FUNCTION definition 'DENSITY': FACSIMILE-only macro, not needed in Python ODE",
+        "FILES[] directive: FACSIMILE file config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed"
+    ]
+}

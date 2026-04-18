@@ -276,6 +276,9 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     skipped_notes = []   # human-readable notes about skipped/inactive lines
     idl_dilution_reactions = []  # k[SPECIES+DIL-->]=CONST(DILUTE) reactions from EASY
     idl_parameters         = {}  # DILUTE, DIL — computed constants needed by IDL dil rxns
+    # Clear-sky J-value assignments from master easy: jX = PHTFKT_CS(a,b,c) or PHTFKT(a,b,c).
+    # Deferred: SZ may be defined later in the file. Processed after the main loop.
+    _phtfkt_deferred = []  # list of (var_up, func_name, [a,b,c])
 
     for clean, is_commented in _read_easy_lines(easy_path):
         if not clean:
@@ -384,6 +387,23 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 source_consts[var_up] = _easy_to_py(expr)
             continue
 
+        # X = PHTFKT_CS(a,b,c)  or  X = PHTFKT(a,b,c)
+        # Clear-sky photolysis frequency assignment (used when jno2/jo1d/... is not
+        # measured). Deferred evaluation because SZ may be defined later in the file.
+        phtfkt = re.match(r"(\w+)\s*=\s*(PHTFKT_CS|PHTFKT)\s*\(\s*(.*?)\s*\)\s*$",
+                          clean, re.I)
+        if phtfkt and not is_commented:
+            var_up = phtfkt.group(1).upper()
+            fname  = phtfkt.group(2).upper()
+            args_s = phtfkt.group(3)
+            args   = [a.strip() for a in args_s.split(',')]
+            if len(args) == 3:
+                _phtfkt_deferred.append((var_up, fname, args))
+            else:
+                skipped_notes.append(f"{var_up} = {fname}(...): expected 3 args, "
+                                     f"got {len(args)} — skipped")
+            continue
+
         # INITIAL[X] = CONST(expr)
         init = re.match(r"INITIAL\s*\[\s*(\w+)\s*\]\s*=\s*CONST\s*\((.*?)\)",
                         clean, re.I)
@@ -397,6 +417,52 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                     if ppb > 0:
                         initials[spec] = round(ppb, 6)
             continue
+
+    # ---- clear-sky J-values: process deferred PHTFKT(_CS) assignments --------
+    # Only JNO2/JO1D/JHONO/JH2O2/JHCHO_M/JHCHO_R map to env_map keys. Others are
+    # captured as source_consts so they remain available for rate substitution.
+    _J_ENV_KEYS = {
+        "JNO2": "JNO2", "JO1D": "JO1D", "JHONO": "JHONO",
+        "JH2O2": "JH2O2", "JHCHO_M": "JHCHO_M", "JHCHO_R": "JHCHO_R",
+    }
+    _sz_val = None
+    for _k_name in ("SZ", "SZA"):
+        if _k_name in source_consts:
+            try:
+                _sz_val = float(eval(source_consts[_k_name], {"__builtins__": {}}, {}))
+                break
+            except Exception:
+                pass
+    for var_up, fname, args in _phtfkt_deferred:
+        env_key = _J_ENV_KEYS.get(var_up)
+        if env_key is None:
+            # Non-J assignment (e.g. source rate shortcut) — keep raw for rate subst
+            source_consts[var_up] = f"{fname}({','.join(args)})"
+            continue
+        # Evaluate the three scalar constants
+        try:
+            a = float(eval(args[0].replace('D', 'E').replace('d', 'e'),
+                           {"__builtins__": {}}, {}))
+            b = float(eval(args[1].replace('D', 'E').replace('d', 'e'),
+                           {"__builtins__": {}}, {}))
+            c = float(eval(args[2].replace('D', 'E').replace('d', 'e'),
+                           {"__builtins__": {}}, {}))
+        except Exception:
+            skipped_notes.append(f"{var_up} = {fname}({','.join(args)}): "
+                                 f"non-numeric args — skipped")
+            continue
+        if _sz_val is None:
+            skipped_notes.append(f"{var_up} = {fname}(...): no SZ/SZA constant "
+                                 f"found — cannot evaluate clear-sky J, skipped")
+            continue
+        import math as _math
+        cosx = _math.cos(_math.radians(_sz_val))
+        if cosx <= 0.01:
+            cosx = 0.01
+        _j_val = a * (cosx ** b) * _math.exp(c / cosx)
+        env_map[env_key] = {"type": "Fixed Constant", "value": f"{_j_val:.6e}"}
+        print(f"[idl_parser] Clear-sky {var_up} <- {fname}({a},{b},{c}) @ "
+              f"SZ={_sz_val}° = {_j_val:.6e} -> env_map[{env_key}]")
 
     # ---- build reaction lookup -----------------------------------------------
     # Rebuild lookup from collected reactions for accurate key matching
@@ -732,13 +798,40 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 "comment":   f"k[QH2O --> {rhs_str}] = {rate_expr}",
             })
 
-    # ---- IDL parameters: DILUTE / DIL (needed for +DIL dilution reactions) ----
-    # DILUTE = CONST((FLOW+0.010*60)/(276.*3600.)) is the per-species dilution rate
-    # constant in s⁻¹.  DIL = CONST(1.) is a switch (always on).  Both are evaluated
-    # as var_assignments in the runner so that DILUTE is correct at every timestep.
-    for _pname in ("DILUTE", "DIL", "WALLDEP"):
-        if _pname in source_consts:
-            idl_parameters[_pname] = source_consts[_pname]
+    # ---- IDL parameters: promote every bare FACSIMILE `X = CONST(expr)` from
+    # the master EASY so the runner can evaluate it at each ODE step.
+    # Iteration is in source_consts insertion order, which mirrors the master
+    # EASY file's first-encountered order — FACSIMILE last-wins redefinition
+    # updates the value in-place without changing the slot, so the resulting
+    # order matches the easy file's sequence. Ordering matters when one
+    # parameter references another (e.g. DILUTE uses FLOW, H2O uses M).
+    # Variables consumed by specialised buckets (SHONO/SHCHO rate-multipliers,
+    # Y background, QCO2 switch, J-values via PHTFKT_CS, P/PRESS) were either
+    # already removed from source_consts or flow harmlessly into ctx here.
+    _EXCLUDE_FROM_IDL_PARAMS = {
+        # Pressure is already captured as pressure_hpa → env_map
+        "P", "PRESS",
+        # SHONO/SHCHO values are folded directly into chamber_source_reactions
+        # rate expressions; re-promoting them is redundant but not harmful.
+        # Leaving them here documents the exclusion decision explicitly.
+    }
+    # env_map keys already have runtime values set by the ENZ file. Promoting a
+    # source_const with the same name would register a var_assignment formula
+    # that may reference ENZ-only aliases (e.g. `H2O = 1e-2*M*H2O_in` in mcm_full
+    # — `H2O_in` is the raw ENZ column name that Python stores under key `H2O`).
+    # The formula fails to evaluate, silently zeroing H2O and breaking chemistry.
+    # Skip promotion when env_map provides the value directly.
+    _env_map_keys = {k.upper() for k in env_map.keys()}
+    for _pname, _pval in source_consts.items():
+        if _pname in _EXCLUDE_FROM_IDL_PARAMS:
+            continue
+        if _pname in _env_map_keys:
+            skipped_notes.append(
+                f"{_pname} = CONST({_pval}): already provided by env_map "
+                f"— idl_parameter promotion skipped"
+            )
+            continue
+        idl_parameters[_pname] = _pval
     if idl_dilution_reactions and "DILUTE" not in idl_parameters:
         # Fallback: derive from FLOW env_map entry if DILUTE CONST was not found
         idl_parameters["DILUTE"] = "(FLOW + 0.010*60) / (276. * 3600.)"

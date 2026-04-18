@@ -375,9 +375,17 @@
         }
     ],
     "idl_parameters": {
+        "WALLDEP": "1.",
+        "SHONO": "2.6*0.85",
+        "QSHCHO": "1",
         "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
         "DIL": "1.",
-        "WALLDEP": "1."
+        "T": "T",
+        "GAMMA_LIMONENE": "0.25",
+        "GAMMA_DODECANE": "0.12",
+        "SOA_DECAY": "10",
+        "SOA": "SOA_seed+SOA_LIM_NO3+SOA_LIM_O3+SOA_LIM_OH",
+        "KMT17": "0"
     },
     "analytical_dilution": false,
     "chamber_source_reactions": [
@@ -534,6 +542,8 @@
         "zero-rate injection: QO3 --> O3  (k=M*1e-9/60*113*0)",
         "Y + OH --> HO2: handled as Y-background artifact (y_eqn=200 ppb, k=2.4e-13)",
         "SNO2 source inactive: no CONST def and INITIAL[SNO2]=0  (k=jno2/5e-3/3600*HV_in/1.6*0.55)",
-        "zero-rate qH2O impurity: QH2O --> NO+XNOy  (k=M*1e-9/60*0.0)"
+        "zero-rate qH2O impurity: QH2O --> NO+XNOy  (k=M*1e-9/60*0.0)",
+        "HV = CONST(HV): already provided by env_map \u2014 idl_parameter promotion skipped",
+        "H2O = CONST(1e-2*M*H2O_in): already provided by env_map \u2014 idl_parameter promotion skipped"
     ]
 }

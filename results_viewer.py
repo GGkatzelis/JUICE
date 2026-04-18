@@ -581,11 +581,13 @@ class BudgetEngine:
             COSX_arr = np.maximum(np.cos(ctx['SAPHIR_SZ'] * np.pi / 180.0), 1e-4)
         safe_cosx = np.where(COSX_arr > 0, COSX_arr, 1e-4)
 
+        # O2/N2: respect env_map/config overrides. Atmospheric fractions are only
+        # applied if not already provided by the user (mirrors scenario_runner fix).
+        ctx.setdefault('O2', 0.2095 * M_arr)
+        ctx.setdefault('N2', 0.7809 * M_arr)
         ctx.update({
             'T': T_arr, 'TEMP': T_arr,
             'M': M_arr,
-            'O2': 0.2095 * M_arr,
-            'N2': 0.7809 * M_arr,
             'HV': HV_arr,
             'COSX': COSX_arr,
             'JNO2': JNO2_arr,

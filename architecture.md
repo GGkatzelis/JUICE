@@ -464,3 +464,116 @@ These benefit both interactive redraw and video rendering:
 ### Benchmark scripts
 - `compare_vs_facsimile.py` — parse FACSIMILE `.cs` and compare against a `simulation_results*.csv`.
 - `run_benchmark.py` — run all test scenarios (scene_01, scene_02, ethanol, mcm_full) in both interpolation modes and save `simulation_results_linear.csv` / `simulation_results_piecewise.csv` in each scenario directory.
+
+## 15. IDL Parser Bugs Uncovered During scene_03 Validation (2026-04-18)
+
+scene_03 is a simple CO + NO2 + cycling HV chamber model. FACSIMILE reference
+output was available. Initial validation showed ~99% species disagreement
+(radicals at 1% of FAC). Root-cause investigation uncovered **7 parser/runner
+bugs** that had been silently miscomputing chemistry, some masked by
+compensating errors in ethanol/mcm_full. After fixes, scene_03 matches FAC
+**15/15 species within ±1%**, ethanol improved from 6/38 to 9/38 within ±2%
+in linear mode.
+
+### Bug 1 — `jno2 = PHTFKT_CS(...)` silently dropped by `idl_parser.py`
+
+The CONST regex at `idl_parser.py` (CONST-branch of master EASY parsing) only
+matches `X = CONST(expr)`. Clear-sky scenarios write `jno2 = PHTFKT_CS(a,b,c)`
+which has no handler — the line was silently dropped. **Fix**: added a
+deferred `_phtfkt_deferred` list. After main parse loop, look up SZ from
+`source_consts` and evaluate PHTFKT_CS to get a clear-sky J-value. Emit as
+`env_map` Fixed Constant for the matching env key (JNO2/JO1D/etc.).
+
+### Bug 2 — `k[X+hv→Y]=<rate>` not HV-gated when rate lacks HV factor
+
+FACSIMILE treats `hv` on the reactant side as a pseudo-species (0 in dark,
+1 in light) — photolysis is implicitly gated even when the rate expression
+has no `HV`. Python strips `HV` from `reactants_parsed` (it's a reserved
+context variable), so `k[NO2+hv → O3+NO] = CONST(jno2)` fires 24/7 unless
+we inject the gate. **Fix** in `easy_parser.py` `rate_def` branch: if
+reaction LHS contains `HV` and rate expression has no `HV` token, wrap
+`rate_val = f"HV*({rate_val})"`.
+
+### Bug 3 — `source_consts` not promoted to `idl_parameters`
+
+Master-easy `X = CONST(expr)` assignments were parked in `source_consts` but
+never turned into `idl_parameters` unless X was in a hardcoded whitelist
+{DILUTE, DIL, WALLDEP}. scene_03's `FLOW = CONST(10)`, `H2O = CONST(1e-2*M*0.02)`,
+`SZ = CONST(30)` were all silently dropped. DILUTE's formula evaluated with
+FLOW=0 → 17× too slow dilution. **Fix**: iterate `source_consts` in EASY-file
+insertion order and promote each to `idl_parameters`. Exclusion set narrowed
+to {P, PRESS} only. Also skip promotion when the name already appears in
+env_map (prevents mcm_full's `H2O = 1e-2*M*H2O_in` from overriding the
+measured H2O with a formula referencing `H2O_in` that isn't in ctx).
+
+### Bug 4 — `PHTFKT`/`PHOTMMSC` collapsed to `JSCALE × a × HV`, dropping spectral shape
+
+`easy_parser.py` photo_match converted `k[X+hv-->Y]{J<N>}=PHTFKT(a,b,c)` into
+`f"JSCALE * {a} * HV"`, assuming every J-value has the same solar-zenith
+dependence as JNO2. This is only correct if b=MNO2 and c=NNO2 for every
+reaction. For J1 (O3→O1D, b=1.743 c=-0.474) vs JNO2 (b=0.244 c=-0.267) at
+SZ=30°, the error is ~57 %. **Fix**: emit the full FACSIMILE formula —
+`HV * (a × COSX^b × exp(c/COSX)) × min(JNO2 / (LNO2 × COSX^MNO2 ×
+exp(NNO2/COSX)), 1.0)` for PHTFKT, and the 7-arg variant for PHOTMMSC.
+The `.upper()` on the emitted expression is required because ctx keys
+are uppercased and `jno2` in the source would otherwise fail to resolve.
+
+### Bug 5 — `idl_parameters` appended instead of prepended
+
+`scenario_runner.py` appended idl_parameters at the *end* of var_assignments.
+Chemistry-file parameters like `COSX = COS(SZ × 0.0174533)` evaluated before
+SZ was set → COSX = 1.0 in pass 1 → propagated to all J-values through pass 2
+via multiple JSCALE re-evaluations. **Fix**: prepend idl_parameters via
+`reversed() + insert(0)`, so they evaluate *before* chemistry-file parameters
+that depend on them.
+
+### Bug 6 — `-/->` notation disabled unconditionally; FAC only disables with a following replacement
+
+FACSIMILE's `-/->` is a disable-plus-replace marker. A lone `-/->` with no
+subsequent `-->` line with matching LHS is ignored by FAC, which keeps the
+original rate active. scene_03's `HV + O3 -/-> O` has no replacement; FAC
+keeps `k[O3+hv→O] = 4.17e-4` active, Python was disabling it. **Fix**: pre-scan
+each parsed file for bare `-->` lines and their line indices. When a `-/->`
+is encountered, honour the disable only if a later bare `-->` shares the
+canonical LHS.
+
+### Bug 7 — `ctx.update({O2: 0.2095×M, N2: 0.7809×M, ...})` clobbers env_map overrides
+
+The three ctx-building spots in `scenario_runner.py` (system_ode,
+analytical_jac, _export_kinetics) did `ctx.update({..., 'O2': 0.2095*M_now,
+...})` *after* env_map values had been written into ctx — silently clobbering
+any user override. scene_03's chemistry never defines O2 or N2 (the file that
+would, `ethanol.fac.saphir.incl`, isn't included); FAC defaults them to
+`INITIAL[*]=CONST(1.)` = 1 molec/cm³, which makes `k[O1D→O] = 2e-11·N2` ≈ 0
+and `k[O→O3] = 5.6e-34·O2·N2` ≈ 0. Python's atmospheric defaults fired
+those reactions, giving physically-correct but FAC-divergent dynamics.
+**Fix**: switched all three `ctx.update` calls to `ctx.setdefault('O2', ...)`
+/ `ctx.setdefault('N2', ...)`. Mirror fix also applied in
+`results_viewer.py::BudgetEngine._build_vec_ctx`. scene_03 config now
+explicitly declares `O2 = 1.0` and `N2 = 1.0` in env_map to reproduce FAC's
+undefined-variable convention.
+
+### Matching scene_03 — env_map declarations
+
+```json
+"env_map": {
+  "JNO2": { "type": "Fixed Constant", "value": "8.263960e-03" },
+  "O2":   { "type": "Fixed Constant", "value": "1.0" },
+  "N2":   { "type": "Fixed Constant", "value": "1.0" }
+}
+```
+
+JNO2 auto-populated by Bug 1 fix from PHTFKT_CS(1.165D-02, 0.244, -0.267)
+at SZ=30°. O2/N2 must be set explicitly to match FAC's weird
+undefined-variables-are-1 behaviour; otherwise Python uses atmospheric
+fractions and the N2/O2 quenching of O1D dominates.
+
+### Hardcode audit (hidden-assumption survey)
+
+Three HIGH findings; two fixed (scenario_runner.py O2/N2 and
+results_viewer.py O2/N2). One remaining (scenario_runner.py H2O fallback
+at line 861) is behind a gate check and LIKELY safe, but worth hardening
+if another mismatch surfaces. General principle established: **any
+hardcoded physical default in Python that overrides a user-configurable
+input is a latent bug**. Use `setdefault` or conditional assignment,
+never `ctx.update({...})` for quantities the user might want to control.

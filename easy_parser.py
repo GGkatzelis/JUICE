@@ -90,7 +90,34 @@ class EasyParser:
         # Pass 2: register bare reaction lines using the fully-populated rates_map.
         # ─────────────────────────────────────────────────────────────────────────
 
-        def _parse_line_pass1(line):
+        # Pre-scan: collect (line_index, lhs_tokens) for every BARE `-->` reaction
+        # in this file. Used by the -/-> handler to honour FAC's rule: a `-/->`
+        # line only disables the reaction if a bare `-->` replacement with
+        # matching LHS appears LATER in the same file. A lone `-/->` with no
+        # subsequent replacement is ignored (FAC keeps the original rate).
+        # Example that required this (scene_03, Apr 2026):
+        #   `HV + O3 -/-> O` with no follow-up → FAC kept k[O3+hv-->O] active.
+        bare_rxn_lhs = []  # list of (line_idx, frozenset(lhs_tokens_upper))
+        for _idx, _ln in enumerate(lines):
+            _l = _ln.strip()
+            if not _l or _l.startswith(('*', ';', '#')):
+                continue
+            _lr = _l.split(';')[0].strip()
+            if '-/->' in _lr or '=' in _lr or _lr.startswith('%'):
+                continue
+            if '-->' in _lr:
+                _left = _lr.split('-->', 1)[0]
+                _tokens = frozenset(t.upper() for t in
+                                    _left.replace(' ', '').split('+') if t)
+                bare_rxn_lhs.append((_idx, _tokens))
+
+        def _has_subsequent_bare_replacement(line_idx, lhs_tokens):
+            for _bi, _blhs in bare_rxn_lhs:
+                if _bi > line_idx and _blhs == lhs_tokens:
+                    return True
+            return False
+
+        def _parse_line_pass1(line_idx, line):
             """Pass 1: handle parameters, rate defs, photolysis defs, initials."""
             original_line = line.strip()
             if not original_line:
@@ -101,13 +128,17 @@ class EasyParser:
             if not clean_line:
                 return
 
-            # FACSIMILE "-/->" notation: disables a reaction (rate forced to 0.0).
-            # Store the canon key in rates_map so pass 2 skips it and any earlier
-            # definition (e.g. MCM k[...]=PHTFKT) is overridden to 0.
+            # FACSIMILE "-/->" notation: disable-plus-replace marker. Only applies
+            # when a bare `-->` with matching LHS follows later in this file.
             if '-/->' in line_for_rxn and '=' not in line_for_rxn and not is_commented:
                 left_d, right_d = line_for_rxn.split('->',  1)   # splits on first '->'
                 left_d = left_d.rstrip('-/')                      # strip trailing -/
                 right_d = right_d.lstrip('>')                     # strip leading >
+                lhs_d_tokens = frozenset(
+                    t.upper() for t in left_d.replace(' ', '').split('+') if t)
+                if not _has_subsequent_bare_replacement(line_idx, lhs_d_tokens):
+                    # Lone -/-> with no replacement — FAC keeps original rate.
+                    return
                 canon_d = self._canon_rxn_key(left_d, right_d)
                 raw_d = (left_d.replace(' ', '').upper()
                          + '-->' + right_d.replace(' ', '').upper())
@@ -117,9 +148,7 @@ class EasyParser:
                 original_rate = (self.rates_map.get(raw_d)
                                  or self.rates_map.get(canon_d))
                 if original_rate and original_rate != '0.0':
-                    reac_key = frozenset(
-                        t.upper() for t in left_d.replace(' ', '').split('+') if t)
-                    self._reactant_fallback_rates[reac_key] = original_rate
+                    self._reactant_fallback_rates[lhs_d_tokens] = original_rate
                 # Zero both the canon key (sorted) and the natural-order raw key so
                 # that the pass-2 lookup (which checks raw key first) also returns 0.0.
                 self.rates_map[canon_d] = "0.0"
@@ -146,12 +175,43 @@ class EasyParser:
                 return
 
             # Photolysis with J<N>
+            # Full FACSIMILE PHTFKT(a,b,c) expansion:
+            #   HV × (a · COSX^b · exp(c/COSX)) × min(JNO2 / (LNO2·COSX^MNO2·exp(NNO2/COSX)), 1)
+            # The clear-sky spectral factor (COSX^b · exp(c/COSX)) is specific to each J_i and
+            # must NOT be dropped — the old `JSCALE * a * HV` collapse (valid only if every J_i
+            # shared JNO2's spectrum) caused systematic 1.5–2× bias in scenarios driven by
+            # clear-sky photolysis. Full PHOTMMSC(a,b,c,d,e,f,g) takes its own reference tuple
+            # (d,e,f,g) instead of the global (LNO2,MNO2,NNO2,JNO2).
+            def _phtfkt_expansion(args_str):
+                al = [a.strip() for a in args_str.split(',')]
+                if len(al) < 3:
+                    return None
+                a, b, c = al[0], al[1], al[2]
+                out = (f"HV * (({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01)))"
+                       f" * AMIN(JNO2 / (LNO2 * AMAX(COSX,0.01)**MNO2 * EXP(NNO2/AMAX(COSX,0.01))), 1.0)")
+                # ctx keys are uppercase (JNO2, LNO2, COSX, HV, ...); args may reference
+                # lowercase names from the easy file (e.g. `jno2`). Match the convention
+                # used elsewhere in this parser where stored expressions are uppercased.
+                return out.upper()
+            def _photmmsc_expansion(args_str):
+                al = [a.strip() for a in args_str.split(',')]
+                if len(al) < 7:
+                    return None
+                a, b, c, d, e, f, g = al[:7]
+                out = (f"HV * (({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01)))"
+                       f" * AMIN(({g}) / (({d}) * AMAX(COSX,0.01)**({e}) * EXP(({f})/AMAX(COSX,0.01))), 1.0)")
+                return out.upper()
+
             photo_match = re.search(r'k\[(.*?)\](?:\{J<(\d+)>)\}\s*=\s*(PHTFKT|PHOTMMSC)\((.*?)\)', line_for_rxn, re.I)
             if photo_match:
                 rxn_str, j_num, func, args = photo_match.groups()
                 rate_param_name = f"J{j_num}"
-                j_arg = args.split(',')[0].strip()
-                self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
+                new_rate = (_photmmsc_expansion(args) if func.upper() == 'PHOTMMSC'
+                            else _phtfkt_expansion(args))
+                if new_rate is None:
+                    # Fallback to legacy collapse if arg count is unexpected
+                    new_rate = f"JSCALE * {args.split(',')[0].strip()} * HV"
+                self.mech.parameters[rate_param_name] = new_rate
                 raw_rxn_key = rxn_str.replace(' ', '').upper()
                 self.rates_map[raw_rxn_key] = rate_param_name
                 # Also store canon key so -/-> inheritance lookup can find it.
@@ -173,8 +233,10 @@ class EasyParser:
                 # Replace arrow and '+' to get a valid Python identifier
                 param_suffix = raw_rxn_key.replace('-->', '_').replace('+', '_')
                 rate_param_name = f"J_{param_suffix}"
-                j_arg = args.split(',')[0].strip()
-                self.mech.parameters[rate_param_name] = f"JSCALE * {j_arg} * HV"
+                new_rate = _photmmsc_expansion(args)
+                if new_rate is None:
+                    new_rate = f"JSCALE * {args.split(',')[0].strip()} * HV"
+                self.mech.parameters[rate_param_name] = new_rate
                 self.rates_map[raw_rxn_key] = rate_param_name
                 # Also store canon key.
                 if '-->' in raw_rxn_key:
@@ -196,6 +258,15 @@ class EasyParser:
             if rate_def:
                 raw_key = rate_def.group(1).replace(' ', '').upper()
                 rate_val = rate_def.group(2).strip().upper()
+                # Auto HV-gate: FACSIMILE treats `hv` on the reactant side as a
+                # pseudo-species (0 in dark, 1 in light), so `k[X+hv-->Y]=<rate>`
+                # is implicitly gated. Python strips HV from reactants (reserved),
+                # so an explicit `* HV` must be injected when absent.
+                if '-->' in raw_key:
+                    _lhs_r = raw_key.split('-->', 1)[0]
+                    _lhs_parts = {p.strip() for p in _lhs_r.split('+') if p.strip()}
+                    if 'HV' in _lhs_parts and not re.search(r'\bHV\b', rate_val):
+                        rate_val = f"HV*({rate_val})"
                 self.rates_map[raw_key] = rate_val
                 # Also store under stoichiometry-normalised key so that
                 # k[N2O5-->2*NA] matches "N2O5 --> NA + NA" bare reaction.
@@ -248,8 +319,8 @@ class EasyParser:
                         key_pct = rxn_part.replace(' ', '').upper()
                         self._rxn_map[key_pct] = (reacs, prods, rate_expr)
 
-        for line in lines:
-            _parse_line_pass1(line)
+        for _i, line in enumerate(lines):
+            _parse_line_pass1(_i, line)
         for line in lines:
             _parse_line_pass2(line)
 

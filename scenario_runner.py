@@ -249,14 +249,20 @@ class ScenarioRunner:
             print(f"  [Dilution] Detected explicit +DIL reactions in mechanism — "
                   f"analytical dilution disabled to avoid double-counting")
 
-        # IDL-mode computed parameters (DILUTE, DIL, …) — evaluated each ODE step,
-        # overriding the ctx_data DILUTE=0 stub so explicit +DIL reactions use the
-        # correct rate constant.
-        for p_name, p_expr in self.cfg.get('idl_parameters', {}).items():
+        # IDL-mode computed parameters (FLOW, DILUTE, DIL, SZ, H2O, …) — evaluated
+        # each ODE step. Prepended so chemistry-file parameters (e.g. COSX =
+        # COS(SZ * 0.0174533) in j_clear_sky.incl) see the master-easy scenario
+        # values. If SZ/COSX are evaluated AFTER the J-values that reference them,
+        # the Js see stale zero values (Bug 5, April 2026).
+        # Precondition (handled in idl_parser): source_consts that duplicate
+        # env_map keys are NOT promoted here — their formulas may reference ENZ
+        # column aliases that aren't in ctx and would silently zero the value.
+        _idl_params = list(self.cfg.get('idl_parameters', {}).items())
+        for p_name, p_expr in reversed(_idl_params):
             p_clean = p_expr.upper().replace('@', '**')
             p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
             try:
-                self.var_assignments.append((p_name.upper(), compile(p_clean, '<string>', 'eval')))
+                self.var_assignments.insert(0, (p_name.upper(), compile(p_clean, '<string>', 'eval')))
                 print(f"  [IDL param] {p_name} = {p_expr}")
             except Exception as e:
                 print(f"[WARNING] Could not compile IDL parameter {p_name}: {e}")
@@ -854,10 +860,14 @@ class ScenarioRunner:
                 # No H2O channel at all — use 1% fallback so kinetics don't crash
                 ctx['H2O'] = 0.01 * M_now
 
+            # O2/N2 fall back to atmospheric fractions only if not already set via
+            # env_map. Scenarios like scene_03 deliberately leave them undefined in
+            # the chemistry files (FACSIMILE then treats them as ~0); to reproduce
+            # that behaviour, override via env_map `O2`/`N2` Fixed Constant entries.
+            ctx.setdefault('O2', 0.2095 * M_now)
+            ctx.setdefault('N2', 0.7809 * M_now)
             ctx.update({
                 "T": T_now, "TEMP": T_now, "M": M_now,
-                "O2": 0.2095 * M_now,
-                "N2": 0.7809 * M_now,
                 "np": np, "exp": np.exp, "EXP": np.exp,
                 "LOG10": np.log10, "log10": np.log10,
                 "LOG": np.log, "log": np.log,
@@ -961,9 +971,9 @@ class ScenarioRunner:
                 _n2_now  = float(ctx.get('N2',  0.7809 * M_now))
                 _o2_now  = float(ctx.get('O2',  0.2095 * M_now))
                 _h2o_now = float(ctx.get('H2O', 0.0))
-                _kq_now  = (2.0e-11 * _n2_now * np.exp(130.0 / _t_now) +
-                            3.20e-11 * _o2_now * np.exp(67.0  / _t_now) +
-                            2.14e-10 * _h2o_now)
+                _kq_now = (2.0e-11 * _n2_now * np.exp(130.0 / _t_now) +
+                           3.20e-11 * _o2_now * np.exp(67.0  / _t_now) +
+                           2.14e-10 * _h2o_now)
                 ctx['O1D'] = max(_j1_now, 0.0) * max(_o3_now, 0.0) / max(_kq_now, 1e-30)
 
             # O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
@@ -1103,9 +1113,11 @@ class ScenarioRunner:
             else:
                 ctx_j['H2O'] = 0.01 * M_now
             # 3. Base physics variables + math functions
+            # O2/N2: env_map overrides take priority over atmospheric defaults.
+            ctx_j.setdefault('O2', 0.2095 * M_now)
+            ctx_j.setdefault('N2', 0.7809 * M_now)
             ctx_j.update({
                 "T": T_now, "TEMP": T_now, "M": M_now,
-                "O2": 0.2095 * M_now, "N2": 0.7809 * M_now,
                 "np": np, "exp": np.exp, "EXP": np.exp,
                 "LOG10": np.log10, "log10": np.log10,
                 "LOG": np.log, "log": np.log,
@@ -1539,8 +1551,10 @@ class ScenarioRunner:
                 ctx[k_up] = float(arr[t_i])
             # H2O already converted
             ctx['H2O'] = float(h2o_arr[t_i])
+            # env_map O2/N2 overrides win over atmospheric defaults.
+            ctx.setdefault('O2', 0.2095 * M_now)
+            ctx.setdefault('N2', 0.7809 * M_now)
             ctx.update({"T": T_now, "TEMP": T_now, "M": M_now,
-                        "O2": 0.2095 * M_now, "N2": 0.7809 * M_now,
                         "np": np, "exp": np.exp, "EXP": np.exp,
                         "LOG10": np.log10, "log10": np.log10,
                         "LOG": np.log, "log": np.log, "SQRT": np.sqrt,

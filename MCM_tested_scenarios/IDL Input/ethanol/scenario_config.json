@@ -193,9 +193,14 @@
     ],
     "idl_dilution_reactions": [],
     "idl_parameters": {
+        "WALLDEP": "1.",
+        "SHONO": "HV*2.6*1.1*0.7",
+        "SHCHO": "HV*1",
         "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
         "DIL": "1.",
-        "WALLDEP": "1."
+        "T": "T",
+        "HV": "HV",
+        "H2O": "1e-2*M*H2O_in"
     },
     "analytical_dilution": true,
     "chamber_source_reactions": [

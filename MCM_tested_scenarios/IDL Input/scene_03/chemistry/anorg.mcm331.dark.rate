@@ -1,0 +1,142 @@
+; Reaktionskonstanten zu anorg.dark.mech
+; Nach MCM31
+; Erstellt von Cornelia Richter, Dezember 2004
+; Kontrolliert M�rz 2005 (Schreibfehler M <-> N2, + <-> - im MCM)
+; Korrigiert Juni 2006:
+;          1) M <--> N2 	:ist doch kein Schreibfehler im MCM, IUPAC meint
+; 				    	  	 den "Bad"gas
+;          2) Falsche Klammern bei KMT11 (k[HNO3 + OH]) verbessert!  
+
+; *** COMPLEX RATE COEFFICIENTS *****
+; Im Format: k(k0,ki,F) = k0*k1/(k0+k1)*F
+; mit        F(k0,ki,Fc) = Fc^(1/(1+log10(k0/k1)/N)^2)
+; und        N(Fc) = log(0.75-1.27*log10(Fc))
+;
+; k0 : low pressure limit, M -> 0
+; ki : high pressure limit, M -> infinity
+; Fc : broadening factor
+;
+; -> Siehe IUPAC 2001 Guide (Lindemann-Hinshelwood expression)
+;; http://www.iupac-kinetic.ch.cam.ac.uk/
+;;;; --> Supplementary Information
+;;;;;;;;;;;; --> Guide to the datasheets
+
+;;;  Lindemann-Hinshelwood equation
+;;;  k = k0*ki/(k0+ki) *F
+;;;  LOG10(F) = LOG(Fc)/(1+(LOG(k0/ki)/N)^2), LOG=LOG10, N = 0.75 - 1.27*LOG(Fc)
+;;;  F = 10^(LOG(FC)/(1+(LOG(k0/ki)/N)^2)) = (10^(LOG(FC))^(1+(LOG(k0/ki)/N)^2) 
+;;;  F = FC^(1+(LOG(k0/ki)/N)^2)
+
+COMPRC = FUNCTION[(%1)*(%2)/((%1)+(%2))*$
+                  (%3)@(1/(1+(LOG10((%1)/(%2))/$
+                  ((0.75-1.27*LOG10(%3))))@2))]
+
+; KMT01 : IUPAC 2001
+; K0  = 1.00D-31*M*(T/300)@(-1.6)
+; KI  = 5.00D-11*(T/300)@(-0.3)
+; FC  = 0.85
+KMT01   = COMPRC( 1.00D-31*M*(T/300)@(-1.6), 5.00D-11*(T/300)@(-0.3), 0.85 )
+
+; KMT02 : IUPAC 2001
+; K0  = 1.30D-31*M*(T/300)@(-1.5)
+; KI  = 2.30D-11*(T/300)@0.24
+; FC  = 0.6
+KMT02   = COMPRC( 1.30D-31*M*(T/300)@(-1.5), 2.30D-11*(T/300)@0.24, 0.6 )
+
+; KMT03 : IUPAC 2001
+; K0  = 3.60D-30*M*(T/300)@-4.1
+; KI  = 1.90D-12*(T/300)@0.2
+; FC  = 0.35
+KMT03   = COMPRC( 3.60D-30*M*(T/300)@(-4.1), 1.90D-12*(T/300)@0.2, 0.35 )
+
+;KMT04 : IUPAC 1997/2001
+; K0  = 1.30D-03*M*(T/300)@-3.5*EXP(-11000/T)
+; KI  = 9.70D+14*(T/300)@0.1*EXP(-11080/T)
+; FC  = 0.35
+KMT04   = COMPRC( 1.30D-03*M*(T/300)@(-3.5)*EXP(-11000/T), 9.70D+14*(T/300)@0.1*EXP(-11080/T), 0.35 )
+
+; KMT05: IUPAC 2001
+KMT05 = CONST( 1.44D-13*(1+(M/4.2D+19)) )
+
+; KMT06: IUPAC 1992/2001
+KMT06_PARAM   = CONST( 1+(1.40D-21*EXP(2200/T)*H2O) )
+
+; KMT07 : IUPAC 2001
+; K0  = 7.40D-31*M*(T/300)@(-2.4)
+; KI  = 3.30D-11*(T/300)@(-0.3)
+; FC  = 0.81
+KMT07   = COMPRC( 7.40D-31*M*(T/300)@(-2.4), 3.30D-11*(T/300)@(-0.3), 0.81 )
+
+; KMT08 : IUPAC 2002
+; K0  = 3.20D-30*M*(T/300)@(-4.5)
+; KI  = 3.0D-11
+; FC  = 0.41
+KMT08   = COMPRC( 3.20D-30*M*(T/300)@(-4.5), 3.0D-11, 0.41 )   
+
+; KMT09 : IUPAC 1997/2001
+; K0  = 1.40D-31*M*(T/300)@(-3.1)
+; KI  = 4.00D-12
+; FC  = 0.4
+KMT09   = COMPRC( 1.40D-31*M*(T/300)@(-3.1), 4.00D-12, 0.4 )
+
+; KMT10 : IUPAC 2001
+; K0  = 4.10D-05*M*EXP(-10650/T)
+; KI  = 6.00D+15*EXP(-11170/T)
+; FC  = 0.4
+KMT10   = COMPRC( 4.10D-05*M*EXP(-10650/T), 6.00D+15*EXP(-11170/T), 0.4 )
+
+; KMT11: IUPAC 2001
+; KMT11 =  K1 + K2
+; K1    = 2.40D-14*EXP(460/T)
+; K2    = (K3*M)/(1+(K3*M/K4))
+; K3    = 6.50D-34*EXP(1335/T)
+; K4    = 2.70D-17*EXP(2199/T)
+KMT11_PARAM = CONST( 2.40D-14*EXP(460/T) + $
+        (6.50D-34*EXP(1335/T)*M)/ $
+        (1+(6.50D-34*EXP(1335/T)*M/ $
+        (2.70D-17*EXP(2199/T)))))
+
+; KMT12 : IUPAC 2001
+;  K0  = 2.5D-31*M*(T/300)@(-2.6)
+;  KI  = 2.0D-12
+;  FC  = 0.53
+KMT12   = COMPRC( 2.5D-31*M*(T/300)@(-2.6), 2.0D-12, 0.53 )	
+
+k[O-->O3]=CONST(5.60D-34*O2*N2*(((T)/300)@-2.6) + 6.00D-34*O2*O2*(((T)/300)@-2.6))
+k[O+O3-->]=CONST(8.00D-12*EXP(-2060/(T)))
+k[O+NO-->NO2]=CONST( KMT01 )
+k[O+NO2-->NO]=CONST(5.50D-12*EXP(188/(T)))
+k[O+NO2-->NO3]=CONST( KMT02 )
+k[O1D-->O]{SUM}=CONST(2.0D-11*N2*EXP(130/(T)) + 3.20D-11*O2*EXP(67/(T)))
+k[NO+O3-->NO2]=CONST(1.40D-12*EXP(-1310/(T)))
+k[NO2+O3-->NO3]=CONST(1.40D-13*EXP(-2470/(T)))
+k[NO+NO-->NO2+NO2]=CONST(3.30D-39*EXP(530/(T))*O2)
+k[NO+NO3-->NO2+NO2]=CONST(1.80D-11*EXP(110/(T)))
+k[NO2+NO3-->NO+NO2]=CONST(4.50D-14*EXP(-1260/(T)))
+k[NO2+NO3-->N2O5]=CONST( KMT03 )
+k[N2O5-->NO2+NO3]=CONST( KMT04 )
+k[O1D-->OH+OH]=CONST(2.14D-10*H2O)
+k[OH+O3-->HO2]=CONST(1.70D-12*EXP(-940/(T)))
+k[OH+H2-->HO2]=CONST(7.70D-12*EXP(-2100/(T)))
+k[OH+CO-->HO2+CO2]{APPEND_CO2}=CONST(KMT05)
+k[OH+H2O2-->HO2]=CONST(2.90D-12*EXP(-160/(T)))
+k[HO2+O3-->OH]=CONST(2.03D-16*(((T)/300)@4.57*EXP(693/(T))))
+k[OH+HO2-->]=CONST(4.80D-11*EXP(250/(T)))
+k[HO2+HO2-->H2O2]=CONST(2.20D-13*KMT06_PARAM*EXP(600/(T)) + 1.90D-33*M*KMT06_PARAM*EXP(980/(T)))
+k[OH+NO-->HONO]=CONST( KMT07 )
+k[OH+NO2-->HNO3]=CONST( KMT08 )
+k[OH+NO3-->HO2+NO2]=CONST(2.00D-11)
+k[HO2+NO-->OH+NO2]=CONST(3.45D-12*EXP(270/(T)))
+k[HO2+NO2-->HO2NO2]=CONST( KMT09 )
+k[HO2NO2-->HO2+NO2]=CONST( KMT10 )
+k[OH+HO2NO2-->NO2]=CONST(3.2D-13*EXP(690/(T))*1.0)
+k[HO2+NO3-->OH+NO2]=CONST(4.00D-12)
+k[OH+HONO-->NO2]=CONST(2.50D-12*EXP(260/(T)))
+k[OH+HNO3-->NO3]=CONST( KMT11_PARAM )
+k[O+SO2-->SO3]=CONST(4.00D-32*EXP(-1000/(T))*M)
+k[OH+SO2-->HSO3]=CONST( KMT12 )
+k[HSO3-->HO2+SO3]=CONST(1.30D-12*EXP(-330/(T))*O2)
+
+k[HNO3 --> NA] = CONST(6.00D-06) 
+k[N2O5 --> NA + NA] = CONST(4.00D-04) 
+k[SO3 --> SA]=CONST(1.20D-15*H2O)
