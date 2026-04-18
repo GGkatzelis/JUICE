@@ -1,0 +1,53 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Temporary simulation outputs (the canonical references are saved as
+# simulation_results_linear.csv and simulation_results_piecewise.csv)
+**/simulation_results.csv
+**/simulation_kinetics.npz
+**/simulation_reactions.csv
+
+# Experimental ENZ/config variants (e.g. O3/HO2-constrained diagnostics)
+**/kammer_with*.enz
+**/scenario_config_*constrained*.json
+
+# Local logs / scratch
+*.log
+/tmp/
