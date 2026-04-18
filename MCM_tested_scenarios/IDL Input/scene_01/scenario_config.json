@@ -1,0 +1,87 @@
+{
+    "folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_01",
+    "chemistry_folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_01\\chemistry",
+    "chamber_vol": 276.0,
+    "mechanism_files": [],
+    "env_map": {
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1013.0"
+        }
+    },
+    "j_scalings": {},
+    "artifacts": {
+        "active": true,
+        "scale": "1.0",
+        "hono_active": false,
+        "hono_eqn": "",
+        "hcho_active": false,
+        "hcho_eqn": "",
+        "no2_active": false,
+        "no2_eqn": "",
+        "y_active": false,
+        "y_eqn": "",
+        "wall_active": false,
+        "dark_hono": ""
+    },
+    "initials": {},
+    "continuous_sources": [],
+    "burst_injections": [
+        {
+            "name": "X (IDL)",
+            "target": "X",
+            "ppb": "2.0",
+            "start_utc": "01.01.2000 00:05:00",
+            "duration_s": "120",
+            "profile": "Gaussian",
+            "source": "IDL",
+            "comment": "k-rate: M*1e-9/60*1",
+            "t90_frac": "0.5"
+        }
+    ],
+    "injection_reactions": [
+        {
+            "reactants": "Q",
+            "products": "X",
+            "rate": "(M*1e-9/60*1) * Q",
+            "label": "Q injection",
+            "group": "IDL Injection",
+            "comment": "k[Q --> X] = M*1e-9/60*1"
+        },
+        {
+            "reactants": "Q",
+            "products": "Y",
+            "rate": "(M*1e-9/60*1) * Q",
+            "label": "Q injection",
+            "group": "IDL Injection",
+            "comment": "k[Q --> Y] = M*1e-9/60*1"
+        }
+    ],
+    "idl_dilution_reactions": [
+        {
+            "reactants": "Y",
+            "products": "",
+            "rate": "DILUTE",
+            "label": "Y dilution (IDL)",
+            "group": "IDL Dilution",
+            "comment": "k[Y+DIL-->] = DILUTE  (DILUTE = DILUTE)"
+        }
+    ],
+    "idl_parameters": {
+        "DILUTE": "150/275 / 3600",
+        "DIL": "1"
+    },
+    "analytical_dilution": false,
+    "chamber_source_reactions": [],
+    "custom_reactions": [],
+    "excluded_reactions": [],
+    "blocked_parameters": [],
+    "h2o_injection_impurities": [],
+    "_skipped": [
+        "FILES[] directive: FACSIMILE file config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FACS[] directive: FACSIMILE solver config, not needed",
+        "FUNCTION definition 'CONST': FACSIMILE-only macro, not needed in Python ODE",
+        "FUNCTION definition 'DENSITY': FACSIMILE-only macro, not needed in Python ODE"
+    ]
+}

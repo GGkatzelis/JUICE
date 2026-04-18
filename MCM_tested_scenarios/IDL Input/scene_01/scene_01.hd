@@ -1,0 +1,41 @@
+* Facsimile-Output / EASY Ver. 5.96b 2010-5-19
+header created at Fri Apr 10 23:34:57 2026
+
+cs: concentrations and settings
+COLUMN 1=TIME / SEC SINCE 1.1.2000 00:00:00
+COLUMN 2=X<0>
+COLUMN 3=Y<0>
+COLUMN 4=Q<0>
+COLUMN 5=T<0>
+COLUMN 6=P<0>
+COLUMN 7=M<0>
+COLUMN 8=DIL<0>
+COLUMN 9=DILUTE<0>
+COLUMN 10=MR_X<0>
+COLUMN 11=MR_Y<0>
+NUMBER OF COLUMNS=11
+&&&&&&&&
+* Facsimile-Output / EASY Ver. 5.96b 2010-5-19
+header created at Fri Apr 10 23:34:57 2026
+
+kv: rate constants and reaction rates
+COLUMN 1=time
+COLUMN 2=k<0,0> !UDIL+Y-->!N
+COLUMN 3=k<1,0> !UQ-->X!N
+COLUMN 4=k<2,0> !UQ-->Y!N
+COLUMN 5=v<0,0> !UDIL+Y-->!N
+COLUMN 6=v<1,0> !UQ-->X!N
+COLUMN 7=v<2,0> !UQ-->Y!N
+NUMBER OF COLUMNS=7
+&&&&&&&&
+* Facsimile-Output / EASY Ver. 5.96b 2010-5-19
+header created at Fri Apr 10 23:34:57 2026
+
+pd: production and destruction
+COLUMN 1=time
+COLUMN 2=p<0> X
+COLUMN 3=p<0> Y
+COLUMN 4=d<0> X
+COLUMN 5=d<0> Y
+NUMBER OF COLUMNS=5
+&&&&&&&&

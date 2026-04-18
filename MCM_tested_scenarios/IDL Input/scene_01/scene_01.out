@@ -1,0 +1,437 @@
+ FACSIMILE RELEASE  3.05 DATE 23/12/93 FROM FORTRAN FILE 
+          facsim.f                                          
+ (C) COPYRIGHT UNITED KINGDOM ATOMIC ENERGY AUTHORITY 1987
+
+ The FACSIMILE software is the absolute property of the
+ United Kingdom Atomic Energy Authority.
+ This copy was supplied, for use on one site, to 
+
+ FACSIMILE Support - AEA Technology 
+
+ who have acquired an irrevocable license to use it.
+ Does that license cover your use of the FACSIMILE software?
+ 
+ ***** MAXIMUM ARRAY SIZES 
+ ** NPARS    500000     REAL SCALARS, ARRAYS, AND WORKSPACE 
+ ** NIAWS    900000     INTEGER ARRAYS AND WORKSPACE 
+ ** NCODE    800000     LOCATIONS FOR CODE 
+ ** NAMES     10000     ENTRIES IN DICTIONARY 
+ ** NTEXT    600000     LOCATIONS FOR TEXT (INCLUDING NAMES)
+ ** NCV        5000     DATA CURVES 
+ ***** END OF LIST OF SIZES 
+ 
+ ***** NOTES FILE MISSING
+
+1
+ * Facsimile-Script / EASY Ver. 5.96b 2010-5-19;                         
+ * Fri Apr 10 23:34:57 2026;                                             
+                                                                         
+ INTEGER #nvar 2;                                                        
+ INTEGER #nbox 1;                                                        
+ INTEGER #nreac 3;                                                       
+ INTEGER #nset 8;                                                        
+ TEXT #title "TITLE";                                                    
+                                                                         
+ KMAX 3;                                                                 
+ SETRS 25;                                                               
+                                                                         
+ VARIABLE <#nvar,#nbox> c 2*1.;                                          
+ PARAMETER <22> worksp;                                                  
+ PARAMETER <#nvar,#nbox> sc 2*1.;                                        
+ PARAMETER <#nvar,#nbox> p 2*0.;                                         
+ PARAMETER <#nvar,#nbox> d 2*0.;                                         
+ PARAMETER <#nreac,#nbox> v 3*0.;                                        
+ PARAMETER <#nreac,#nbox> k 3*1.e-20;                                    
+ PARAMETER <#nset,#nbox> s 8*1.;                                         
+ PARAMETER h;                                                            
+ PARAMETER tread -1E25;                                                  
+ PARAMETER zeitflag ;                                                    
+ PARAMETER zeitschwelle;                                                 
+ PARAMETER zsgn -1;                                                      
+ PARAMETER zeitintervall 10;                                             
+ PARAMETER tout;                                                         
+ PARAMETER tnull 1E25;                                                   
+ PARAMETER <3>input 1E25;                                                
+ PARAMETER fertig 0.0;                                                   
+                                                                         
+ COMPILE initial;                                                        
+
+  LOCN   INSTRUCTION
+
+    74: HMAX 5.0000000;                                                        
+    78: FOR #99=0;                                                             
+    85: OPEN 9 "scene_01.enz";                                                 
+    89: DO 21 FOR #88=9;                                                       
+    94: ENTER;                                                                 
+    96: LABEL 21;                                                              
+    96: WRITE 1=6, "start reading from input file";                            
+   103: CALL in;                                                               
+   105: CALL init2;                                                            
+   107: time = tread;                                                          
+   113: CALL zeitsprung;                                                       
+   115: CALL in;                                                               
+   117: OPEN 14 "scene_01.hd";                                                 
+   121: DO 16 FOR #88=14;                                                      
+   126: OPEN 10 "scene_01.cs";                                                 
+   130: DO 12 FOR #87=10;                                                      
+   135: ENTER;                                                                 
+   137: LABEL 12;                                                              
+   137: OPEN 11 "scene_01.kv";                                                 
+   141: DO 13 FOR #87=11;                                                      
+   146: ENTER;                                                                 
+   148: LABEL 13;                                                              
+   148: OPEN 12 "scene_01.pd";                                                 
+   152: DO 14 FOR #87=12;                                                      
+   157: ENTER;                                                                 
+   159: LABEL 14;                                                              
+   159: LABEL 16;                                                              
+   159: CLOSE 14;                                                              
+   161:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                61    899939    900000
+ REAL SCALARS AND ARRAYS                   63    499937    500000
+ INDEXES AND SECRETS                       99       400       499
+ CODE ARRAY                               162    799838    800000
+ NAME DICTIONARY                           43      9957     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE parset;                                                         
+
+  LOCN   INSTRUCTION
+
+   166:s<0,0>=input<1>;                                                        
+   172:s<1,0>=(295);                                                           
+   178:s<2,0>=(1013);                                                          
+   184:* convert to mixing ratios;                                             
+   184: DO 50 FOR #1=0 (1) #nbox-1;                                            
+   201: ARRAY <#nvar> worksp;                                                  
+   204: c<*,#1>=c<*,#1>/s<3,#1>;                                               
+   215: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   217: LABEL 50;                                                              
+   262:s<3,0>=((s<2,0>))/(((s<1,0>))*1.379E-19);                               
+   275:* convert back to conc;                                                 
+   275: DO 51 FOR #1=0 (1) #nbox-1;                                            
+   292: ARRAY <#nvar> worksp;                                                  
+   295: c<*,#1>=c<*,#1>*s<3,#1>;                                               
+   306: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   308: LABEL 51;                                                              
+   353:s<4,0>=(1);                                                             
+   359:s<5,0>=(150/275/3600);                                                  
+   371:s<6,0>=(c<0,0>/s<3,0>*1e9);                                             
+   383:s<7,0>=(c<1,0>/s<3,0>*1e9);                                             
+   395:ARRAY <#nbox> worksp;                                                   
+   398:k<0,*>=(s<5,*>);                                                        
+   406:k<1,*>=(s<3,*>*1e-9/60*1);                                              
+   423:k<2,*>=(s<3,*>*1e-9/60*1);                                              
+   440:ARRAY end;                                                              
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        22
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   442:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                67    899933    900000
+ REAL SCALARS AND ARRAYS                   73    499927    500000
+ INDEXES AND SECRETS                      107       392       499
+ CODE ARRAY                               443    799557    800000
+ NAME DICTIONARY                           53      9947     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE init2;                                                          
+
+  LOCN   INSTRUCTION
+
+   447: CALL parset;                                                           
+   449: CALL parset;                                                           
+   451: CALL parset;                                                           
+   453: c<0,0>=(0);                                                            
+   459: c<1,0>=(0);                                                            
+   465: DO 47 FOR #1=0 (1) #nbox-1;                                            
+   482: ARRAY <#nvar> worksp;                                                  
+   485: c<*,#1>=c<*,#1>/sc<*,#1>;                                              
+   497: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   499: LABEL 47;                                                              
+   526:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                67    899933    900000
+ REAL SCALARS AND ARRAYS                   73    499927    500000
+ INDEXES AND SECRETS                      110       389       499
+ CODE ARRAY                               527    799473    800000
+ NAME DICTIONARY                           53      9947     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE print;                                                          
+
+  LOCN   INSTRUCTION
+
+   531: CALL table;                                                            
+   533: IF (tread-time) *,*,65;                                                
+   543: CALL in;                                                               
+   545: LABEL 65;                                                              
+   545: CALL zeitsprung;                                                       
+   547: zsgn = -zsgn;                                                          
+   554: RESTART;                                                               
+   556:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                67    899933    900000
+ REAL SCALARS AND ARRAYS                   73    499927    500000
+ INDEXES AND SECRETS                      110       389       499
+ CODE ARRAY                               557    799443    800000
+ NAME DICTIONARY                           53      9947     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE table;                                                          
+
+  LOCN   INSTRUCTION
+
+   561: tout = time + tnull;                                                   
+   570: DO 48 FOR #1=0 (1) #nbox-1;                                            
+   587: ARRAY <#nvar> worksp;                                                  
+   590: c<*,#1>=c<*,#1>*sc<*,#1>;                                              
+   602: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   604: LABEL 48;                                                              
+   631: DO 50 FOR #50=#nvar,#51=#nbox,#52=#nset,#53=#nbox,#54=10;              
+   648: ENTER tout c s ;                                                       
+   659: LABEL 50;                                                              
+   659: DO 49 FOR #1=0 (1) #nbox-1;                                            
+   676: ARRAY <#nvar> worksp;                                                  
+   679: c<*,#1>=c<*,#1>/sc<*,#1>;                                              
+   691: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   693: LABEL 49;                                                              
+   720: DO 51 FOR #50=#nreac,#51=#nbox,#52=#nreac,#53=#nbox,#54=11;            
+   737: ENTER tout k v ;                                                       
+   748: LABEL 51;                                                              
+   748: DO 52 FOR #50=#nvar,#51=#nbox,#52=#nvar,#53=#nbox,#54=12;              
+   765: ENTER tout p d ;                                                       
+   776: LABEL 52;                                                              
+   776: IF <#98> 54,54,*;                                                      
+   783: fertig=1;                                                              
+   789: LABEL 54;                                                              
+   789:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                67    899933    900000
+ REAL SCALARS AND ARRAYS                   73    499927    500000
+ INDEXES AND SECRETS                      115       384       499
+ CODE ARRAY                               790    799210    800000
+ NAME DICTIONARY                           53      9947     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE general;                                                        
+
+  LOCN   INSTRUCTION
+
+   794: zeitflag=(zeitschwelle-time)*zsgn;                                     
+   806:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS                67    899933    900000
+ REAL SCALARS AND ARRAYS                   73    499927    500000
+ INDEXES AND SECRETS                      115       384       499
+ CODE ARRAY                               807    799193    800000
+ NAME DICTIONARY                           53      9947     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE equations;                                                      
+
+  LOCN   INSTRUCTION
+
+
+ *****    EQUATION FIXES MAX. NO. OF VARIABLES AS     2
+
+   811:* from compile parset;                                                  
+   811:s<6,0>=(c<0,0>/s<3,0>*1e9);                                             
+   823:s<7,0>=(c<1,0>/s<3,0>*1e9);                                             
+   835: ARRAY <#nbox> worksp;                                                  
+   838:v<0,*>=k<0,*>*s<4,*>*c<1,*>;                                            
+   854:v<1,*>=k<1,*>*s<0,*>;                                                   
+   866:v<2,*>=k<2,*>*s<0,*>;                                                   
+   878:p<0,*>=v<1,*>;                                                          
+   886:p<1,*>=v<2,*>;                                                          
+   894:d<0,*>=0;                                                               
+   901:d<1,*>=v<0,*>;                                                          
+   909: ARRAY <#nvar,#nbox> worksp;                                            
+   914: 'c=p-d;                                                                
+   926: ARRAY end;                                                             
+
+ MAXIMUM NESTING DEPTHS:   ALLOWED SO FAR        11
+                           ENCOUNTERED            1
+                           ALLOWED HENCEFORTH    20
+
+   928:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS               149    899851    900000
+ REAL SCALARS AND ARRAYS                  145    499855    500000
+ INDEXES AND SECRETS                      115       384       499
+ CODE ARRAY                               929    799071    800000
+ NAME DICTIONARY                           62      9938     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE zeitsprung;                                                     
+
+  LOCN   INSTRUCTION
+
+   933: h=zeitschwelle+zeitintervall;                                          
+   942: zeitschwelle=AMIN(h,tread);                                            
+   952:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS               149    899851    900000
+ REAL SCALARS AND ARRAYS                  145    499855    500000
+ INDEXES AND SECRETS                      115       384       499
+ CODE ARRAY                               953    799047    800000
+ NAME DICTIONARY                           62      9938     10000
+ TEXT ARRAY                                90    499910    500000
+
+
+
+                                                                         
+ COMPILE in;                                                             
+
+  LOCN   INSTRUCTION
+
+   957: CALL parset;                                                           
+   959: CALL parset;                                                           
+   961: CALL parset;                                                           
+   963: DO 97 FOR #49=3,#88=9;                                                 
+   971: ENTER input;                                                           
+   976: LABEL 97;                                                              
+   976: IF (tnull-1.e25) 98, *, *;                                             
+   986: tnull=input<0>;                                                        
+   992: LABEL 98;                                                              
+   992: WRITE 1=6, "t(input)=" ,input<0> %;                                    
+  1004: IF (input<0>-tnull) *,99,99;                                           
+  1014: fertig=1;                                                              
+  1020: CLOSE 9;                                                               
+  1022: CALL table;                                                            
+  1024: STOP;                                                                  
+  1026: LABEL 99;                                                              
+  1026: tread=input<0>-tnull;                                                  
+  1035:**;                                                                     
+
+ NO. OF VARIABLES =     2
+ NO. IMPLICIT     =     0
+ NO. OF ERRORS    =     0
+
+ SPACE FOR                             IN USE      FREE     TOTAL
+ INTEGER SCALARS AND ARRAYS               152    899848    900000
+ REAL SCALARS AND ARRAYS                  146    499854    500000
+ INDEXES AND SECRETS                      115       384       499
+ CODE ARRAY                              1036    798964    800000
+ NAME DICTIONARY                           64      9936     10000
+ TEXT ARRAY                                99    499901    500000
+
+
+
+                                                                         
+ WHENEVER fertig=1 %;                                                    
+  zeitflag=0 CALL print;                                                 
+ **;                                                                     
+                                                                         
+ BEGIN;                                                                  
+ start reading from input file
+ t(input)=  0.000000  
+ t(input)=  300.0000  
+
+ TIME  0.0000000E+00  TCPU      0.00      0.00
+   STP      0  TRY      0  DER       0  JAC     0  LUD      0  RST     0
+ t(input)=  420.0000  
+ t(input)=  1800.000  
+ t(input)=  3600.000  
+ USBR1: failed to read
+ t(input)= -1000000+19
+
+ *****     STOP         0
+
+ ***** FORMATTED WRITE STRUCTURE NUMBER  1 CLEARED
+
+ TIME  3.6000000E+03  TCPU      0.00      0.00
+   STP   1332  TRY   1332  DER    2413  JAC     0  LUD      0  RST   360
+
+  MAXIMUM SPACE REQUIREMENTS - 
+ NAMES    64,  INTS      152,  REALS      146,  CODE   1036,  VBLS      2
+
