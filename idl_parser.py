@@ -798,40 +798,72 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 "comment":   f"k[QH2O --> {rhs_str}] = {rate_expr}",
             })
 
-    # ---- IDL parameters: promote every bare FACSIMILE `X = CONST(expr)` from
-    # the master EASY so the runner can evaluate it at each ODE step.
-    # Iteration is in source_consts insertion order, which mirrors the master
-    # EASY file's first-encountered order — FACSIMILE last-wins redefinition
-    # updates the value in-place without changing the slot, so the resulting
-    # order matches the easy file's sequence. Ordering matters when one
-    # parameter references another (e.g. DILUTE uses FLOW, H2O uses M).
-    # Variables consumed by specialised buckets (SHONO/SHCHO rate-multipliers,
-    # Y background, QCO2 switch, J-values via PHTFKT_CS, P/PRESS) were either
-    # already removed from source_consts or flow harmlessly into ctx here.
-    _EXCLUDE_FROM_IDL_PARAMS = {
-        # Pressure is already captured as pressure_hpa → env_map
-        "P", "PRESS",
-        # SHONO/SHCHO values are folded directly into chamber_source_reactions
-        # rate expressions; re-promoting them is redundant but not harmful.
-        # Leaving them here documents the exclusion decision explicitly.
-    }
-    # env_map keys already have runtime values set by the ENZ file. Promoting a
-    # source_const with the same name would register a var_assignment formula
-    # that may reference ENZ-only aliases (e.g. `H2O = 1e-2*M*H2O_in` in mcm_full
-    # — `H2O_in` is the raw ENZ column name that Python stores under key `H2O`).
-    # The formula fails to evaluate, silently zeroing H2O and breaking chemistry.
-    # Skip promotion when env_map provides the value directly.
+    # ---- IDL parameters: promote source_consts to runtime var_assignments, BUT
+    # only when actually referenced by another expression the runner will
+    # evaluate. Promoting unreferenced constants (e.g. SHONO whose value is
+    # already baked into chamber_source_reactions rate strings at parse time,
+    # or tautologies like `T = T` / `HV = HV`) bloats var_assignments with
+    # dead work on every RHS call without changing chemistry.
+    #
+    # Exclusions:
+    #   - P/PRESS: already captured as pressure_hpa → env_map
+    #   - env_map keys: runtime value supplied by ENZ; a promoted formula may
+    #     reference ENZ aliases (e.g. mcm_full's `H2O = 1e-2*M*H2O_in` fails
+    #     because H2O_in is a raw-column alias not in ctx — silently zeroes H2O)
+    #   - tautologies (X = X): no-op that just adds eval overhead
+    #
+    # Reference sources scanned for "X is used somewhere":
+    #   - rate expressions from reactions we already emit
+    #   - chemistry include file contents (e.g. j_clear_sky.incl has
+    #     `COSX = COS(SZ * 0.0174533)` — SZ must be promoted for clear-sky scenarios)
+    # Transitive closure handles chains like DILUTE → FLOW.
+    _EXCLUDE_FROM_IDL_PARAMS = {"P", "PRESS"}
     _env_map_keys = {k.upper() for k in env_map.keys()}
-    for _pname, _pval in source_consts.items():
-        if _pname in _EXCLUDE_FROM_IDL_PARAMS:
-            continue
-        if _pname in _env_map_keys:
-            skipped_notes.append(
-                f"{_pname} = CONST({_pval}): already provided by env_map "
-                f"— idl_parameter promotion skipped"
-            )
-            continue
-        idl_parameters[_pname] = _pval
+
+    _rate_expr_text = []
+    for _r in (chamber_source_reactions + _custom_reactions_list
+               + injection_reactions + _mcm_rate_overrides + idl_dilution_reactions):
+        _rate_expr_text.append(str(_r.get("rate", "")))
+    _chem_dir = chemistry_folder or os.path.join(
+        os.path.dirname(os.path.abspath(easy_path)), "chemistry")
+    for _mech_rel in mechanism_files_raw:
+        _mech_path = (_mech_rel if os.path.isabs(_mech_rel)
+                      else _find_file_recursive(_mech_rel, _chem_dir))
+        if _mech_path and not os.path.isabs(_mech_path):
+            _mech_path = os.path.join(_chem_dir, _mech_path)
+        if _mech_path and os.path.exists(_mech_path):
+            try:
+                with open(_mech_path, "r", encoding="latin-1") as _fh:
+                    _rate_expr_text.append(_fh.read())
+            except Exception:
+                pass
+    _base_expr = " ".join(_rate_expr_text).upper()
+
+    def _is_tautology(name, expr):
+        return expr.strip().upper() == name.upper()
+
+    def _is_referenced(name, text):
+        return re.search(rf"\b{re.escape(name)}\b", text) is not None
+
+    # Transitive closure: promote `DILUTE` → scan its formula for FLOW → promote.
+    while True:
+        _added = False
+        _promoted_formulas = " ".join(idl_parameters.values()).upper()
+        _search_text = _base_expr + " " + _promoted_formulas
+        for _pname, _pval in source_consts.items():
+            if _pname in _EXCLUDE_FROM_IDL_PARAMS:
+                continue
+            if _pname in _env_map_keys:
+                continue
+            if _pname in idl_parameters:
+                continue
+            if _is_tautology(_pname, _pval):
+                continue
+            if _is_referenced(_pname, _search_text):
+                idl_parameters[_pname] = _pval
+                _added = True
+        if not _added:
+            break
     if idl_dilution_reactions and "DILUTE" not in idl_parameters:
         # Fallback: derive from FLOW env_map entry if DILUTE CONST was not found
         idl_parameters["DILUTE"] = "(FLOW + 0.010*60) / (276. * 3600.)"

@@ -62,12 +62,12 @@
     "injection_reactions": [],
     "idl_dilution_reactions": [],
     "idl_parameters": {
-        "FLOW": "10",
         "DILUTE": "(FLOW+0.010*60)/(276.*3600.)",
         "DIL": "1.",
         "SZA": "30",
         "SZ": "30",
-        "H2O": "1e-2*M*0.02"
+        "H2O": "1e-2*M*0.02",
+        "FLOW": "10"
     },
     "analytical_dilution": true,
     "chamber_source_reactions": [],
