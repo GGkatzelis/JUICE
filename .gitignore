@@ -44,6 +44,16 @@ dist/
 **/simulation_kinetics.npz
 **/simulation_reactions.csv
 
+# mcm_full result CSVs exceed GitHub's 50 MB recommended / 100 MB hard limit
+# (5842 species × 18 h × 2020 timesteps = 75 MB linear / 275 MB piecewise).
+# Regenerate via `python scenario_runner.py scenario_config.json`.
+MCM_tested_scenarios/IDL Input/mcm_full/simulation_results_linear.csv
+MCM_tested_scenarios/IDL Input/mcm_full/simulation_results_piecewise.csv
+
+# Large chemistry rendering artefacts (can be regenerated from .fac/.cs)
+**/chemspace_animation.mp4
+**/chemspace_animation.gif
+
 # Experimental ENZ/config variants (e.g. O3/HO2-constrained diagnostics)
 **/kammer_with*.enz
 **/scenario_config_*constrained*.json
