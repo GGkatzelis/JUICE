@@ -577,3 +577,51 @@ if another mismatch surfaces. General principle established: **any
 hardcoded physical default in Python that overrides a user-configurable
 input is a latent bug**. Use `setdefault` or conditional assignment,
 never `ctx.update({...})` for quantities the user might want to control.
+
+### Follow-up: Bug 3 narrowed (commit 62f1c57, 2026-04-19)
+
+The initial Bug 3 fix promoted every master-easy `X = CONST(expr)` to
+`idl_parameters` (evaluated at every RHS call). Audit showed most promotions
+were dead weight:
+- Tautologies: `T = T`, `HV = HV`
+- Values already baked into emitted rate strings: SHONO, QSHCHO, GAMMA_LIMONENE,
+  GAMMA_DODECANE
+- Unused diagnostic sums: `SOA = SOA_seed + SOA_LIM_*`
+- Referenced only in pre-substitution raw-file text, not in any runtime expression
+
+Narrowed rule — promote only if the name appears in:
+1. An emitted reaction's rate string (chamber / custom / injection / dilution / override)
+2. A chemistry include file parameter formula (handles `COSX = COS(SZ * 0.0174533)`
+   in j_clear_sky.incl, so SZ promotes correctly for clear-sky scenarios)
+3. The formula of an already-promoted idl_parameter (transitive closure for
+   dependencies like DILUTE → FLOW)
+
+Always excluded: P/PRESS (captured as pressure_hpa), env_map keys (ENZ-driven),
+tautologies.
+
+**Counts after narrowing:**
+- mcm_full: 11 → 4 idl_parameters
+- scene_03: 6 → 6 (unchanged; all 6 are legitimately referenced)
+
+**Speed note:** I briefly attributed a 2.5× mcm_full slowdown to Bug 3's dead
+var_assignments — this was wrong. Step-by-step solver progress is identical
+pre- and post-Bug-3, so the slowdown was purely CPU contention from pyME2
+running in parallel VS Code. Narrowing is still worthwhile for cleanliness,
+but doesn't recover the "2.5× speedup" I initially claimed. See
+`feedback_cpu_contention_timing.md` in memory for the benchmarking pitfall.
+
+### Validation summary after 7 bugs + Bug 3 narrowing
+
+| Scenario | Mode | Pre-fix within ±2% | Post-fix within ±2% |
+|---|---|---:|---:|
+| scene_03 | linear | 0/15 (−90%+ radicals) | **15/15** (all ≤ 0.15%) |
+| scene_03 | piecewise | 0/15 | **15/15** |
+| ethanol | linear | 6/38 | 9/38 |
+| ethanol | piecewise | 11/38 | 12/38 |
+| mcm_full | linear | 90/411 | 78/412 |
+| mcm_full | piecewise | 111/404 | (pending re-run) |
+
+Key residuals to investigate next:
+- H2O2 regressed ~5% in both ethanol and mcm_full linear (−3.1 → −18% ethanol,
+  −12.6 → −15.2% mcm_full). Driven by J3 spectral-shape correction changing
+  the HO2+HO2 / H2O2+hv balance. Needs dedicated look at the H2O2 budget.
