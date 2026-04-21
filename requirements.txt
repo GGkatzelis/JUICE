@@ -1,0 +1,10 @@
+# JUICE third-party dependencies
+# Python >= 3.11 required (f-strings, dataclasses, typing). Tested on 3.14.3.
+#
+# Install:  pip install -r requirements.txt
+
+numpy>=2.0,<3
+scipy>=1.13,<2
+pandas>=2.2,<4
+matplotlib>=3.9,<4
+PyQt6>=6.6,<7

@@ -22,8 +22,12 @@ Decoupled three-stage workflow:
 | `scenario_runner.py` | ODE executor |
 | `mechanism_solver.py` | Legacy stub — core logic fully migrated to `scenario_runner.py` |
 | `results_viewer.py` | Interactive results viewer + process analysis engine (launched by runner) |
-| `Python_vs_FACSIMILE.py` | Standalone two-tab comparison GUI: timeseries overlay + slope matrix vs FACSIMILE `.cs` output |
-| `easy_to_json.py` | Converter: FACSIMILE `.easy` + `.enz` → `scenario_config.json` |
+| `idl_parser.py` | SAPHIR IDL-workflow `.easy` → `scenario_config.json` converter |
+| `mcm_converter.py` | Raw MCM `.fac` → EASY include files (Python port of `mcm331cv_FR.pro`) |
+| `compare_vs_facsimile.py` | Single-scenario CLI: median ratios + best/worst species vs FACSIMILE `.cs` |
+| `run_benchmark.py` | Batch regression runner across shipped scenarios, both interpolation modes |
+| `diagnostic_comparison.py` | Side-by-side timeseries plotting tool for ad-hoc scenario diffs |
+| `simulation_scenarios.py` | Developer-only hardcoded scenarios (bypasses `.easy`; known H2O-unit quirks) |
 
 ## 3. Core Physics
 

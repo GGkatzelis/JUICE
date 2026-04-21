@@ -58,6 +58,20 @@ MCM_tested_scenarios/IDL Input/mcm_full/simulation_results_piecewise.csv
 **/kammer_with*.enz
 **/scenario_config_*constrained*.json
 
+# MCM database subsets not yet part of the shipped release
+MCM_database/MCM_3.3.1/Limonene/
+
+# FACSIMILE compilation byproducts (PostScript plots, HTML logs, .sav).
+# The .cs timeseries is the authoritative reference and stays in the repo.
+**/*.cs.ps
+**/*.kv.ps
+**/*.pd.ps
+**/*.UTC.ps
+**/*.sav
+**/*.html
+**/*.hd
+**/*.elog
+
 # Local logs / scratch
 *.log
 /tmp/
