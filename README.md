@@ -87,6 +87,8 @@ JUICE is continuously regression-tested against FACSIMILE. Current agreement on 
 
 See [architecture.md](architecture.md) for the physics, validation deep-dive, and known limitations.
 
+To run and compare your own scenario, follow [docs/validation_with_claude.md](docs/validation_with_claude.md) — a step-by-step playbook (also pasteable directly into Claude Code or claude.ai to have it run the comparison and return a markdown report).
+
 ## Citation
 
 If you use JUICE in a publication, please cite the repository and contact the author for the corresponding methods reference.
