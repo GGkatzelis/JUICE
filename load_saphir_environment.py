@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
 from scipy.interpolate import interp1d
+import fnmatch
 import re
 
-def load_saphir_environment(file_path, interpolation='linear'):
+def load_saphir_environment(file_path, interpolation='linear', step_col_patterns=None):
     """Load ENZ environment file and build interpolation providers.
 
     interpolation: 'linear'    — linear interpolation for smooth variables (T, J-rates,
@@ -14,7 +15,15 @@ def load_saphir_environment(file_path, interpolation='linear'):
                                  convention. Slower (BDF restart at every ENZ row) and
                                  physically less realistic, but reproduces legacy FACSIMILE
                                  output exactly.
+
+    step_col_patterns: list of name prefixes/exact names (case-insensitive) that identify
+                       step-function (zero-order hold) control columns, e.g. ['Q', 'HV'].
+                       A column matches if its name starts with or equals any pattern.
+                       Defaults to ['Q', 'HV'] if None.
     """
+    if step_col_patterns is None:
+        step_col_patterns = ['Q*', 'HV']
+
     col_map = {}
     data_start_line = 0
     headers = []
@@ -35,8 +44,17 @@ def load_saphir_environment(file_path, interpolation='linear'):
     rev_map = {v: k for k, v in col_map.items()}
     df = df.rename(columns=rev_map)
 
-    # Q-switch columns (binary on/off) are ALWAYS piecewise-constant
-    _q_cols = {c for c in df.columns if c.upper().startswith('Q') or c.upper() == 'HV'}
+    # Identify step-function (zero-order hold) columns using fnmatch-style patterns.
+    # Patterns are matched case-insensitively against column names.
+    # Examples: "Q*" matches Q, QNO, Q_NO2; "HV" matches only HV; "Q*_NO" matches Q_NO, Q25_NO.
+    def _is_step_col(name):
+        nu = name.upper()
+        for p in step_col_patterns:
+            if fnmatch.fnmatch(nu, p.upper()):
+                return True
+        return False
+
+    _q_cols = {c for c in df.columns if _is_step_col(c)}
 
     providers = {}
     for col in df.columns:
@@ -49,4 +67,19 @@ def load_saphir_environment(file_path, interpolation='linear'):
             providers[col] = interp1d(df['time'], df[col], kind='linear',
                                       fill_value="extrapolate", bounds_error=False)
 
-    return providers, df['time'].min(), df['time'].max(), headers
+    # Compute step_change_times: ENZ row times where at least one step-function column
+    # actually changes its value.  These are the times requiring BDF solver restarts in
+    # linear mode.  In piecewise mode all ENZ rows are restart points.
+    step_change_times = []
+    if interpolation == 'piecewise':
+        # Every internal ENZ row is a potential step change
+        step_change_times = list(df['time'].values[1:-1].astype(float))
+    else:
+        for i in range(len(df) - 1):
+            for col in _q_cols:
+                if col in df.columns and df[col].iloc[i] != df[col].iloc[i + 1]:
+                    step_change_times.append(float(df['time'].iloc[i + 1]))
+                    break
+
+    return (providers, float(df['time'].min()), float(df['time'].max()),
+            headers, df['time'].values.astype(float), step_change_times)

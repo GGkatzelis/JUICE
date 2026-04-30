@@ -834,6 +834,7 @@ class ResultsViewer(QMainWindow):
 
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
+        self.showMaximized()
         _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
         if not _icon_pixmap.isNull():
             self.setWindowIcon(QIcon(_icon_pixmap))
@@ -841,6 +842,9 @@ class ResultsViewer(QMainWindow):
         # Convert MCM index from SAPHIR epoch (sec since 2000-01-01) to hours since
         # UTC midnight of the experiment day, same reference as NC instrument data.
         self.df.index = ((self.df.index.astype(float) + _NC_EPOCH_OFFSET) - self._midnight_unix) / 3600.0
+
+        # Add virtual derived species (in-memory only, not written to CSV)
+        self.df = self._add_virtual_species(self.df)
 
         self.budget_engine = BudgetEngine() if HAS_BUDGET else None
         self._config_label_text = "No config loaded"
@@ -928,6 +932,11 @@ class ResultsViewer(QMainWindow):
         btn_clear.clicked.connect(self.clear_plot)
         control_layout.addWidget(btn_clear)
 
+        btn_exit = QPushButton("✕ Exit")
+        btn_exit.setStyleSheet("font-weight: bold; background-color: #7a1a1a; color: white;")
+        btn_exit.clicked.connect(self.close)
+        control_layout.addWidget(btn_exit)
+
         left_layout.addLayout(control_layout)
         splitter.addWidget(left_panel)
 
@@ -1009,6 +1018,56 @@ class ResultsViewer(QMainWindow):
         # Auto-discover scenario_config.json — must come after UI is fully built
         self._auto_load_config(csv_path)
 
+    # ── Virtual / derived species ────────────────────────────────────────────
+    @staticmethod
+    def _add_virtual_species(df):
+        """Add derived columns that are not in the data but can be computed from it.
+        These exist only in memory — never written to the output CSV.
+        Partial sums: if some constituents are missing they are skipped; the
+        virtual species is only created when at least 2 constituents are found.
+        """
+        df = df.copy()
+        col_upper = {c.upper(): c for c in df.columns}   # upper→actual name map
+
+        def _get(name):
+            """Return column array for name (case-insensitive) or None."""
+            actual = col_upper.get(name.upper())
+            return df[actual].values.astype(float) if actual is not None else None
+
+        def _virtual_sum(label, constituents, df_out, col_upper_out):
+            """Sum constituents into label if ≥2 found and label not already present."""
+            if label.upper() in col_upper_out:
+                return df_out, col_upper_out
+            total = None
+            found = []
+            for sp, factor in constituents:
+                v = _get(sp)
+                if v is not None:
+                    total = v * factor if total is None else total + v * factor
+                    found.append(f"{factor}×{sp}" if factor != 1 else sp)
+            if total is not None and len(found) >= 2:
+                df_out = df_out.copy() if id(df_out) == id(df) else df_out
+                df_out[label] = total
+                col_upper_out = col_upper_out | {label.upper(): label}
+                print(f"[Virtual] {label} = {' + '.join(found)}")
+            return df_out, col_upper_out
+
+        # NOx = NO + NO2
+        df, col_upper = _virtual_sum('NOx',
+            [('NO', 1), ('NO2', 1)], df, col_upper)
+
+        # Ox = O3 + NO2
+        df, col_upper = _virtual_sum('Ox',
+            [('O3', 1), ('NO2', 1)], df, col_upper)
+
+        # NOy = NO + NO2 + NO3 + 2×N2O5 + HNO3 + HONO + HNO4 + PAN
+        df, col_upper = _virtual_sum('NOy',
+            [('NO', 1), ('NO2', 1), ('NO3', 1), ('N2O5', 2),
+             ('HNO3', 1), ('HONO', 1), ('HNO4', 1), ('PAN', 1)],
+            df, col_upper)
+
+        return df
+
     # ── Tree building ─────────────────────────────────────────────────────────
     def _populate_tree(self):
         """Fill MCM Output and SAPHIR Environment folders from self.df columns."""
@@ -1017,8 +1076,6 @@ class ResultsViewer(QMainWindow):
 
         mcm_active, mcm_empty = [], []
         for col in sorted(self.df.columns):
-            if col == 'M':
-                continue
             if col.upper().startswith('SAPHIR_'):
                 item = QTreeWidgetItem([col])
                 self._saphir_folder.addChild(item)
@@ -1944,9 +2001,9 @@ class ResultsViewer(QMainWindow):
             "Loaded SAPHIR instruments (NC)",
         ])
         src_row.addWidget(self._cmp_src_combo)
-        load_btn = QPushButton("Load Reference…")
-        load_btn.clicked.connect(self._cmp_load_reference)
-        src_row.addWidget(load_btn)
+        self._cmp_load_btn = QPushButton("Load Reference…")
+        self._cmp_load_btn.clicked.connect(self._cmp_load_reference)
+        src_row.addWidget(self._cmp_load_btn)
 
         src_row.addSpacing(12)
         src_row.addWidget(QLabel("Noise threshold:"))
@@ -1956,6 +2013,16 @@ class ResultsViewer(QMainWindow):
         btn_slopes = QPushButton("Compute Slopes")
         btn_slopes.clicked.connect(self._cmp_compute_slopes)
         src_row.addWidget(btn_slopes)
+
+        self._cmp_react_only_btn = QPushButton("Nur Reaktionsspezies")
+        self._cmp_react_only_btn.setCheckable(True)
+        self._cmp_react_only_btn.setChecked(True)
+        self._cmp_react_only_btn.setToolTip(
+            "Aktiv: zeigt nur Spezies aus Reaktionsgleichungen\n"
+            "Inaktiv: zeigt alles aus JUICE oder Referenz")
+        self._cmp_react_only_btn.setStyleSheet(
+            "QPushButton:checked { background-color: #2E5A88; color: white; font-weight: bold; }")
+        src_row.addWidget(self._cmp_react_only_btn)
 
         self._cmp_ref_lbl = QLabel("No reference loaded")
         self._cmp_ref_lbl.setStyleSheet("color: #666; font-style: italic;")
@@ -2040,9 +2107,11 @@ class ResultsViewer(QMainWindow):
 
         right_vsplit = QSplitter(Qt.Orientation.Vertical)
 
-        self._cmp_ts_figs     = []
-        self._cmp_ts_canvases = []
-        self._cmp_ts_combos   = []
+        self._cmp_ts_figs      = []
+        self._cmp_ts_canvases  = []
+        self._cmp_ts_combos    = []
+        self._cmp_ts_ppb_btns  = []
+        self._cmp_ts_diff_btns = []
 
         for slot in range(2):
             slot_widget = QWidget()
@@ -2060,6 +2129,29 @@ class ResultsViewer(QMainWindow):
                 lambda sp, s=s: self._cmp_draw_timeseries(s, sp) if sp else None)
             self._cmp_ts_combos.append(combo)
             ctrl.addWidget(combo, stretch=1)
+
+            ppb_btn = QPushButton("ppb")
+            ppb_btn.setCheckable(True)
+            ppb_btn.setChecked(True)
+            ppb_btn.setFixedWidth(44)
+            ppb_btn.setToolTip("Toggle between molec/cm³ and ppb (÷M×10⁹)")
+            ppb_btn.toggled.connect(
+                lambda checked, s=s: self._cmp_draw_timeseries(
+                    s, self._cmp_ts_combos[s].currentText()))
+            self._cmp_ts_ppb_btns.append(ppb_btn)
+            ctrl.addWidget(ppb_btn)
+
+            diff_btn = QPushButton("Δ")
+            diff_btn.setCheckable(True)
+            diff_btn.setFixedWidth(36)
+            diff_btn.setToolTip(
+                "Show difference JUICE − Reference on right axis\n"
+                "(left axis: both timeseries, right axis: Δ)")
+            diff_btn.toggled.connect(
+                lambda checked, s=s: self._cmp_draw_timeseries(
+                    s, self._cmp_ts_combos[s].currentText()))
+            self._cmp_ts_diff_btns.append(diff_btn)
+            ctrl.addWidget(diff_btn)
             slot_layout.addLayout(ctrl)
 
             fig = Figure()
@@ -2085,17 +2177,64 @@ class ResultsViewer(QMainWindow):
         self.right_tabs.addTab(outer, "Comparison")
 
     # ── Reference loading ─────────────────────────────────────────────────────
+    def _cmp_easy_scenario_dir(self) -> str:
+        """Return the EASY scenario subfolder for the current simulation.
+
+        Derives the scenario name from the loaded CSV path (e.g. scene_01 from
+        …/JUICE/scene_01/simulation_results.csv), reads easy_root from
+        FR_GUI.toml, and returns easy_root/scene_01 if it exists and contains
+        at least one .cs file.  Falls back to "" so the file dialog opens in
+        its default location.
+        """
+        try:
+            import tomllib
+            toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "FR_GUI.toml")
+            if os.path.isfile(toml_path):
+                with open(toml_path, "rb") as fh:
+                    toml = tomllib.load(fh)
+                easy_root = toml.get("paths", {}).get("easy_root", "")
+            else:
+                easy_root = ""
+        except Exception:
+            easy_root = ""
+
+        scenario_name = ""
+        if hasattr(self, "csv_path") and self.csv_path:
+            scenario_name = os.path.basename(os.path.dirname(
+                os.path.abspath(self.csv_path)))
+
+        if easy_root and scenario_name:
+            candidate = os.path.join(easy_root, scenario_name)
+            if os.path.isdir(candidate) and any(
+                    f.endswith(".cs") for f in os.listdir(candidate)):
+                return candidate
+
+        return easy_root if easy_root else ""
+
     def _cmp_load_reference(self):
         src = self._cmp_src_combo.currentText()
 
         if src.startswith("FACSIMILE"):
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Load FACSIMILE Output", "", "CS Files (*.cs);;All Files (*)")
+            # Auto-load if exactly one .cs file exists in the EASY scenario folder.
+            start_dir = self._cmp_easy_scenario_dir()
+            auto_path = None
+            if start_dir and os.path.isdir(start_dir):
+                cs_files = [os.path.join(start_dir, f)
+                            for f in os.listdir(start_dir) if f.endswith(".cs")]
+                if len(cs_files) == 1:
+                    auto_path = cs_files[0]
+            if auto_path:
+                path = auto_path
+            else:
+                path, _ = QFileDialog.getOpenFileName(
+                    self, "Load FACSIMILE Output", start_dir,
+                    "CS Files (*.cs);;All Files (*)")
             if not path:
                 return
             try:
                 df = self._cmp_parse_facsimile(path)
-                self._cmp_df_ref    = df
+                self._cmp_df_ref    = self._add_virtual_species(df)
                 self._cmp_ref_label = os.path.basename(path)
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", str(e))
@@ -2111,7 +2250,7 @@ class ResultsViewer(QMainWindow):
                 # Same SAPHIR-epoch → hours-since-midnight conversion as main CSV
                 t_unix = df.index.astype(float) + _NC_EPOCH_OFFSET
                 df.index = (t_unix - self._midnight_unix) / 3600.0
-                self._cmp_df_ref    = df
+                self._cmp_df_ref    = self._add_virtual_species(df)
                 self._cmp_ref_label = os.path.basename(path)
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", str(e))
@@ -2133,11 +2272,13 @@ class ResultsViewer(QMainWindow):
                                       left=np.nan, right=np.nan)
             df = pd.DataFrame(rows).set_index('__t__')
             df.index.name = 'Time_hours'
-            self._cmp_df_ref    = df
+            self._cmp_df_ref    = self._add_virtual_species(df)
             self._cmp_ref_label = "Loaded SAPHIR instruments"
 
         self._cmp_ref_lbl.setText(f"Ref: {self._cmp_ref_label}")
         self._cmp_ref_lbl.setStyleSheet("color: black; font-style: normal;")
+        self._cmp_load_btn.setStyleSheet(
+            "font-weight: bold; background-color: #1e7e34; color: white;")
 
     def _cmp_parse_facsimile(self, path):
         """Parse a FACSIMILE .cs file; align to hours-since-midnight of this experiment."""
@@ -2182,12 +2323,38 @@ class ResultsViewer(QMainWindow):
         except ValueError:
             threshold = 1e-6
 
-        mcm_cols = set(self.df.columns) - {'M'}
-        ref_cols = set(self._cmp_df_ref.columns) - {'M'}
-        common   = sorted(mcm_cols & ref_cols)
-        if not common:
-            QMessageBox.warning(self, "No Common Species",
-                                "No overlapping species found between MCM and reference.")
+        mcm_cols = set(self.df.columns)
+        ref_cols = set(self._cmp_df_ref.columns)
+        react_only = (hasattr(self, '_cmp_react_only_btn')
+                      and self._cmp_react_only_btn.isChecked())
+
+        if react_only:
+            # Active: only chemical species (reactants/products in reactions).
+            # Exclude rate constants, physical parameters, ENZ columns.
+            def _is_reaction_species(name):
+                n = name.upper()
+                if n.startswith('SAPHIR_'): return False
+                if n.startswith('KMT') or n.startswith('KRO') or n.startswith('KAP'): return False
+                if n.startswith('KBP') or n.startswith('KFP') or n.startswith('KNO'): return False
+                if n.startswith('KCH') or n.startswith('KRO') or n.startswith('KDE'): return False
+                if n.startswith('KRO'): return False
+                if len(n) > 1 and n[0] == 'J' and n[1:].replace('_CS','').replace('_','').isdigit(): return False
+                if n in {'M','T','P','RH','SZ','SZA','HV','COSX','DIL','DILUTE',
+                         'FLOW','LNO2','MNO2','NNO2','KDEC','KMT05','KRO2NO3',
+                         'DIL','N2','O2','H2O','TEMP','PRESS'}: return False
+                return True
+            common = sorted(c for c in mcm_cols & ref_cols if _is_reaction_species(c))
+            self._cmp_only_juice = []
+            self._cmp_only_ref   = []
+        else:
+            # Inactive: everything from either dataset
+            common = sorted(mcm_cols & ref_cols)
+            self._cmp_only_juice = sorted(mcm_cols - ref_cols)
+            self._cmp_only_ref   = sorted(ref_cols - mcm_cols)
+
+        if not common and not getattr(self, '_cmp_only_juice', []) and not getattr(self, '_cmp_only_ref', []):
+            QMessageBox.warning(self, "No Species",
+                                "Keine Spezies gefunden.")
             return
 
         t_min = max(self.df.index.min(), self._cmp_df_ref.index.min())
@@ -2199,11 +2366,21 @@ class ResultsViewer(QMainWindow):
             s = df[col].dropna()
             return np.interp(common_t, s.index.values.astype(float), s.values)
 
-        # Global noise scale: 99th percentile across all common species
+        # Global noise scale: 99th percentile across chemical-species common columns.
+        # Physical/environmental parameters (M, T, P, DIL, DILUTE, SAPHIR_*) are
+        # excluded: M (~2.5e19) or varying T/P would inflate the scale and cause
+        # real chemical species to be filtered out as noise.
+        _NON_SCALE = {'M', 'T', 'TEMP', 'P', 'PRESS', 'DIL', 'DILUTE', 'MR_X', 'MR_Y', 'Q', 'HV', 'SZ'}
+        scale_cols = [c for c in common
+                      if c.upper() not in _NON_SCALE
+                      and not c.upper().startswith('SAPHIR_')
+                      and not c.upper().startswith('MR_')]
+        if not scale_cols:
+            scale_cols = common
         py_scale = float(np.nanpercentile(
-            np.abs(self.df[common].select_dtypes(include='number').values), 99))
+            np.abs(self.df[scale_cols].select_dtypes(include='number').values), 99))
         ref_scale = float(np.nanpercentile(
-            np.abs(self._cmp_df_ref[common].select_dtypes(include='number').values), 99))
+            np.abs(self._cmp_df_ref[scale_cols].select_dtypes(include='number').values), 99))
         py_scale  = py_scale  if py_scale  > 0 else 1.0
         ref_scale = ref_scale if ref_scale > 0 else 1.0
 
@@ -2212,26 +2389,21 @@ class ResultsViewer(QMainWindow):
             py_s  = interp(self.df, sp)
             ref_s = interp(self._cmp_df_ref, sp)
 
-            if sp not in self._NOISE_EXCEPTIONS:
-                if (np.nanmax(np.abs(py_s))  < threshold * py_scale and
-                        np.nanmax(np.abs(ref_s)) < threshold * ref_scale):
-                    continue
-
             mask = np.isfinite(py_s) & np.isfinite(ref_s)
             if mask.sum() < 5:
                 continue
             px, rx = py_s[mask], ref_s[mask]
-            if np.ptp(rx) == 0 and np.ptp(px) == 0:
+
+            # Skip only if both are identically zero throughout
+            if np.nanmax(np.abs(px)) == 0 and np.nanmax(np.abs(rx)) == 0:
                 continue
 
-            # Robust slope: median of point-wise ratios where ref exceeds noise floor.
-            # This avoids the polyfit being dominated by a single outlier.
-            noise_floor = threshold * ref_scale
-            ratio_mask = (rx > noise_floor) & (px > 0)
+            # Slope: median of ratios at points where reference > 0
+            ratio_mask = (np.abs(rx) > 0) & np.isfinite(px / np.where(rx != 0, rx, np.nan))
             if ratio_mask.sum() >= 3:
                 slope = float(np.median(px[ratio_mask] / rx[ratio_mask]))
-            elif rx.mean() > 0:
-                slope = float(px.mean() / rx.mean())
+            elif np.nanmean(np.abs(rx)) > 0:
+                slope = float(np.nanmean(px) / np.nanmean(rx))
             else:
                 slope = np.nan
 
@@ -2247,16 +2419,22 @@ class ResultsViewer(QMainWindow):
                 'py': px, 'ref': rx, 'common_t': common_t[mask],
             }
 
-        print(f"[Comparison] {len(self._cmp_slope_results)} species passed noise filter.")
+        only_juice = getattr(self, '_cmp_only_juice', [])
+        only_ref   = getattr(self, '_cmp_only_ref',   [])
 
-        # Populate species combos with the result set (block signals to avoid spurious draws)
+        # Populate species combos: slope species first, then remaining df columns,
+        # then JUICE-only and Ref-only entries
         species_list = sorted(self._cmp_slope_results.keys())
+        all_cols = sorted(c for c in self.df.columns if c not in species_list)
+        juice_only_items = [f"{c} (nur JUICE)" for c in only_juice]
+        ref_only_items   = [f"{c} (nur Ref)"   for c in only_ref]
+        full_list = species_list + all_cols + juice_only_items + ref_only_items
         for slot, combo in enumerate(self._cmp_ts_combos):
             prev = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
-            combo.addItems(species_list)
-            if prev in species_list:
+            combo.addItems(full_list)
+            if prev in full_list:
                 combo.setCurrentText(prev)
             combo.blockSignals(False)
             # Redraw whatever is currently selected
@@ -2448,8 +2626,7 @@ class ResultsViewer(QMainWindow):
             tc  = 'black' if lum > 0.45 else 'white'
             ax.text(x + box_w/2, y + box_h*0.67, sp,
                     ha='center', va='center', fontsize=fsize_name, fontweight='bold', color=tc)
-            theta_str = f"θ={theta:.0f}°" if np.isfinite(theta) else ""
-            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}  {theta_str}",
+            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}",
                     ha='center', va='center', fontsize=fsize_val, color=tc)
             self._cmp_slope_box_map.append((x, y, x+box_w, y+box_h, sp))
 
@@ -2460,7 +2637,7 @@ class ResultsViewer(QMainWindow):
         sm = _mcm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
         self._cmp_slope_fig.colorbar(sm, ax=ax, orientation='horizontal',
                                      fraction=0.03, pad=0.01,
-                                     label=f'Slope  (MCM / {self._cmp_ref_label})')
+                                     label=f'Slope  (JUICE / {self._cmp_ref_label})')
         self._cmp_slope_fig.tight_layout(pad=0.3)
         self._cmp_slope_canvas.draw()
 
@@ -2486,20 +2663,61 @@ class ResultsViewer(QMainWindow):
     def _cmp_draw_timeseries(self, slot, sp):
         """Draw a single timeseries panel for the given slot (0=top, 1=bottom)."""
         data = self._cmp_slope_results.get(sp)
-        if data is None:
-            return
-        slope, theta = data['slope'], data['theta']
-        py_vals, ref_vals, common_t = data['py'], data['ref'], data['common_t']
-
-        # Store for crosshair lookups
-        self._cmp_ts_data[slot] = (py_vals, ref_vals, common_t, sp)
-        # Clear any stale crosshair artists before redrawing
-        self._cmp_crosshair[slot] = {'vline': None, 'text': None}
 
         fig    = self._cmp_ts_figs[slot]
         canvas = self._cmp_ts_canvases[slot]
         fig.clear()
         ax = fig.add_subplot(111)
+
+        # ppb toggle state and conversion helper
+        use_ppb = (len(self._cmp_ts_ppb_btns) > slot
+                   and self._cmp_ts_ppb_btns[slot].isChecked())
+        unit_lbl = "ppb" if use_ppb else "molec/cm³"
+
+        def _to_unit(arr, t_arr_ref):
+            if not use_ppb or 'M' not in self.df.columns:
+                return arr
+            M_interp = np.interp(t_arr_ref,
+                                 self.df.index.values.astype(float),
+                                 self.df['M'].values.astype(float))
+            M_interp = np.where(M_interp > 0, M_interp, 1.0)
+            return arr / M_interp * 1e9
+
+        # Variable not in slope results — plot what we have
+        if data is None:
+            if sp not in self.df.columns:
+                canvas.draw()
+                return
+            t_arr = self.df.index.values.astype(float)
+            vals  = _to_unit(self.df[sp].values.astype(float), t_arr)
+            ax.plot(t_arr, vals, lw=1.5, color='steelblue', label=f"{sp} JUICE")
+            # Also plot reference if available under the same name
+            ref_vals_raw = None
+            if self._cmp_df_ref is not None and sp in self._cmp_df_ref.columns:
+                t_ref = self._cmp_df_ref.index.values.astype(float)
+                rv = _to_unit(self._cmp_df_ref[sp].values.astype(float), t_ref)
+                ax.plot(t_ref, rv, lw=1.5, color='darkorange', ls='--',
+                        label=f"{sp} {self._cmp_ref_label}")
+                ref_vals_raw = np.interp(t_arr, t_ref, rv)
+            ax.set_title(f"{sp}  [{unit_lbl}]", fontsize=9, loc='left')
+            ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+            ax.set_xlabel("Time of Day (UTC)")
+            ax.legend(loc='lower right', bbox_to_anchor=(1, 1.01), ncol=1,
+                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+            ax.grid(True, ls='--', alpha=0.35)
+            fig.tight_layout(pad=0.8)
+            fig.subplots_adjust(left=0.18)
+            canvas.draw()
+            self._cmp_ts_data[slot] = (vals, ref_vals_raw, t_arr, sp)
+            return
+
+        slope, theta = data['slope'], data['theta']
+        py_vals  = _to_unit(data['py'],  data['common_t'])
+        ref_vals = _to_unit(data['ref'], data['common_t'])
+        common_t = data['common_t']
+
+        # Clear any stale crosshair artists before redrawing
+        self._cmp_crosshair[slot] = {'vline': None, 'text': None}
 
         hv_col = next((c for c in self.df.columns if c.upper() in ('SAPHIR_HV', 'HV')), None)
         if hv_col is not None:
@@ -2518,19 +2736,62 @@ class ResultsViewer(QMainWindow):
                            label='Roof open' if first else '', zorder=0)
                 first = False
 
-        theta_str = f"θ={theta:.0f}°" if np.isfinite(theta) else ""
-        ax.plot(common_t, py_vals,  label=f"{sp} MCM",
+        def _scale_for_label(arr):
+            """Return (scaled_array, scale_str) so tick values are in 0.1–1000 range."""
+            max_abs = np.nanmax(np.abs(arr)) if len(arr) else 0.0
+            if max_abs == 0:
+                return arr, ""
+            exp = int(np.floor(np.log10(max_abs)))
+            if -2 <= exp <= 3:          # already readable — no scaling
+                return arr, ""
+            # Build superscript string using LaTeX mathtext
+            scale = 10.0 ** exp
+            sup = f"$\\times 10^{{{exp}}}$"
+            return arr / scale, sup
+
+        show_diff = (len(self._cmp_ts_diff_btns) > slot
+                     and self._cmp_ts_diff_btns[slot].isChecked())
+
+        # Scale left-axis data if needed
+        py_plot, py_sup   = _scale_for_label(py_vals)
+        ref_plot, ref_sup = _scale_for_label(ref_vals) if ref_vals is not None else (ref_vals, "")
+        lax_sup = py_sup or ref_sup
+        lax_lbl = f"{sp}  [{lax_sup} {unit_lbl}]" if lax_sup else f"{sp}  [{unit_lbl}]"
+
+        ax.plot(common_t, py_plot,  label=f"{sp} JUICE",
                 lw=1.5, color='steelblue', zorder=2)
-        ax.plot(common_t, ref_vals, label=f"{sp} {self._cmp_ref_label}",
-                lw=1.5, color='darkorange', ls='--', zorder=2)
+        if ref_plot is not None:
+            ax.plot(common_t, ref_plot, label=f"{sp} {self._cmp_ref_label}",
+                    lw=1.5, color='darkorange', ls='--', zorder=2)
         ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
         ax.set_xlabel("Time of Day (UTC)", fontsize=9)
-        ax.set_ylabel(sp, fontsize=9)
-        ax.set_title(f"{sp}   m={slope:.3f}   {theta_str}", fontweight='bold', fontsize=10)
-        ax.legend(loc='upper right', fontsize=7).set_draggable(True)
-        ax.grid(True, ls='--', alpha=0.35)
+        ax.set_ylabel(lax_lbl, fontsize=9)
+        ax.set_title(f"{sp}   m={slope:.3f}", fontweight='bold', fontsize=10, loc='left')
 
+        if show_diff and ref_vals is not None:
+            diff = py_vals - ref_vals
+            diff_plot, diff_sup = _scale_for_label(diff)
+            diff_lbl = f"Δ  [{diff_sup} {unit_lbl}]" if diff_sup else f"Δ  [{unit_lbl}]"
+            ax2 = ax.twinx()
+            ax2.plot(common_t, diff_plot, lw=1.2, color='green', ls=':', zorder=3,
+                     label="Δ (JUICE − Ref)")
+            ax2.axhline(0, color='green', lw=0.5, ls='--', alpha=0.5)
+            ax2.set_ylabel(diff_lbl, fontsize=9, color='green')
+            ax2.tick_params(axis='y', labelcolor='green')
+            ax2.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1 + h2, l1 + l2, loc='lower right',
+                      bbox_to_anchor=(1, 1.01), ncol=1,
+                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+        else:
+            ax.legend(loc='lower right', bbox_to_anchor=(1, 1.01), ncol=1,
+                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+
+        self._cmp_ts_data[slot] = (py_vals, ref_vals, common_t, sp)
+        ax.grid(True, ls='--', alpha=0.35)
         fig.tight_layout(pad=0.8)
+        fig.subplots_adjust(left=0.18)   # prevent y-label clipping
         canvas.draw()
 
     # ── Crosshair cursor ─────────────────────────────────────────────────────
@@ -2565,20 +2826,26 @@ class ResultsViewer(QMainWindow):
 
         ch['vline'] = ax.axvline(x, color='gray', lw=0.8, ls='--', zorder=10)
 
+        def _crosshair_text(ax_ref, t_arr, py_v, ref_v, x_val):
+            py_at = float(np.interp(x_val, t_arr, py_v))
+            h, rem = divmod(max(0, int(x_val * 3600)), 3600)
+            m = rem // 60
+            if ref_v is not None:
+                ref_at = float(np.interp(x_val, t_arr, ref_v))
+                pct_txt = f"   Agr={py_at/ref_at*100:.1f}%" if ref_at != 0 else ""
+                txt = f"{h:02d}:{m:02d}   MCM={py_at:.3g}   Ref={ref_at:.3g}{pct_txt}"
+            else:
+                txt = f"{h:02d}:{m:02d}   {py_at:.3g}"
+            return ax_ref.text(0.0, 1.01, txt, transform=ax_ref.transAxes,
+                               va='bottom', ha='left', fontsize=8,
+                               bbox=dict(boxstyle='round,pad=0.2',
+                                         facecolor='white', alpha=0.9),
+                               zorder=11, clip_on=False)
+
         data = self._cmp_ts_data[slot]
         if data is not None:
             py_vals, ref_vals, common_t, sp = data
-            py_at  = float(np.interp(x, common_t, py_vals))
-            ref_at = float(np.interp(x, common_t, ref_vals))
-            h, rem = divmod(max(0, int(x * 3600)), 3600)
-            m      = rem // 60
-            pct_txt = f"   Agr={py_at/ref_at*100:.1f}%" if ref_at != 0 else ""
-            txt    = f"{h:02d}:{m:02d}   MCM={py_at:.3g}   Ref={ref_at:.3g}{pct_txt}"
-            ch['text'] = ax.text(
-                0.02, 0.98, txt, transform=ax.transAxes,
-                va='top', ha='left', fontsize=8,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85),
-                zorder=11)
+            ch['text'] = _crosshair_text(ax, common_t, py_vals, ref_vals, x)
 
         # Draw mirror vline + text in the peer canvas
         other_axes = self._cmp_ts_figs[other].axes
@@ -2589,17 +2856,8 @@ class ResultsViewer(QMainWindow):
             other_data = self._cmp_ts_data[other]
             if other_data is not None:
                 py_vals2, ref_vals2, common_t2, sp2 = other_data
-                py_at2  = float(np.interp(x, common_t2, py_vals2))
-                ref_at2 = float(np.interp(x, common_t2, ref_vals2))
-                h2, rem2 = divmod(max(0, int(x * 3600)), 3600)
-                m2       = rem2 // 60
-                pct_txt2 = f"   Agr={py_at2/ref_at2*100:.1f}%" if ref_at2 != 0 else ""
-                txt2     = f"{h2:02d}:{m2:02d}   MCM={py_at2:.3g}   Ref={ref_at2:.3g}{pct_txt2}"
-                self._cmp_mirror_texts[other] = other_ax.text(
-                    0.02, 0.98, txt2, transform=other_ax.transAxes,
-                    va='top', ha='left', fontsize=8,
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.85),
-                    zorder=11)
+                self._cmp_mirror_texts[other] = _crosshair_text(
+                    other_ax, common_t2, py_vals2, ref_vals2, x)
             self._cmp_ts_canvases[other].draw_idle()
 
         canvas.draw_idle()

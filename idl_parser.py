@@ -94,13 +94,17 @@ def _s_to_utc(s: float) -> str:
 # File-system helpers
 # ---------------------------------------------------------------------------
 
-def _find_file_recursive(name: str, base_dir: str):
-    """Search base_dir and all subdirectories for *name*.
-    Returns the path relative to base_dir (forward slashes), or None."""
-    for root, _dirs, files in os.walk(base_dir):
-        if name in files:
-            rel = os.path.relpath(os.path.join(root, name), base_dir)
-            return rel.replace("\\", "/")
+def _find_file_recursive(name: str, base_dir: str, fallbacks=None):
+    """Search base_dir (and subdirs) for *name*, then each fallback directory.
+    Returns the absolute path of the first match, or None.
+    Each include file is searched individually so different files can come
+    from different source directories."""
+    for search_root in [base_dir] + (list(fallbacks) if fallbacks else []):
+        if not search_root or not os.path.isdir(search_root):
+            continue
+        for root, _dirs, files in os.walk(search_root):
+            if name in files:
+                return os.path.abspath(os.path.join(root, name))
     return None
 
 
@@ -133,13 +137,22 @@ _EASY_VAR_SUBS = [
 
 
 def _easy_to_py(expr: str) -> str:
-    """Convert a FACSIMILE rate expression to a Python-evaluable string.
+    """Convert a FACSIMILE expression to a Python-evaluable string.
 
     - @ → **  (FACSIMILE power operator)
+    - DENSITY(P, T) → P / (T * 1.379e-19)
+    - CONST(val) / INPUT(val) wrapper → val  (unwrap)
     - lowercase/mixed J-value names → uppercase ctx names (JNO2, JO1D, …)
     - HV_in → HV  (ENZ column name used in ctx)
     """
     out = expr.replace("@", "**")
+    # DENSITY(arg1, arg2) → arg1 / (arg2 * 1.379e-19)
+    out = re.sub(
+        r'\bDENSITY\s*\(\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)',
+        lambda m: f'({m.group(1).strip()}) / (({m.group(2).strip()}) * 1.379e-19)',
+        out, flags=re.IGNORECASE)
+    # CONST(val) / INPUT(val) → val  (unwrap single-argument wrappers)
+    out = re.sub(r'\b(?:CONST|INPUT)\s*\(\s*(.*?)\s*\)', r'\1', out, flags=re.IGNORECASE)
     for pattern, replacement in _EASY_VAR_SUBS:
         out = re.sub(pattern, replacement, out, flags=re.IGNORECASE)
     return out
@@ -176,6 +189,67 @@ def _read_easy_lines(easy_path: str):
             yield clean, is_commented
 
 
+def _read_easy_lines_expanded(easy_path: str, chemistry_folder: str = None,
+                               _visited: set = None):
+    """Yield (clean_line, is_commented) with #include directives expanded inline.
+
+    Implements the canonical preprocessing pipeline:
+      read file → expand #includes recursively at exact position
+      → strip ; comments → yield lines
+
+    Only .easy sub-includes are expanded inline.  Mechanism files
+    (.mech / .rate / .incl / .ro2.incl) are collected as names and
+    handled separately by easy_parser to avoid double-processing.
+    """
+    if _visited is None:
+        _visited = set()
+    real = os.path.realpath(easy_path)
+    if real in _visited:
+        print(f"[idl_parser] Circular include skipped: {easy_path}")
+        return
+    _visited.add(real)
+
+    base_dir = os.path.dirname(os.path.abspath(easy_path))
+
+    with open(easy_path, "r", encoding="latin-1") as fh:
+        for line in fh:
+            stripped = line.strip()
+            is_commented = stripped.startswith((";", "*"))
+            clean = _strip_inline_comment(stripped)
+
+            inc_m = re.match(r"#include\s+(\S+)", clean, re.I)
+            if inc_m and not is_commented:
+                inc_name = inc_m.group(1).strip().strip('"\'')
+                ext = os.path.splitext(inc_name)[1].lower()
+                # Mechanism files are handled by easy_parser — pass through as-is
+                if ext in ('.mech', '.rate', '.incl', '.ro2.incl', '.fac'):
+                    yield clean, is_commented
+                    continue
+                # Sub-EASY include: expand inline
+                inc_path = None
+                for candidate in [
+                    inc_name if os.path.isabs(inc_name) else None,
+                    os.path.join(base_dir, inc_name),
+                    os.path.join(chemistry_folder, inc_name) if chemistry_folder else None,
+                ]:
+                    if candidate and os.path.isfile(candidate):
+                        inc_path = candidate
+                        break
+                if chemistry_folder and inc_path is None:
+                    for root, _, files in os.walk(chemistry_folder):
+                        if os.path.basename(inc_name) in files:
+                            inc_path = os.path.join(root, os.path.basename(inc_name))
+                            break
+                if inc_path:
+                    yield from _read_easy_lines_expanded(inc_path, chemistry_folder, _visited)
+                else:
+                    print(f"[idl_parser] Sub-include not found: {inc_name}")
+                    yield clean, is_commented
+                continue
+
+            yield clean, is_commented
+
+
 def _rxn_key(lhs_up: str, rhs_str: str) -> str:
     return lhs_up.replace(" ", "") + "-->" + rhs_str.replace(" ", "").upper()
 
@@ -196,6 +270,7 @@ def _products_of(rhs_str: str) -> list:
 
 def parse_idl_easy(easy_path: str, enz_path: str = None,
                    chemistry_folder: str = None,
+                   include_fallbacks=None,
                    chamber_vol: float = 276.0) -> dict:
     """
     Parse an IDL-generated EASY master file and optional ENZ file.
@@ -204,7 +279,10 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     ----------
     easy_path         : path to the .easy file
     enz_path          : path to the .enz file (auto-discovered if None)
-    chemistry_folder  : path to chemistry/ folder (auto-discovered if None)
+    chemistry_folder  : primary directory to search for include files
+    include_fallbacks : list of additional directories searched per include file
+                        when not found in chemistry_folder (each file resolved
+                        individually — different files may come from different dirs)
     chamber_vol       : chamber volume in m3 (276 for SAPHIR)
 
     Returns
@@ -260,6 +338,8 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     mechanism_files_raw = []
     env_map             = {}
     pressure_hpa        = None
+    outstep             = None   # FACS[OUTSTEP] — output interval in seconds
+    hmax                = None   # FACS[HMAX]    — max solver step size in seconds
     initials            = {}
     j_scalings          = {}
 
@@ -280,7 +360,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     # Deferred: SZ may be defined later in the file. Processed after the main loop.
     _phtfkt_deferred = []  # list of (var_up, func_name, [a,b,c])
 
-    for clean, is_commented in _read_easy_lines(easy_path):
+    for clean, is_commented in _read_easy_lines_expanded(easy_path, chemistry_folder):
         if not clean:
             continue
 
@@ -326,7 +406,20 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             skipped_notes.append(f"FILES[] directive: FACSIMILE file config, not needed")
             continue
         if re.match(r"FACS\s*\[", clean, re.I) and not is_commented:
-            skipped_notes.append(f"FACS[] directive: FACSIMILE solver config, not needed")
+            outstep_m = re.match(r"FACS\s*\[\s*OUTSTEP\s*\]\s*=\s*([0-9eE.+\-]+)", clean, re.I)
+            hmax_m    = re.match(r"FACS\s*\[\s*HMAX\s*\]\s*=\s*([0-9eE.+\-]+)", clean, re.I)
+            if outstep_m:
+                try:
+                    outstep = float(outstep_m.group(1))
+                except Exception:
+                    outstep = None
+            elif hmax_m:
+                try:
+                    hmax = float(hmax_m.group(1))
+                except Exception:
+                    hmax = None
+            else:
+                skipped_notes.append(f"FACS[] directive: FACSIMILE solver config, not needed")
             continue
 
         # X = INPUT(col)
@@ -355,11 +448,23 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             var_up = cst.group(1).upper()
             expr   = cst.group(2).strip()
 
+            py_expr = _easy_to_py(expr)
+
             if var_up in ("P", "PRESS"):
                 try:
                     pressure_hpa = float(expr)
                 except Exception:
                     pressure_hpa = 1013.25
+                env_map["PRESS"] = {"type": "Fixed Constant", "value": str(pressure_hpa)}
+                idl_parameters["P"] = py_expr   # also as var_assignment (overrides ENZ P)
+
+            elif var_up in ("T", "TEMP"):
+                try:
+                    temp_k = float(expr)
+                except Exception:
+                    temp_k = 298.15
+                env_map["TEMP"] = {"type": "Fixed Constant", "value": str(temp_k)}
+                idl_parameters["T"] = py_expr   # also as var_assignment (overrides ENZ T)
 
             elif var_up == "Y":
                 y_active = True
@@ -380,11 +485,14 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             elif (var_up.lower().startswith("j") and
                   var_up not in ("JHONO", "JNO2", "JO1D", "JH2O2",
                                  "JHCHO_M", "JHCHO_R", "JSCALE")):
-                j_scalings[var_up] = _easy_to_py(expr)
+                j_scalings[var_up] = py_expr
 
             else:
-                # Collect as potential chamber-source constant (SHONO, SHCHO, WALLDEP, …)
-                source_consts[var_up] = _easy_to_py(expr)
+                # Chamber-source constants (SHONO, SHCHO, WALLDEP, …) — keep in
+                # source_consts for rate-expression substitution AND add to
+                # idl_parameters so they're available in the ODE context.
+                source_consts[var_up] = py_expr
+                idl_parameters[var_up] = py_expr
             continue
 
         # X = PHTFKT_CS(a,b,c)  or  X = PHTFKT(a,b,c)
@@ -410,13 +518,29 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         if init and not is_commented:
             spec = init.group(1).upper()
             expr = init.group(2).strip()
-            if spec not in ("*", "ALL"):
+            if spec in ("*", "ALL"):
+                # INITIAL[*] = CONST(val) sets a floor for ALL mechanism species.
+                # Store as a sentinel so scenario_runner can apply it to every
+                # species that has no explicit initial condition.
+                val = _eval_const(expr)
+                if val is not None and val > 0:
+                    initials["*"] = round(val / 2.5e19 * 1e9, 12)
+            else:
                 val = _eval_const(expr)
                 if val is not None and val > 0:
                     ppb = val / 2.5e19 * 1e9
                     if ppb > 0:
                         initials[spec] = round(ppb, 6)
             continue
+
+        # Catch-all: any remaining  VAR = expr  that was not handled above.
+        # Covers M=DENSITY(P,T), arbitrary computed assignments, etc.
+        # Last definition wins via dict overwrite — matches FACSIMILE semantics.
+        gen = re.match(r'^([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.+)$', clean, re.I)
+        if gen and not is_commented:
+            var_up  = gen.group(1).upper()
+            expr_raw = gen.group(2).strip()
+            idl_parameters[var_up] = _easy_to_py(expr_raw)
 
     # ---- clear-sky J-values: process deferred PHTFKT(_CS) assignments --------
     # Only JNO2/JO1D/JHONO/JH2O2/JHCHO_M/JHCHO_R map to env_map keys. Others are
@@ -828,7 +952,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         os.path.dirname(os.path.abspath(easy_path)), "chemistry")
     for _mech_rel in mechanism_files_raw:
         _mech_path = (_mech_rel if os.path.isabs(_mech_rel)
-                      else _find_file_recursive(_mech_rel, _chem_dir))
+                      else _find_file_recursive(_mech_rel, _chem_dir, include_fallbacks))
         if _mech_path and not os.path.isabs(_mech_path):
             _mech_path = os.path.join(_chem_dir, _mech_path)
         if _mech_path and os.path.exists(_mech_path):
@@ -972,14 +1096,11 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
 
             burst_injections.append(entry)
 
-    # ---- resolve mechanism files recursively --------------------------------
+    # ---- resolve mechanism files (each searched individually) ---------------
     resolved_mech_files = []
-    if os.path.isdir(chemistry_folder):
-        for fname in mechanism_files_raw:
-            rel = _find_file_recursive(fname, chemistry_folder)
-            resolved_mech_files.append(rel if rel else fname)
-    else:
-        resolved_mech_files = list(mechanism_files_raw)
+    for fname in mechanism_files_raw:
+        found = _find_file_recursive(fname, chemistry_folder, include_fallbacks)
+        resolved_mech_files.append(found if found else fname)
 
     # ---- pressure -> env_map ------------------------------------------------
     if pressure_hpa is not None:
@@ -1020,6 +1141,8 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         "excluded_reactions":        _mcm_rate_overrides,
         "blocked_parameters":        [],
         "h2o_injection_impurities":  h2o_imps,
+        "outstep":                   outstep,
+        "hmax":                      hmax,
         "_skipped":                  skipped_notes,
     }
 

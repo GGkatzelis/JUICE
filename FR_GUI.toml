@@ -1,0 +1,38 @@
+[paths]
+# Wurzelverzeichnis der EASY-Dateien (IDL/FACSIMILE-Workflow)
+easy_root = "E:\\Python Code\\JUICE archive\\EASY"
+
+# Zentrales Verzeichnis für Include-Dateien (.mech, .rate, .incl, ...)
+# Wird durchsucht wenn eine Include-Datei nicht neben dem EASY-File liegt
+include_dir = "E:\\Python Code\\JUICE archive\\EASY\\include files"
+
+# Ausgabeverzeichnis für JUICE-Ergebnisse (Unterordner = Szenarioname)
+output_root = "E:\\Python Code\\JUICE archive\\JUICE"
+
+# Zuletzt benutztes EASY-Unterverzeichnis — wird automatisch aktualisiert
+last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_03"
+
+
+[solver]
+# Verfügbare relative ODE-Toleranzen im GUI-Dropdown.
+# Erster Wert = Voreinstellung beim Programmstart.
+# Kleiner Wert = genauer, aber langsamer.
+# Faustregel: 1e-2 für schnelle Tests, 1e-6 für FACSIMILE-äquivalente Genauigkeit.
+rtol_choices = "[0.01, 1e-06]"
+
+# Maximale Schrittweite des ODE-Solvers in Sekunden (entspricht FACS[HMAX]).
+# Wenn FACS[HMAX] im EASY-Gesamtscript steht, überschreibt dieser Wert den hier.
+# Kleiner Wert = mehr Schritte = genauer, aber langsamer.
+# Empfehlung: 60 für schnelle Läufe, 10 für gute Genauigkeit, 1 für FACSIMILE-exakt.
+hmax = "60.0"
+
+# Absolute ODE-Toleranz in molec/cm³.
+# Bestimmt die Mindestgenauigkeit für sehr kleine Konzentrationen.
+# 1e4 molec/cm³ ≈ 4e-16 ppb — entspricht einem sinnvollen Rauschboden
+# für atmosphärische Konzentrationen (typische Radikale: 1e6–1e8 molec/cm³).
+atol = "10000.0"
+
+# Zusätzliche Steuergrößen-Muster (fnmatch-Syntax, Groß-/Kleinschreibung egal).
+# Standard Q* und HV sind immer aktiv — hier nur Ergänzungen eintragen,
+# wenn ENZ-Spalten ungewöhnliche Namen haben (z.B. ["SOURCE*", "QINJEKT"]).
+step_column_patterns_extra = "[]"

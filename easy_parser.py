@@ -158,9 +158,16 @@ class EasyParser:
                 self.disabled_rxn_keys.add(canon_d)
                 return
 
+            # ALIAS directive: ALIAS new_name = 'canonical_name'  or  ALIAS new = canonical
+            # Maps one species name to another for display/output purposes.
+            alias_m = re.match(r'ALIAS\s+(\w+)\s*=\s*[\'"]?(\w+)[\'"]?', clean_line, re.I)
+            if alias_m and not is_commented:
+                self.mech.aliases[alias_m.group(1).upper()] = alias_m.group(2).upper()
+                return
+
             # Parameter definitions
             if ('=' in clean_line
-                    and not clean_line.lower().startswith(('k[', 'initial', 'facs', 'files'))
+                    and not clean_line.lower().startswith(('k[', 'initial', 'facs', 'files', 'alias'))
                     and '-->' not in clean_line
                     and not clean_line.startswith('%')):
                 name = clean_line.split('=')[0].strip().upper()

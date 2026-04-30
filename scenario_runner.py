@@ -1,7 +1,7 @@
 import os
 import json
 import numpy as np
-import pandas as pd 
+import pandas as pd
 from scipy.integrate import solve_ivp
 from scipy.sparse import coo_matrix
 from scipy.interpolate import interp1d
@@ -9,6 +9,36 @@ import sys
 import re
 import warnings
 import time
+
+def _load_step_col_patterns():
+    """Return step-column patterns: hardcoded defaults + TOML additions.
+
+    Layer 1 (always active): Q*  HV
+    Layer 2 (from FR_GUI.toml [solver] step_column_patterns_extra): added on top
+    Layer 3 (future): EASY-script comment annotations — see
+             docs/plan_easy_step_col_annotation.md
+    """
+    defaults = ['Q*', 'HV']
+    toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
+    try:
+        import tomllib
+        with open(toml_path, 'rb') as fh:
+            cfg = tomllib.load(fh)
+        extra = cfg.get('solver', {}).get('step_column_patterns_extra', [])
+        if isinstance(extra, str):
+            import ast as _ast
+            try: extra = _ast.literal_eval(extra)
+            except Exception: extra = []
+        # Merge defaults + extras, preserving order and removing duplicates
+        seen = set(p.upper() for p in defaults)
+        combined = list(defaults)
+        for p in extra:
+            if p.upper() not in seen:
+                combined.append(p)
+                seen.add(p.upper())
+        return combined
+    except Exception:
+        return defaults
 
 # Internal Module Imports
 from mechanism_solver import MechanismSolver
@@ -68,19 +98,40 @@ class ScenarioRunner:
             traceback.print_exc()
 
     def _setup_environment(self):
-        # Look for ENZ file: prefer 'kammer*.enz', fall back to any '*.enz'
-        enz_candidates = [f for f in os.listdir(self.root) if f.lower().endswith('.enz')]
-        enz_file = next((f for f in enz_candidates if 'kammer' in f.lower()), None)
-        if enz_file is None:
-            enz_file = enz_candidates[0] if enz_candidates else None
-        if enz_file is None:
-            raise FileNotFoundError(f"No .enz file found in {self.root}")
-        enz_path = os.path.join(self.root, enz_file)
+        # Prefer an absolute enz_path stored in the config (written by FR_GUI),
+        # then fall back to scanning the scenario folder for any *.enz file.
+        cfg_enz = self.cfg.get('enz_path', '')
+        if cfg_enz and os.path.isfile(cfg_enz):
+            enz_path = cfg_enz
+        else:
+            enz_candidates = [f for f in os.listdir(self.root) if f.lower().endswith('.enz')]
+            enz_file = next((f for f in enz_candidates if 'kammer' in f.lower()), None)
+            if enz_file is None:
+                enz_file = enz_candidates[0] if enz_candidates else None
+            if enz_file is None:
+                raise FileNotFoundError(f"No .enz file found in {self.root}")
+            enz_path = os.path.join(self.root, enz_file)
         interp_mode = self.cfg.get('interpolation', 'linear')
-        providers, t_min, t_max, headers = load_saphir_environment(enz_path, interpolation=interp_mode)
-        print(f"  [ENZ] Interpolation mode: {interp_mode}")
-        
-        self.t_span = np.linspace(t_min, t_max, num=2000)
+        step_patterns = _load_step_col_patterns()
+        providers, t_min, t_max, headers, enz_times, step_change_times = \
+            load_saphir_environment(enz_path, interpolation=interp_mode,
+                                    step_col_patterns=step_patterns)
+        self._enz_times        = enz_times
+        self._step_change_times = step_change_times
+        print(f"  [ENZ] Interpolation mode: {interp_mode}  |  "
+              f"step patterns: {step_patterns}  |  "
+              f"{len(step_change_times)} restart point(s)")
+
+        # Build output time grid: OUTSTEP regular grid + every ENZ row, merged & deduped
+        outstep = self.cfg.get('outstep', None)
+        if outstep and outstep > 0:
+            grid = np.arange(t_min, t_max + outstep * 0.5, outstep)
+            t_span = np.union1d(grid, enz_times)
+            t_span = t_span[(t_span >= t_min) & (t_span <= t_max)]
+            print(f"  [OUTSTEP] {outstep}s grid + {len(enz_times)} ENZ rows = {len(t_span)} output points")
+        else:
+            t_span = np.union1d(np.linspace(t_min, t_max, num=2000), enz_times)
+        self.t_span = t_span
 
         for raw_header, interp_func in providers.items():
             self.ctx_data[raw_header.upper()] = interp_func
@@ -123,13 +174,48 @@ class ScenarioRunner:
                 val = float(mapping['value'])
                 self.ctx_data[internal_key] = lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v
 
+        # Synchronise T↔TEMP and P↔PRESS aliases so that a Fixed Constant set under
+        # one name also wins over any ENZ-sourced value stored under the other name.
+        # Without this, T=CONST(295) in the EASY file sets ctx_data["TEMP"]=295 but
+        # leaves ctx_data["T"] pointing at the ENZ interpolation, so Arrhenius rates
+        # (which use the symbol T) would silently use the measured ENZ temperature.
+        for const_key, enz_alias in (('TEMP', 'T'), ('T', 'TEMP'),
+                                     ('PRESS', 'P'), ('P', 'PRESS')):
+            cfg_entry = self.cfg.get('env_map', {}).get(const_key, {})
+            if cfg_entry.get('type') not in ('SAPHIR File', '') and const_key in self.ctx_data:
+                self.ctx_data[enz_alias] = self.ctx_data[const_key]
+
     def get_M(self, t):
         temp_fn = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
         press_fn = self.ctx_data.get('PRESS') or self.ctx_data.get('P')
+        # Fallback: read Fixed Constant directly from env_map (handles JSONs where
+        # idl_parser did not yet write T/PRESS into env_map)
         if temp_fn is None:
-            raise KeyError("No temperature source found in ctx_data (expected 'TEMP' or 'T')")
+            for _k in ('TEMP', 'T'):
+                _m = self.cfg.get('env_map', {}).get(_k)
+                if _m and _m.get('type') != 'SAPHIR File':
+                    _v = float(_m['value'])
+                    temp_fn = lambda t, v=_v: v
+                    self.ctx_data[_k] = temp_fn
+                    break
         if press_fn is None:
-            raise KeyError("No pressure source found in ctx_data (expected 'PRESS' or 'P')")
+            for _k in ('PRESS', 'P'):
+                _m = self.cfg.get('env_map', {}).get(_k)
+                if _m and _m.get('type') != 'SAPHIR File':
+                    _v = float(_m['value'])
+                    press_fn = lambda t, v=_v: v
+                    self.ctx_data[_k] = press_fn
+                    break
+        if temp_fn is None:
+            print("[WARNING] No temperature source found — defaulting to 295 K. "
+                  "Add T=CONST(295) to the EASY file or set TEMP in env_map.")
+            temp_fn = lambda t: 295.0
+            self.ctx_data['TEMP'] = temp_fn
+        if press_fn is None:
+            print("[WARNING] No pressure source found — defaulting to 1013.25 hPa. "
+                  "Add P=CONST(1013) to the EASY file or set PRESS in env_map.")
+            press_fn = lambda t: 1013.25
+            self.ctx_data['PRESS'] = press_fn
         temp = temp_fn(t)
         press = press_fn(t)
         # Use the EASY/FACSIMILE DENSITY convention: M = P / (T * 1.379e-19)
@@ -141,18 +227,37 @@ class ScenarioRunner:
         return press / (temp * 1.379e-19)
 
     def _build_mechanism(self):
-        chem_path = os.path.join(self.root, "chemistry")
-        parser = EasyParser(base_path=chem_path)
+        # Primary search dir from JSON; fall back to root/chemistry
+        cfg_chem = self.cfg.get('chemistry_folder', '')
+        chem_path = cfg_chem if (cfg_chem and os.path.isdir(cfg_chem)) \
+                    else os.path.join(self.root, "chemistry")
+        # TOML include_dir as per-file fallback (same logic as FR_GUI)
+        toml_include = _solver_toml_path = ''
+        try:
+            import tomllib as _tl
+            _tp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
+            with open(_tp, 'rb') as _fh:
+                toml_include = _tl.load(_fh).get('paths', {}).get('include_dir', '')
+        except Exception:
+            pass
+        parser = EasyParser(
+            base_path=chem_path,
+            include_dir=toml_include if (toml_include and os.path.isdir(toml_include)) else None)
         self.mechanism = Mechanism()
-        
+
         # Sort files to ensure .rate definitions are parsed before .mech files
         mech_files = sorted(self.cfg['mechanism_files'], key=lambda x: ".rate" not in x)
-        
+
         for f_name in mech_files:
-            f_path = os.path.join(chem_path, f_name)
+            # Each file may reside in chem_path or include_dir — EasyParser._find_file handles both
+            f_path = f_name if os.path.isabs(f_name) else os.path.join(chem_path, f_name)
             if not os.path.exists(f_path):
-                print(f"[WARNING] Mechanism file not found (skipped): {f_path}")
-                continue
+                # Try absolute path stored by idl_parser (resolved at parse time)
+                if os.path.isabs(f_name) and os.path.exists(f_name):
+                    f_path = f_name
+                else:
+                    print(f"[WARNING] Mechanism file not found (skipped): {f_path}")
+                    continue
             m_part = parser.parse(f_path)
             self.mechanism.species.extend(m_part.species)
             self.mechanism.reactions.extend(m_part.reactions)
@@ -503,11 +608,21 @@ class ScenarioRunner:
     def _solve(self):
         self.solver = MechanismSolver(self.mechanism, self.cfg['env_map'])
         y0 = np.zeros(self.solver.num_species)
-        
+
         saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
 
-        for spec, ppb in self.cfg.get('initials', {}).items():
-            if not ppb: continue
+        initials = self.cfg.get('initials', {})
+        # INITIAL[*] sentinel: floor value applied to every species without
+        # an explicit initial condition (matches FACSIMILE INITIAL[*] semantics).
+        floor_ppb = float(initials.get('*', 0.0))
+        if floor_ppb > 0:
+            M0 = self.get_M(self.t_span[0])
+            for idx in range(self.solver.num_species):
+                y0[idx] = floor_ppb * 1e-9 * M0
+            print(f"  [INIT] INITIAL[*] floor applied: {floor_ppb:.2e} ppb to all {self.solver.num_species} species")
+
+        for spec, ppb in initials.items():
+            if spec == '*' or not ppb: continue
             spec_up = spec.upper()
             if spec_up in self.solver.species_to_idx:
                 y0[self.solver.species_to_idx[spec_up]] = (float(ppb) * 1e-9) * self.get_M(self.t_span[0])
@@ -627,6 +742,8 @@ class ScenarioRunner:
             _fn_lines.append(f"    {name} = _ctx['{name}']")
         for i, rxn in enumerate(self.mechanism.reactions):
             _fn_lines.append(f"    _k[{i}] = {rxn.rate_str_clean}")
+        if len(_fn_lines) == 1:   # no reactions — guard against empty function body
+            _fn_lines.append("    pass")
         _fn_src = "\n".join(_fn_lines)
 
         _batch_ns = {
@@ -1052,7 +1169,31 @@ class ScenarioRunner:
             return dydt
 
         solver_method = 'BDF'
-        step_limit = min(min_dur / 2.0, 60.0)
+        # Solver settings: FACS[HMAX] from EASY takes precedence over TOML defaults
+        _hmax_easy = self.cfg.get('hmax', None)
+        try:
+            import tomllib as _tl
+            _tp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
+            with open(_tp, 'rb') as _fh:
+                _solver_toml = _tl.load(_fh).get('solver', {})
+        except Exception:
+            _solver_toml = {}
+        step_limit = float(_hmax_easy) if _hmax_easy is not None \
+                     else float(_solver_toml.get('hmax', 60.0))
+        # rtol from JSON (set by GUI) takes precedence over TOML default
+        _rtol_json = self.cfg.get('rtol', None)
+        if _rtol_json is not None:
+            _rtol = float(_rtol_json)
+        else:
+            _rc = _solver_toml.get('rtol_choices', [1e-2])
+            if isinstance(_rc, str):
+                import ast as _ast
+                try: _rc = _ast.literal_eval(_rc)
+                except Exception: _rc = [1e-2]
+            _rtol = float(_rc[0]) if _rc else 1e-2
+        _atol = float(_solver_toml.get('atol', 1e4))
+        print(f"  [SOLVER] max_step={step_limit}s  rtol={_rtol}  atol={_atol}  "
+              f"({'FACS[HMAX]' if _hmax_easy else 'TOML default'})")
         N = self.solver.num_species
 
         # --- PRE-COMPUTE ANALYTICAL JACOBIAN STRUCTURE ---
@@ -1230,59 +1371,20 @@ class ScenarioRunner:
         self.eval_count = 0
         self.real_start_time = time.time()
 
-        # --- DETECT DISCONTINUITY EVENTS IN ENZ COLUMNS ---
-        # Piecewise-constant columns have step changes that require BDF restarts.
-        # Linear-interpolated columns are smooth — only Q-switches/HV need scanning.
-        event_times = []
-        n_events_by_col = {}
-        _interp_mode = self.cfg.get('interpolation', 'linear')
-
-        def _find_step_changes(func, label):
-            """Scan a piecewise-constant signal for any value jumps."""
-            probe_t = np.linspace(self.t_start, self.t_end, 5000)
-            vals = np.array([float(func(t)) for t in probe_t])
-            transitions = []
-            for i in range(1, len(probe_t)):
-                v0, v1 = vals[i - 1], vals[i]
-                if v0 == v1:
-                    continue
-                rel = abs(v1 - v0) / max(abs(v0), abs(v1), 1e-30)
-                if rel > 1e-6 or abs(v1 - v0) > 1e-10:
-                    lo, hi = probe_t[i - 1], probe_t[i]
-                    for _ in range(10):
-                        mid = 0.5 * (lo + hi)
-                        if float(func(lo)) != float(func(mid)):
-                            hi = mid
-                        else:
-                            lo = mid
-                    transitions.append(0.5 * (lo + hi))
-            return transitions
-
-        # In linear mode, only scan Q-switch/HV columns (true step functions).
-        # All other columns are smooth → no BDF restarts needed.
-        _q_prefixes = {'Q', 'HV'}
-        for key, func in self.ctx_data.items():
-            if key.upper() == 'TIME':
-                continue
-            if _interp_mode == 'linear':
-                if not any(key.upper().startswith(p) for p in _q_prefixes):
-                    continue
-            try:
-                trans = _find_step_changes(func, key)
-                if trans:
-                    event_times.extend(trans)
-                    n_events_by_col[key] = len(trans)
-            except Exception:
-                pass
-
-        # Deduplicate events within 0.5s
-        if event_times:
-            event_times = sorted(set(event_times))
-            deduped = [event_times[0]]
-            for t in event_times[1:]:
-                if t - deduped[-1] > 0.5:
-                    deduped.append(t)
-            event_times = deduped
+        # --- SEGMENT BOUNDARIES FOR BDF RESTARTS ---
+        # step_change_times contains exactly the ENZ row times where a step-function
+        # column (Q*, HV, or any user-configured pattern) actually changes value.
+        # In piecewise mode this is every internal ENZ row; in linear mode only the
+        # rows where a control variable switches.  No bisection, no name heuristics.
+        # Place segment boundaries 1 µs BEFORE each step change so the solver
+        # evaluates the ODE with the "old" value of Q/HV at the segment endpoint,
+        # not the "new" value.  Without this, Q(t_boundary) already equals the
+        # post-jump value (kind='previous'), causing the last BDF stage of the
+        # injection segment to see Q=0 and underestimate the integral.
+        _eps = 1e-6
+        event_times = [float(t) - _eps for t in getattr(self, '_step_change_times', [])
+                       if self.t_start < t < self.t_end]
+        n_events_by_col = {'step changes': len(event_times)}
 
         if event_times:
             summary = ', '.join(f'{k}:{v}' for k, v in sorted(n_events_by_col.items()))
@@ -1327,8 +1429,8 @@ class ScenarioRunner:
                 method=solver_method,
                 t_eval=t_eval_rel,
                 max_step=step_limit,
-                rtol=1e-2,
-                atol=1e4,
+                rtol=_rtol,
+                atol=_atol,
                 jac=analytical_jac,
             )
 
@@ -1378,6 +1480,10 @@ class ScenarioRunner:
         df['M'] = [self.get_M(t) for t in self.sol.t]
         
         # Merge SAPHIR Interpolated Data into the Results CSV for direct comparison
+        # Standard environment keys — kept only under their SAPHIR_ name
+        _std_env = {'TEMP', 'T', 'PRESS', 'P', 'HV', 'JNO2', 'JO1D', 'JHONO',
+                    'JH2O2', 'JHCHO_M', 'JHCHO_R', 'FLOW', 'H2O', 'RH', 'SZ',
+                    'DILUTE', 'TIME', 'DILUTE', 'O2', 'N2', 'M'}
         for k, v_func in self.ctx_data.items():
             if callable(v_func):
                 try:
@@ -1385,6 +1491,10 @@ class ScenarioRunner:
                     if isinstance(saphir_vals, (float, int)):
                         saphir_vals = np.full_like(self.sol.t, saphir_vals)
                     df[f"SAPHIR_{k}"] = saphir_vals
+                    # For non-standard ENZ inputs (e.g. Q, injection switches),
+                    # also add a plain column so names match FACSIMILE .cs output
+                    if k.upper() not in _std_env and k.upper() not in df.columns:
+                        df[k.upper()] = saphir_vals
                 except Exception:
                     pass
 
@@ -1397,8 +1507,12 @@ class ScenarioRunner:
                 continue  # already a species column
             try:
                 result = eval(compiled_expr, globals(), _derived_ctx)
+                # Broadcast scalars (e.g. T=295, P=1013) to full-length arrays
+                if isinstance(result, (int, float)):
+                    result = np.full(len(df), float(result))
                 if isinstance(result, np.ndarray) and result.shape == (len(df),):
-                    df[var_name] = np.maximum(result, 0.0)
+                    df[var_name] = result
+                    _derived_ctx[var_name] = result   # make available to later expressions
             except Exception:
                 pass
 
@@ -1681,8 +1795,12 @@ class ScenarioRunner:
         print(f"  ... Reaction manifest saved to {man_path}")
 
     def _show_results(self, out_path):
-        from results_viewer import show_results
-        show_results(out_path)
+        # Launch viewer as a separate process so scenario_runner exits immediately,
+        # allowing the progress dialog in FR_GUI to complete and enable Close.
+        import subprocess
+        viewer = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "results_viewer.py")
+        subprocess.Popen([sys.executable, viewer, out_path])
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
