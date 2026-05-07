@@ -136,26 +136,32 @@ _EASY_VAR_SUBS = [
 ]
 
 
-def _easy_to_py(expr: str) -> str:
+def _easy_to_py(expr: str, functions: dict = None) -> str:
     """Convert a FACSIMILE expression to a Python-evaluable string.
 
+    - Expand user-defined FUNCTION macros (DENSITY, PHTFKT_CS, WVC2RH, …)
     - @ → **  (FACSIMILE power operator)
-    - DENSITY(P, T) → P / (T * 1.379e-19)
     - CONST(val) / INPUT(val) wrapper → val  (unwrap)
     - lowercase/mixed J-value names → uppercase ctx names (JNO2, JO1D, …)
     - HV_in → HV  (ENZ column name used in ctx)
     """
-    out = expr.replace("@", "**")
-    # DENSITY(arg1, arg2) → arg1 / (arg2 * 1.379e-19)
-    out = re.sub(
-        r'\bDENSITY\s*\(\s*([^,)]+?)\s*,\s*([^)]+?)\s*\)',
-        lambda m: f'({m.group(1).strip()}) / (({m.group(2).strip()}) * 1.379e-19)',
-        out, flags=re.IGNORECASE)
+    from easy_parser import expand_macros as _expand
+    # Expand user-defined FUNCTION macros using the script-level definitions
+    _fns = functions if functions is not None else _easy_to_py._functions
+    out = _expand(expr, _fns)
+    out = out.replace("@", "**")
     # CONST(val) / INPUT(val) → val  (unwrap single-argument wrappers)
     out = re.sub(r'\b(?:CONST|INPUT)\s*\(\s*(.*?)\s*\)', r'\1', out, flags=re.IGNORECASE)
     for pattern, replacement in _EASY_VAR_SUBS:
         out = re.sub(pattern, replacement, out, flags=re.IGNORECASE)
     return out
+
+# Pre-populated with FACSIMILE built-in physics functions.
+# EASY files and include files can override these; they represent
+# standard definitions that are identical in all MCM/SAPHIR workflows.
+_easy_to_py._functions = {
+    'DENSITY': '(%1)/((%2)*1.379E-19)',   # air number density: P[hPa]/(T[K]*kB)
+}
 
 
 def _eval_const(expr: str, M: float = 2.5e19):
@@ -337,6 +343,11 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     # ---- parse EASY file line by line ----------------------------------------
     mechanism_files_raw = []
     env_map             = {}
+    # Reset to built-in functions; EASY/include files will add their own definitions
+    _easy_to_py._functions = {
+        'DENSITY': '(%1)/((%2)*1.379E-19)',
+    }
+
     pressure_hpa        = None
     outstep             = None   # FACS[OUTSTEP] — output interval in seconds
     hmax                = None   # FACS[HMAX]    — max solver step size in seconds
@@ -396,14 +407,34 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 all_reactions.append((lhs, rhs))
             continue
 
-        # FACSIMILE-only constructs — note and skip
-        if re.match(r"\w+\s*=\s*FUNCTION\s*\[", clean, re.I) and not is_commented:
-            fname = clean.split("=")[0].strip()
-            skipped_notes.append(f"FUNCTION definition '{fname}': FACSIMILE-only macro, "
-                                 f"not needed in Python ODE")
+        # FUNCTION macro definition: NAME = FUNCTION[body]
+        # Store the template for inline expansion — no longer skipped.
+        func_m = re.match(r"(\w+)\s*=\s*FUNCTION\s*\[(.+)\]\s*$", clean, re.I)
+        if func_m and not is_commented:
+            _fname = func_m.group(1).strip().upper()
+            _body  = func_m.group(2).strip()
+            _easy_to_py._functions[_fname] = _body
+            continue
+        if func_m and is_commented:
             continue
         if re.match(r"FILES\s*\[", clean, re.I) and not is_commented:
-            skipped_notes.append(f"FILES[] directive: FACSIMILE file config, not needed")
+            enz_m = re.match(r"FILES\s*\[\s*ENZ\s*\]\s*=\s*(\S+)", clean, re.I)
+            if enz_m:
+                _enz_name = enz_m.group(1).strip().strip('"\'')
+                _enz_candidate = os.path.join(easy_dir, _enz_name)
+                if os.path.isfile(_enz_candidate):
+                    enz_path = _enz_candidate
+                    try:
+                        enz_df = _load_enz(enz_path)
+                        print(f"[idl_parser] ENZ from FILES[ENZ]: {_enz_name} "
+                              f"({len(enz_df.columns)} columns, {len(enz_df)} rows)")
+                    except Exception as e:
+                        print(f"[idl_parser] WARNING: FILES[ENZ]={_enz_name} found but could not load: {e}")
+                        enz_df = None
+                else:
+                    print(f"[idl_parser] WARNING: FILES[ENZ]={_enz_name} not found in {easy_dir}")
+            elif not enz_m:
+                skipped_notes.append(f"FILES[] directive: not ENZ, skipped")
             continue
         if re.match(r"FACS\s*\[", clean, re.I) and not is_commented:
             outstep_m = re.match(r"FACS\s*\[\s*OUTSTEP\s*\]\s*=\s*([0-9eE.+\-]+)", clean, re.I)
@@ -440,6 +471,10 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                     env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
             else:
                 injection_switches[var_up] = enz_col
+            # Variable is ENZ-sourced — remove any prior CONST value from idl_parameters
+            # so the static value does not override the dynamic ENZ value at runtime.
+            idl_parameters.pop(var_up, None)
+            idl_parameters.pop(env_key if mapping else var_up, None)
             continue
 
         # X = CONST(expr)
@@ -803,7 +838,9 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             if not rate or _is_zero_rate(rate):
                 skipped_notes.append(f"zero-rate +DIL dilution: {lhs_up}")
             else:
-                rate_py = _easy_to_py(rate)
+                # Multiply by DIL so that DIL=CONST(0) stops dilution,
+                # matching FACSIMILE's k[SPECIES+DIL-->] = rate * [DIL].
+                rate_py = f"({_easy_to_py(rate)}) * DIL"
                 idl_dilution_reactions.append({
                     "reactants": species,
                     "products":  rhs_str.strip() if rhs_str.strip() else "",
@@ -989,8 +1026,12 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         if not _added:
             break
     if idl_dilution_reactions and "DILUTE" not in idl_parameters:
-        # Fallback: derive from FLOW env_map entry if DILUTE CONST was not found
-        idl_parameters["DILUTE"] = "(FLOW + 0.010*60) / (276. * 3600.)"
+        skipped_notes.append(
+            "ERROR: dilution reactions use DILUTE but DILUTE is not defined in the "
+            "EASY script. Add 'DILUTE = CONST(...)' to the EASY script.")
+        raise ValueError(
+            "DILUTE is used in dilution reactions but not defined in the EASY script. "
+            "Add 'DILUTE = CONST((FLOW+...)/...)' to the EASY script.")
         skipped_notes.append("DILUTE CONST not found in EASY — using fallback formula")
 
     # ---- burst injection summaries (informational) ---------------------------
@@ -1144,6 +1185,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         "outstep":                   outstep,
         "hmax":                      hmax,
         "_skipped":                  skipped_notes,
+        "enz_path":                  enz_path or "",
     }
 
     _print_summary(config)

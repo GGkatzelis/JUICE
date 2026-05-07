@@ -62,7 +62,7 @@ def compare_vs_facsimile(scenario_dir, sim_csv_path, ppb_threshold=0.001):
 
     fac = parse_cs_file(os.path.join(scenario_dir, cs_files[0]))
     sim = pd.read_csv(sim_csv_path)
-    sim_t = sim['Time_s'].values
+    sim_t = sim['TIME_s'].values
     fac_t = fac['TIME'].values
     common = [sp for sp in fac.columns if sp != 'TIME' and sp in sim.columns]
 

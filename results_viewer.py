@@ -406,16 +406,17 @@ class BudgetEngine:
                     except Exception:
                         ctx.setdefault(var_name, np.zeros(n))
 
-        if 'SAPHIR_JO1D' in ctx:
+        if 'JO1D' in ctx and 'J1' not in ctx:
+            ctx['J1'] = ctx['JO1D']
+        elif 'SAPHIR_JO1D' in ctx and 'J1' not in ctx:
             ctx['J1'] = ctx['SAPHIR_JO1D']
-        # J4, J7, J3 are always overridden by measured values (JSCALE approx in anorg phot.rate
-        # sets them non-zero, so the ==0 guard would silently ignore measured data).
-        for j_name, j_col in [('J4', 'SAPHIR_JNO2'), ('J7', 'SAPHIR_JHONO'), ('J3', 'SAPHIR_JH2O2')]:
-            if j_col in ctx:
-                ctx[j_name] = ctx[j_col]
-        for j_name, j_col in [('J11', 'SAPHIR_JHCHO_R'), ('J12', 'SAPHIR_JHCHO_M')]:
-            if j_col in ctx and np.all(ctx.get(j_name, np.zeros(1)) == 0):
-                ctx[j_name] = ctx[j_col]
+        # J4/J7/J3/J11/J12: use plain names (from EASY script), fallback to SAPHIR_ names
+        for j_name, plain, saphir in [('J4','JNO2','SAPHIR_JNO2'), ('J7','JHONO','SAPHIR_JHONO'),
+                                       ('J3','JH2O2','SAPHIR_JH2O2'), ('J11','JHCHO_R','SAPHIR_JHCHO_R'),
+                                       ('J12','JHCHO_M','SAPHIR_JHCHO_M')]:
+            src = plain if plain in ctx else (saphir if saphir in ctx else None)
+            if src and j_name not in ctx:
+                ctx[j_name] = ctx[src]
 
         T_arr   = ctx.get('TEMP', np.full(n, 298.15))
         k_N2_q  = 2.15e-11 * np.exp(110.0 / T_arr)
@@ -425,7 +426,7 @@ class BudgetEngine:
                     k_O2_q  * ctx.get('O2',  0.2095 * ctx['M']) +
                     k_H2O_q * ctx.get('H2O', np.zeros(n)))
         hv_arr = ctx.get('HV', np.ones(n))
-        j1 = ctx.get('J1', np.zeros(n)) * np.where(hv_arr > 0.5, 1.0, 0.0)
+        j1 = ctx.get('J1', np.zeros(n)) * hv_arr
         o3 = ctx.get('O3', np.zeros(n))
         ctx['O1D'] = np.where(k_quench > 0, j1 * o3 / np.maximum(k_quench, 1e-30), 0.0)
         return ctx
@@ -572,13 +573,14 @@ class BudgetEngine:
 
         M_arr = ctx.get('M', np.full(n, 2.5e19))
 
-        T_arr = ctx.get('SAPHIR_TEMP', ctx.get('SAPHIR_T', np.full(n, 298.15)))
-        HV_arr = ctx.get('SAPHIR_HV', np.ones(n))
-        JNO2_arr = ctx.get('SAPHIR_JNO2', np.zeros(n))
+        T_arr = ctx.get('T', ctx.get('TEMP', ctx.get('SAPHIR_T', ctx.get('SAPHIR_TEMP', np.full(n, 298.15)))))
+        HV_arr = ctx.get('HV', ctx.get('SAPHIR_HV', np.ones(n)))
+        JNO2_arr = ctx.get('JNO2', ctx.get('SAPHIR_JNO2', np.zeros(n)))
 
         COSX_arr = np.full(n, 0.5)
-        if 'SAPHIR_SZ' in ctx:
-            COSX_arr = np.maximum(np.cos(ctx['SAPHIR_SZ'] * np.pi / 180.0), 1e-4)
+        _sz = ctx.get('SZ', ctx.get('SAPHIR_SZ', None))
+        if _sz is not None:
+            COSX_arr = np.maximum(np.cos(_sz * np.pi / 180.0), 1e-4)
         safe_cosx = np.where(COSX_arr > 0, COSX_arr, 1e-4)
 
         # O2/N2: respect env_map/config overrides. Atmospheric fractions are only
@@ -615,14 +617,14 @@ class BudgetEngine:
                 np.minimum(_j / np.where(jno2_cs > 0, jno2_cs, 1e-30), 1.0),
                 1.0
             )
-            return np.where(_hv > 0.5, cs_j * scale, 0.0)
+            return cs_j * scale * _hv
 
         ctx['PHTFKT'] = _phtfkt
         ctx['PHTFKT_CS'] = lambda a, b, c, _c=safe_cosx: (
             a * _c ** b * np.exp(np.clip(c / _c, -700, 700))
         )
 
-        h2o = ctx.get('SAPHIR_H2O', 0.01 * M_arr)
+        h2o = ctx.get('H2O', ctx.get('SAPHIR_H2O', 0.01 * M_arr))
         h2o_max = np.nanmax(h2o)
         if h2o_max < 1e14:
             if h2o_max > 1.0:
@@ -874,8 +876,8 @@ class ResultsViewer(QMainWindow):
         left_layout.addWidget(self.var_tree)
 
         # Top-level folder nodes
-        self._mcm_folder    = QTreeWidgetItem(self.var_tree, ["MCM Output"])
-        self._saphir_folder = QTreeWidgetItem(self.var_tree, ["SAPHIR Environment"])
+        self._mcm_folder    = QTreeWidgetItem(self.var_tree, ["Species (c)"])
+        self._saphir_folder = QTreeWidgetItem(self.var_tree, ["Settings (s)"])
         self._inst_folder   = QTreeWidgetItem(self.var_tree, ["SAPHIR Instruments"])
 
         self._mcm_folder.setExpanded(True)
@@ -1069,14 +1071,34 @@ class ResultsViewer(QMainWindow):
         return df
 
     # ── Tree building ─────────────────────────────────────────────────────────
+    # Known setting (s) column prefixes and exact names
+    _SETTING_PREFIXES = ('KMT', 'KRO', 'KAP', 'KBP', 'KFP', 'KCH', 'KNO', 'KDE', 'KROP',
+                         'KNO3', 'KFPAN', 'KBPAN', 'KDEC', 'KAPHO', 'KAPNO', 'KCH3')
+    _SETTING_NAMES = {'T', 'TEMP', 'P', 'PRESS', 'M', 'HV', 'COSX', 'LNO2', 'MNO2', 'NNO2',
+                      'SZ', 'SZA', 'RH', 'FLOW', 'DILUTE', 'JSCALE', 'DIL', 'DILUTE',
+                      'JSCALE', 'COSX', 'N2', 'O2'}
+
+    def _is_setting_col(self, col):
+        cu = col.upper()
+        if cu in self._SETTING_NAMES:
+            return True
+        if any(cu.startswith(p) for p in self._SETTING_PREFIXES):
+            return True
+        if cu.startswith('J') and len(cu) > 1 and (cu[1].isdigit() or '_CS' in cu):
+            return True
+        if cu.startswith('SAPHIR_'):
+            return True
+        return False
+
     def _populate_tree(self):
-        """Fill MCM Output and SAPHIR Environment folders from self.df columns."""
+        """Fill Species (c) and Settings (s) folders from self.df columns."""
         self._mcm_folder.takeChildren()
         self._saphir_folder.takeChildren()
+        self._saphir_folder.setText(0, "Settings (s)")
 
         mcm_active, mcm_empty = [], []
         for col in sorted(self.df.columns):
-            if col.upper().startswith('SAPHIR_'):
+            if self._is_setting_col(col):
                 item = QTreeWidgetItem([col])
                 self._saphir_folder.addChild(item)
             else:
@@ -1574,13 +1596,13 @@ class ResultsViewer(QMainWindow):
             hv = self.df[hv_col].values
             in_open, t0 = False, None
             for ti, vi in zip(t, hv):
-                if vi > 0.5 and not in_open:
+                if vi > 0 and not in_open:
                     in_open, t0 = True, ti
-                elif vi <= 0.5 and in_open:
-                    ax_ts.axvspan(t0, ti, color='#fffacd', alpha=0.4, zorder=0, linewidth=0)
+                elif vi <= 0 and in_open:
+                    ax_ts.axvspan(t0, ti, color='#fffacd', alpha=0.25, zorder=0, linewidth=0)
                     in_open = False
             if in_open:
-                ax_ts.axvspan(t0, t[-1], color='#fffacd', alpha=0.4, zorder=0, linewidth=0)
+                ax_ts.axvspan(t0, t[-1], color='#fffacd', alpha=0.25, zorder=0, linewidth=0)
 
         prod_labels = list(major_prod.keys())
         prod_arrays = [major_prod[k] for k in prod_labels]
@@ -1907,13 +1929,13 @@ class ResultsViewer(QMainWindow):
             hv = self.df[hv_col].values
             in_open, t0 = False, None
             for ti, vi in zip(t, hv):
-                if vi > 0.5 and not in_open:
+                if vi > 0 and not in_open:
                     in_open, t0 = True, ti
-                elif vi <= 0.5 and in_open:
-                    ax_ts.axvspan(t0, ti, color='#fffacd', alpha=0.4, zorder=0, linewidth=0)
+                elif vi <= 0 and in_open:
+                    ax_ts.axvspan(t0, ti, color='#fffacd', alpha=0.25, zorder=0, linewidth=0)
                     in_open = False
             if in_open:
-                ax_ts.axvspan(t0, t[-1], color='#fffacd', alpha=0.4, zorder=0, linewidth=0)
+                ax_ts.axvspan(t0, t[-1], color='#fffacd', alpha=0.25, zorder=0, linewidth=0)
 
         labels  = list(major.keys())
         arrays  = [major[k] for k in labels]
@@ -2246,7 +2268,7 @@ class ResultsViewer(QMainWindow):
             if not path:
                 return
             try:
-                df = pd.read_csv(path, index_col=0)
+                df = pd.read_csv(path, index_col=0, comment='#')
                 # Same SAPHIR-epoch → hours-since-midnight conversion as main CSV
                 t_unix = df.index.astype(float) + _NC_EPOCH_OFFSET
                 df.index = (t_unix - self._midnight_unix) / 3600.0
@@ -2359,8 +2381,12 @@ class ResultsViewer(QMainWindow):
 
         t_min = max(self.df.index.min(), self._cmp_df_ref.index.min())
         t_max = min(self.df.index.max(), self._cmp_df_ref.index.max())
-        n_pts = min(500, len(self.df))
-        common_t = np.linspace(t_min, t_max, n_pts)
+        # Use the full JUICE time axis so sharp transitions (ENZ boundaries) are
+        # rendered at their correct time — a coarse linspace (e.g. 500 pts over 7h)
+        # would space points ~50 s apart, making a 10-s step appear to start ~40 s early.
+        common_t = self.df.index.values.astype(float)
+        mask = (common_t >= t_min) & (common_t <= t_max)
+        common_t = common_t[mask]
 
         def interp(df, col):
             s = df[col].dropna()
@@ -2672,10 +2698,17 @@ class ResultsViewer(QMainWindow):
         # ppb toggle state and conversion helper
         use_ppb = (len(self._cmp_ts_ppb_btns) > slot
                    and self._cmp_ts_ppb_btns[slot].isChecked())
-        unit_lbl = "ppb" if use_ppb else "molec/cm³"
+        # Quantities that are not mixing ratios — ppb conversion is meaningless for them.
+        _ABSOLUTE_QUANTITIES = {
+            'M', 'T', 'TEMP', 'P', 'PRESS', 'HV', 'SZ', 'SZA', 'COSX',
+            'DIL', 'DILUTE', 'FLOW', 'RH', 'N2', 'O2', 'JSCALE',
+        }
+        _sp_is_absolute = sp.upper() in _ABSOLUTE_QUANTITIES or sp.upper().startswith('KMT')
+
+        unit_lbl = ("ppb" if use_ppb and not _sp_is_absolute else "molec/cm³")
 
         def _to_unit(arr, t_arr_ref):
-            if not use_ppb or 'M' not in self.df.columns:
+            if not use_ppb or _sp_is_absolute or 'M' not in self.df.columns:
                 return arr
             M_interp = np.interp(t_arr_ref,
                                  self.df.index.values.astype(float),
@@ -2699,9 +2732,11 @@ class ResultsViewer(QMainWindow):
                 ax.plot(t_ref, rv, lw=1.5, color='darkorange', ls='--',
                         label=f"{sp} {self._cmp_ref_label}")
                 ref_vals_raw = np.interp(t_arr, t_ref, rv)
-            ax.set_title(f"{sp}  [{unit_lbl}]", fontsize=9, loc='left')
+            ax.set_ylabel(f"[{unit_lbl}]", fontsize=9)
+            ax.set_title(sp, fontweight='bold', fontsize=10, loc='left')
             ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
             ax.set_xlabel("Time of Day (UTC)")
+            ax.yaxis.get_major_formatter().set_useOffset(False)
             ax.legend(loc='lower right', bbox_to_anchor=(1, 1.01), ncol=1,
                       fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
             ax.grid(True, ls='--', alpha=0.35)
@@ -2724,7 +2759,7 @@ class ResultsViewer(QMainWindow):
             hv_interp = np.interp(common_t, self.df.index.values.astype(float),
                                   self.df[hv_col].values.astype(float),
                                   left=0.0, right=0.0)
-            open_mask = hv_interp > 0.5
+            open_mask = hv_interp > 0
             transitions = np.diff(open_mask.astype(int))
             starts = list(np.where(transitions == 1)[0] + 1)
             ends   = list(np.where(transitions == -1)[0] + 1)
@@ -2732,7 +2767,7 @@ class ResultsViewer(QMainWindow):
             if open_mask[-1]: ends   = ends + [len(common_t) - 1]
             first = True
             for si, ei in zip(starts, ends):
-                ax.axvspan(common_t[si], common_t[ei], alpha=0.18, color='gold',
+                ax.axvspan(common_t[si], common_t[ei], alpha=0.12, color='gold',
                            label='Roof open' if first else '', zorder=0)
                 first = False
 
@@ -2752,11 +2787,61 @@ class ResultsViewer(QMainWindow):
         show_diff = (len(self._cmp_ts_diff_btns) > slot
                      and self._cmp_ts_diff_btns[slot].isChecked())
 
-        # Scale left-axis data if needed
-        py_plot, py_sup   = _scale_for_label(py_vals)
-        ref_plot, ref_sup = _scale_for_label(ref_vals) if ref_vals is not None else (ref_vals, "")
-        lax_sup = py_sup or ref_sup
-        lax_lbl = f"{sp}  [{lax_sup} {unit_lbl}]" if lax_sup else f"{sp}  [{unit_lbl}]"
+        # Scale left-axis data: JUICE and FAC must use the SAME scale factor so
+        # both curves are comparable on the same axis.  Applying _scale_for_label
+        # independently gives each its own exponent — a 10× difference in values
+        # then looks like a match because FAC at 4 (×10⁻⁶) plots at the same
+        # height as JUICE at 3.5 (×10⁻⁵) while the axis only shows ×10⁻⁵.
+        _combined = np.concatenate([
+            py_vals,
+            ref_vals if ref_vals is not None else np.array([])
+        ])
+        _combined_finite = _combined[np.isfinite(_combined)]
+
+        # Decide whether to subtract a mean offset before scaling.
+        # When data clusters around a large non-zero mean (like NO2 ≈ 10 ppb
+        # with ±1e-7 ppb variation), the variation/mean ratio is tiny.
+        # matplotlib's useOffset=True then injects "+9.999999" into the tick
+        # exponent area, creating confusing "1e-7+9.999999 ppb" labels.
+        # Fix: subtract the mean explicitly; show offset in the axis label;
+        # the unit bracket then contains ONLY the pure scale factor (×10^n).
+        _lax_offset = 0.0
+        if len(_combined_finite) > 0:
+            _cmean    = float(np.nanmean(_combined_finite))
+            _cvariation = float(np.nanmax(np.abs(_combined_finite - _cmean)))
+            _cmax_abs   = float(np.nanmax(np.abs(_combined_finite)))
+            if _cmax_abs > 0 and _cvariation / _cmax_abs < 0.01:
+                # Clustered: subtract mean, scale the variation
+                _lax_offset = _cmean
+                _work = _combined_finite - _cmean
+            else:
+                _work = _combined_finite
+        else:
+            _work = _combined_finite
+
+        _max_abs = float(np.nanmax(np.abs(_work))) if len(_work) > 0 else 0.0
+        if _max_abs > 0:
+            _exp = int(np.floor(np.log10(_max_abs)))
+            if -2 <= _exp <= 3:
+                _scale, lax_sup = 1.0, ""
+            else:
+                _scale = 10.0 ** _exp
+                lax_sup = f"$\\times 10^{{{_exp}}}$"
+        else:
+            _scale, lax_sup = 1.0, ""
+
+        py_plot  = (py_vals  - _lax_offset) / _scale
+        ref_plot = (ref_vals - _lax_offset) / _scale if ref_vals is not None else None
+
+        # Axis label: scale in unit bracket; offset shown as separate annotation
+        if lax_sup:
+            lax_lbl = f"{sp}  [{lax_sup} {unit_lbl}]"
+        else:
+            lax_lbl = f"{sp}  [{unit_lbl}]"
+        if abs(_lax_offset) > 0:
+            # Format offset compactly — e.g. "+10.0 ppb" or "+2500 ppb"
+            _off_str = f"{_lax_offset:.5g} {unit_lbl}"
+            lax_lbl += f"  (+{_off_str})"
 
         ax.plot(common_t, py_plot,  label=f"{sp} JUICE",
                 lw=1.5, color='steelblue', zorder=2)
@@ -2767,6 +2852,12 @@ class ResultsViewer(QMainWindow):
         ax.set_xlabel("Time of Day (UTC)", fontsize=9)
         ax.set_ylabel(lax_lbl, fontsize=9)
         ax.set_title(f"{sp}   m={slope:.3f}", fontweight='bold', fontsize=10, loc='left')
+        # Prevent matplotlib from adding its own "+offset" to the tick exponent area.
+        # Our lax_lbl already carries the only scale/offset information shown.
+        # Use a fresh ScalarFormatter with useOffset=False — more reliable than
+        # modifying the existing formatter (which may be a different type).
+        import matplotlib.ticker as _mticker
+        ax.yaxis.set_major_formatter(_mticker.ScalarFormatter(useOffset=False))
 
         if show_diff and ref_vals is not None:
             diff = py_vals - ref_vals
@@ -3306,7 +3397,7 @@ class ResultsViewer(QMainWindow):
             return self._cs_species_table
         rows = []
         for col in self.df.columns:
-            if col.startswith('SAPHIR_') or col in ('M', 'Time_s'):
+            if col.startswith('SAPHIR_') or col in ('M', 'TIME_s'):
                 continue
             entry = MCM_DB.get(col.upper())
             if entry is None or entry.n_C < 1:
@@ -3552,15 +3643,15 @@ class ResultsViewer(QMainWindow):
             in_open, start = False, None
             first_span = True
             for ti, vi in zip(t, hv):
-                if vi > 0.5 and not in_open:
+                if vi > 0 and not in_open:
                     in_open, start = True, ti
-                elif vi <= 0.5 and in_open:
-                    ax.axvspan(start, ti, color='gold', alpha=0.22, zorder=0,
+                elif vi <= 0 and in_open:
+                    ax.axvspan(start, ti, color='gold', alpha=0.15, zorder=0,
                                label='Roof open' if first_span else None)
                     first_span = False
                     in_open = False
             if in_open:
-                ax.axvspan(start, t[-1], color='gold', alpha=0.22, zorder=0,
+                ax.axvspan(start, t[-1], color='gold', alpha=0.15, zorder=0,
                            label='Roof open' if first_span else None)
 
         # Injection start markers
@@ -4298,7 +4389,7 @@ class ResultsViewer(QMainWindow):
 def show_results(out_path):
     if HAS_PYQT:
         print(">>> [VISUALIZATION] Launching Interactive PyQt Viewer...")
-        df = pd.read_csv(out_path, index_col=0)
+        df = pd.read_csv(out_path, index_col=0, comment='#')
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
@@ -4314,7 +4405,7 @@ def show_results(out_path):
         return
 
     print("[WARNING] PyQt6 is not installed. Falling back to simple Matplotlib visualization.")
-    df = pd.read_csv(out_path, index_col=0)
+    df = pd.read_csv(out_path, index_col=0, comment='#')
     midnight_unix = df.index[0] - (df.index[0] % 86400)
     t_hours = (df.index - midnight_unix) / 3600.0
 

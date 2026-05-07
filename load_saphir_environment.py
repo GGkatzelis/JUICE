@@ -56,30 +56,51 @@ def load_saphir_environment(file_path, interpolation='linear', step_col_patterns
 
     _q_cols = {c for c in df.columns if _is_step_col(c)}
 
+    # For step-function (piecewise) columns, shift all internal breakpoints by +1 ns.
+    # scipy's kind='previous' at an exact breakpoint t returns the NEW value (right-hand
+    # limit).  By shifting breakpoints right by 1 ns, a query at exactly t returns the
+    # OLD value (left-hand limit), so the BDF integrating segment [t0, t_boundary] never
+    # "sees" the next ENZ row's value at the boundary instant — preventing the polynomial
+    # leak that causes a spurious pre-boundary rise in the ODE output.
+    _t_piecewise = df['time'].values.copy().astype(float)
+    _t_piecewise[1:] = _t_piecewise[1:] + 1e-9   # shift all boundaries except the first
+
     providers = {}
     for col in df.columns:
         if interpolation == 'piecewise' or col in _q_cols:
-            # Zero-order hold: value stays constant until next ENZ row
-            providers[col] = interp1d(df['time'], df[col], kind='previous',
+            # Zero-order hold with left-hand boundary convention (see above)
+            providers[col] = interp1d(_t_piecewise, df[col], kind='previous',
                                       fill_value="extrapolate", bounds_error=False)
         else:
             # Linear interpolation between ENZ rows (smooth transition)
             providers[col] = interp1d(df['time'], df[col], kind='linear',
                                       fill_value="extrapolate", bounds_error=False)
 
-    # Compute step_change_times: ENZ row times where at least one step-function column
-    # actually changes its value.  These are the times requiring BDF solver restarts in
-    # linear mode.  In piecewise mode all ENZ rows are restart points.
-    step_change_times = []
+    # Columns that require a BDF restart when they change:
+    #   - Step-function columns (HV, Q*): photolysis J-values change
+    #   - T / P (piecewise mode only): k-values + M change discontinuously
+    # In linear mode T/P change smoothly — no restart needed for T/P there.
+    _temp_cols = {c for c in df.columns if c.upper() in ('T', 'TEMP', 'TEMPERATURE')}
+    _pres_cols = {c for c in df.columns if c.upper() in ('P', 'PRESS', 'PRESSURE')}
     if interpolation == 'piecewise':
-        # Every internal ENZ row is a potential step change
-        step_change_times = list(df['time'].values[1:-1].astype(float))
+        _restart_cols = _q_cols | _temp_cols | _pres_cols   # T/P jump → k + M change
     else:
-        for i in range(len(df) - 1):
-            for col in _q_cols:
-                if col in df.columns and df[col].iloc[i] != df[col].iloc[i + 1]:
-                    step_change_times.append(float(df['time'].iloc[i + 1]))
-                    break
+        _restart_cols = _q_cols                              # T/P smooth → no restart
+
+    # Compute step_change_times: internal ENZ row times where at least one
+    # restart-triggering column actually changes its value.
+    # NOTE: This uses raw ENZ values.  scenario_runner.py filters further
+    # using effective ctx_data values (after CONST overrides are applied)
+    # so that e.g. hv=0→1 in ENZ but HV=CONST(1) does not trigger a restart.
+    step_change_times = []
+    for i in range(len(df) - 1):
+        t_next = float(df['time'].iloc[i + 1])
+        if t_next <= df['time'].iloc[0] or t_next >= df['time'].iloc[-1]:
+            continue  # skip first/last
+        for col in _restart_cols:
+            if col in df.columns and df[col].iloc[i] != df[col].iloc[i + 1]:
+                step_change_times.append(t_next)
+                break
 
     return (providers, float(df['time'].min()), float(df['time'].max()),
             headers, df['time'].values.astype(float), step_change_times)
