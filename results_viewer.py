@@ -2637,23 +2637,8 @@ class ResultsViewer(QMainWindow):
             self._cmp_only_juice = []
             self._cmp_only_ref   = []
         elif _mode == 3:
-            # k-Values: rate constants and photolysis rates
-            def _is_k_value(name):
-                n = name.upper()
-                if n.startswith('KMT'): return True
-                if n.startswith('KRO') or n.startswith('KAP') or n.startswith('KBP'): return True
-                if n.startswith('KFP') or n.startswith('KNO') or n.startswith('KCH'): return True
-                if n.startswith('KDE') or n.startswith('KRO'): return True
-                if n in {'KDEC','KROPRIM','KAPNO','KAPHO2','KRO2NO','KRO2HO2',
-                         'KRO2NO3','KCH3O2','KBPAN','KFPAN','KNO3AL'}: return True
-                if len(n) > 1 and n[0] == 'J' and n[1:].replace('_CS','').replace('_','').isdigit(): return True
-                if n.startswith('J') and '_CS' in n: return True
-                return False
-            common = sorted(c for c in mcm_cols & ref_cols if _is_k_value(c))
-            self._cmp_only_juice = []
-            self._cmp_only_ref   = []
-        else:
-            # k-Values: all matched reaction turnover rates from kv files
+            # k-Values: jui_kv/ref_kv already contain only rate constants (k_ columns),
+            # canonically labelled as reaction strings — just intersect, no extra filter.
             common = sorted(mcm_cols & ref_cols)
             self._cmp_only_juice = []
             self._cmp_only_ref   = []

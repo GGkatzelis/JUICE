@@ -167,11 +167,15 @@ class ScenarioRunner:
         for raw_header, interp_func in providers.items():
             self.ctx_data[raw_header.upper()] = interp_func
 
-        # The ENZ 'dilute' column is raw flow in L/min. Mechanism .dil files use
-        # CONST(DILUTE) as a rate constant (s⁻¹), which would be ~10⁶× too large.
-        # The runner already applies correct dilution analytically (dydt -= y * k_dil),
-        # so disable the legacy mechanism dil reactions by setting DILUTE = 0.
-        self.ctx_data['DILUTE'] = lambda t: 0.0
+        # In non-ELOG (legacy mechanism_files) mode: the ENZ 'dilute' column is raw flow
+        # (L/min or L/h). Legacy .dil mechanism files use CONST(DILUTE) as a rate
+        # constant (s⁻¹), which would be orders-of-magnitude too large.  Forcing
+        # DILUTE=0 disables those stale reactions; dilution is applied analytically.
+        # In ELOG mode: the EASY script contains DILUTE=CONST((FLOW+...)/...) which
+        # converts raw FLOW to a proper dilution rate.  Keeping raw ENZ DILUTE allows
+        # INPUT(dilute) → FLOW and then DILUTE = formula to work correctly.
+        if not self.cfg.get('elog_path'):
+            self.ctx_data['DILUTE'] = lambda t: 0.0
 
         for internal_key, mapping in self.cfg['env_map'].items():
             if mapping['type'] == "SAPHIR File":
@@ -739,13 +743,22 @@ class ScenarioRunner:
         #      (X_in is an INPUT — it must stay at the ENZ value across all passes)
         # Detection: var_assignment (NAME, code) where code.co_names == {single_name}
         # and that single name is already in ctx_data (an ENZ-sourced variable).
+        _env_map_saphir_up = {k.upper() for k, v in self.cfg.get('env_map', {}).items()
+                              if v.get('type') == 'SAPHIR File'}
         for vn, ce in self.var_assignments:
             co = set(getattr(ce, 'co_names', []))
             if len(co) == 1:
                 src = next(iter(co))
-                if src in self.ctx_data and vn not in self.ctx_data:
-                    # vn is an alias (e.g. H2O_IN) for an ENZ variable (e.g. H2O)
+                # Pattern 1: X_IN = X  (e.g. H2O_IN=H2O, HV_IN=HV, T_IN=T)
+                if vn == src + '_IN' and src in self.ctx_data and vn not in self.ctx_data:
                     self.ctx_data[vn] = self.ctx_data[src]
+                    self._ctx_data_protected.add(vn)
+                # Pattern 2: ENV_MAP_SAPHIR_VAR = ENZ_COL  (e.g. FLOW=INPUT(dilute)→FLOW=DILUTE)
+                # These are INPUT declarations where the env_map variable is just aliasing
+                # an ENZ column.  The 3-pass loop would overwrite FLOW with the computed
+                # DILUTE in pass 2, breaking the DILUTE = f(FLOW) formula.
+                elif (vn in _env_map_saphir_up and src in self.ctx_data
+                      and vn not in self._ctx_data_protected):
                     self._ctx_data_protected.add(vn)
 
         self._add_artifacts()
@@ -1793,7 +1806,18 @@ class ScenarioRunner:
         _ode_species_upper = {s.upper() for s in self.solver.species}
 
         for _pass in range(3):
+            # Restore protected ENZ INPUT aliases at the start of every pass so that
+            # any accidental write in a previous pass cannot propagate.
+            for _prot in self._ctx_data_protected:
+                if _prot in self.ctx_data:
+                    try:
+                        _prot_vals = self.ctx_data[_prot](_s_eval_t)
+                        _eval_ctx[_prot] = _prot_vals
+                    except Exception:
+                        pass
             for var_name, compiled_expr in self.var_assignments:
+                if var_name in self._ctx_data_protected:
+                    continue  # INPUT alias: restore loop handles these — never re-evaluate
                 if var_name in _export_constraints and var_name not in self._idl_params_upper:
                     # In ELOG mode the EASY script is the truth: all var_assignments run.
                     # In legacy mode (no elog) block env_map variables to prevent constant
@@ -2003,6 +2027,10 @@ class ScenarioRunner:
                 ctx[s] = float(y_matrix[t_i, j])
             # Multi-pass evaluation — same logic as system_ode (3 passes)
             for _kv_pass in range(3):
+                # Restore protected ENZ INPUT aliases at the start of each pass.
+                for _prot in self._ctx_data_protected:
+                    if _prot in env_arrs:
+                        ctx[_prot] = float(env_arrs[_prot][t_i])
                 for var_name, comp_expr in self.var_assignments:
                     if var_name in self._ctx_data_protected:
                         continue
