@@ -837,6 +837,8 @@ class ResultsViewer(QMainWindow):
         self.setWindowTitle("SAPHIR/MCM Results Viewer")
         self.setGeometry(50, 50, 1600, 900)
         self.showMaximized()
+        # About as standalone top-left menu bar action (no submenu)
+        self.menuBar().addAction("About JUICE…", self._show_about)
         _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
         if not _icon_pixmap.isNull():
             self.setWindowIcon(QIcon(_icon_pixmap))
@@ -1244,6 +1246,50 @@ class ResultsViewer(QMainWindow):
         for ax in self.axes_map.values():
             ax.relim()
             ax.autoscale_view()
+
+    def _show_about(self):
+        import os
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QDialogButtonBox
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QPixmap
+        try:
+            from version import __version__, __date__, __authors__
+        except ImportError:
+            __version__, __date__, __authors__ = "2.0", "", []
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About JUICE")
+        dlg.setFixedWidth(380)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+        lay.setContentsMargins(24, 20, 24, 16)
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png")
+        logo_lbl = QLabel()
+        px = QPixmap(logo_path)
+        if not px.isNull():
+            logo_lbl.setPixmap(px.scaledToWidth(120, Qt.TransformationMode.SmoothTransformation))
+        logo_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(logo_lbl)
+        title = QLabel(f"<h2>JUICE {__version__}</h2>")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(title)
+        subtitle = QLabel("Jülich Utility for Integrating Chemical Equations")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        subtitle.setWordWrap(True)
+        lay.addWidget(subtitle)
+        lay.addSpacing(6)
+        info = QLabel(
+            f"<b>Version:</b> {__version__}<br>"
+            f"<b>Date:</b> {__date__}<br>"
+            f"<b>Authors:</b><br>" +
+            "<br>".join(f"&nbsp;&nbsp;{a}" for a in __authors__)
+        )
+        info.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(info)
+        lay.addSpacing(4)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        bb.accepted.connect(dlg.accept)
+        lay.addWidget(bb)
+        dlg.exec()
 
     def clear_plot(self):
         self.active_list.clear()
@@ -1947,6 +1993,30 @@ class ResultsViewer(QMainWindow):
         ax_ts.plot(t, k_total, color='black', lw=1.5, ls='--',
                    label=f'Total k_{radical} (model)', zorder=5)
 
+        # kOH from pd file: direct kOH column (Σ k_i×[X_i], no division by [OH])
+        if radical.upper() == 'OH' and self.csv_path:
+            import os as _os
+            _pd_path = self.csv_path.replace('_cs.csv', '_pd.csv')
+            if _os.path.isfile(_pd_path):
+                try:
+                    _pd_df = pd.read_csv(_pd_path, index_col=0, comment='#')
+                    if 'kOH' in _pd_df.columns:
+                        _koh_pd = np.interp(t, _pd_df.index.values.astype(float),
+                                            _pd_df['kOH'].values.astype(float))
+                    elif 'D_OH' in _pd_df.columns and 'OH' in self.df.columns:
+                        _d_oh = np.interp(t, _pd_df.index.values.astype(float),
+                                          _pd_df['D_OH'].values.astype(float))
+                        _oh = self.df['OH'].values.astype(float)
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            _koh_pd = np.where(_oh > 1e2, _d_oh / _oh, np.nan)
+                    else:
+                        _koh_pd = None
+                    if _koh_pd is not None:
+                        ax_ts.plot(t, _koh_pd, color='#2ca02c', lw=1.8, ls='-.',
+                                   label='kOH JUICE (Σk·[X])', zorder=5)
+                except Exception:
+                    pass
+
         # Measured k_OH overlay
         if radical.upper() == 'OH':
             meas = self._measured_koh
@@ -2036,15 +2106,64 @@ class ResultsViewer(QMainWindow):
         btn_slopes.clicked.connect(self._cmp_compute_slopes)
         src_row.addWidget(btn_slopes)
 
-        self._cmp_react_only_btn = QPushButton("Nur Reaktionsspezies")
-        self._cmp_react_only_btn.setCheckable(True)
-        self._cmp_react_only_btn.setChecked(True)
-        self._cmp_react_only_btn.setToolTip(
-            "Aktiv: zeigt nur Spezies aus Reaktionsgleichungen\n"
-            "Inaktiv: zeigt alles aus JUICE oder Referenz")
-        self._cmp_react_only_btn.setStyleSheet(
-            "QPushButton:checked { background-color: #2E5A88; color: white; font-weight: bold; }")
-        src_row.addWidget(self._cmp_react_only_btn)
+        # 3-state species selector: Favoriten | c-Spezies | Alle
+        from PyQt6.QtWidgets import QButtonGroup
+        _btn_style = ("QPushButton { border: 1px solid #888; padding: 3px 8px; }"
+                      "QPushButton:checked { background-color: #2E5A88; color: white;"
+                      "  font-weight: bold; border: 1px solid #1a3f66; }")
+        self._cmp_mode_group = QButtonGroup(self)
+        self._cmp_mode_group.setExclusive(True)
+
+        # Load favorites from TOML (optional section)
+        _toml_favs = []
+        try:
+            import tomllib as _tl, os as _os
+            _tp = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "FR_GUI.toml")
+            with open(_tp, 'rb') as _fh:
+                _tcfg = _tl.load(_fh)
+            _toml_favs = _tcfg.get('comparison', {}).get('favorites', [])
+            # Handle legacy string format e.g. "['OH','HO2',...]"
+            if isinstance(_toml_favs, str):
+                import ast as _ast
+                try: _toml_favs = _ast.literal_eval(_toml_favs)
+                except Exception: _toml_favs = []
+        except Exception:
+            pass
+        self._cmp_favorites = [str(s).strip() for s in _toml_favs
+                               if isinstance(s, str) and len(s) > 1]
+
+        # 4 exclusive mode buttons (All removed)
+        _defs = [
+            (0, "★ Favorites", "Parameters listed in TOML [comparison] favorites",      bool(self._cmp_favorites)),
+            (1, "c-Species",   "Concentrations: ODE species + derived (NOx, NOy, Ox, kOH)", not bool(self._cmp_favorites)),
+            (2, "s-Species",   "Settings: T, P, HV, SZ, RH, DILUTE, …",                False),
+            (3, "k-Values",    "Reaction turnover rates from kv files",                  False),
+        ]
+        for _id, _label, _tip, _checked in _defs:
+            _b = QPushButton(_label)
+            _b.setCheckable(True)
+            _b.setChecked(_checked)
+            _b.setToolTip(_tip)
+            _b.setStyleSheet(_btn_style)
+            if _id == 0:
+                _b.setEnabled(bool(self._cmp_favorites))
+                self._cmp_btn_fav = _b
+            elif _id == 1:
+                self._cmp_btn_c = _b
+            elif _id == 2:
+                self._cmp_btn_s = _b
+            else:
+                self._cmp_btn_k = _b
+            self._cmp_mode_group.addButton(_b, _id)
+            src_row.addWidget(_b)
+
+        # Keep legacy attribute so existing code referencing _cmp_react_only_btn still works
+        self._cmp_react_only_btn = self._cmp_btn_c
+
+        # Re-run slope computation whenever the mode changes (if reference is loaded)
+        self._cmp_mode_group.idClicked.connect(
+            lambda _id: self._cmp_compute_slopes()
+            if getattr(self, '_cmp_df_ref', None) is not None else None)
 
         self._cmp_ref_lbl = QLabel("No reference loaded")
         self._cmp_ref_lbl.setStyleSheet("color: #666; font-style: italic;")
@@ -2258,6 +2377,10 @@ class ResultsViewer(QMainWindow):
                 df = self._cmp_parse_facsimile(path)
                 self._cmp_df_ref    = self._add_virtual_species(df)
                 self._cmp_ref_label = os.path.basename(path)
+                self._cmp_kv_ref        = None
+                self._cmp_kv_jui        = None   # reset so JUICE kv reloads fresh
+                self._cmp_jui_aux_loaded = False  # allow lazy re-load of JUICE aux
+                self._cmp_load_aux(path, ref=True)   # load kv/pd alongside
             except Exception as e:
                 QMessageBox.warning(self, "Load Error", str(e))
                 return
@@ -2302,6 +2425,103 @@ class ResultsViewer(QMainWindow):
         self._cmp_load_btn.setStyleSheet(
             "font-weight: bold; background-color: #1e7e34; color: white;")
 
+    # ── Derived quantities and auxiliary data ─────────────────────────────────
+
+    def _cmp_add_derived(self, df, pd_df=None):
+        """Add NOx, NOy, Ox, kOH to a cs DataFrame in-place."""
+        c = df.columns
+        if 'NO' in c and 'NO2' in c:
+            df['NOx'] = df['NO'] + df['NO2']
+        if 'O3' in c and 'NO2' in c:
+            df['Ox'] = df['O3'] + df['NO2']
+        if 'NO' in c and 'NO2' in c:
+            noy = df['NO'] + df['NO2']
+            for sp, coeff in [('HNO3',1),('HNO4',1),('HONO',1),('NO3',1),
+                               ('N2O5',2),('PAN',1),('PHAN',1),('CH3NO3',1)]:
+                if sp in c:
+                    noy = noy + coeff * df[sp]
+            df['NOy'] = noy
+        # kOH from pd file
+        if pd_df is not None and 'kOH' in pd_df.columns:
+            df['kOH'] = np.interp(df.index.values.astype(float),
+                                  pd_df.index.values.astype(float),
+                                  pd_df['kOH'].values.astype(float))
+        elif pd_df is not None and 'D_OH' in pd_df.columns and 'OH' in c:
+            d_oh = np.interp(df.index.values.astype(float),
+                             pd_df.index.values.astype(float),
+                             pd_df['D_OH'].values.astype(float))
+            df['kOH'] = d_oh / (df['OH'].values + 1e-20)
+        return df
+
+    def _cmp_load_aux(self, cs_path, ref=False):
+        """Load kv and pd files alongside a cs file; augment the stored cs DataFrame."""
+        import sys as _sys
+        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            from compare_juice_facsimile import (load_facsimile_kv,
+                                                 load_facsimile_pd,
+                                                 _trim_boundary_rows)
+        except ImportError:
+            return
+
+        base = os.path.splitext(cs_path)[0]
+        is_fac = cs_path.endswith('.cs')   # FACSIMILE: no underscore convention
+
+        # ── pd ────────────────────────────────────────────────────────────────
+        pd_path = base + '.pd' if is_fac else base.replace('_cs', '_pd') + '.csv'
+        pd_df = None
+        if os.path.isfile(pd_path):
+            try:
+                if is_fac:
+                    pd_df = load_facsimile_pd(pd_path)
+                    # align to hours-since-midnight like the cs data
+                    pd_df.index = (pd_df.index.values.astype(float)
+                                   + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
+                else:
+                    pd_df = pd.read_csv(pd_path, index_col=0, comment='#')
+                    pd_df.index = (pd_df.index.values.astype(float)
+                                   + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
+            except Exception:
+                pd_df = None
+
+        # ── augment cs DataFrame ──────────────────────────────────────────────
+        if ref:
+            if self._cmp_df_ref is not None:
+                self._cmp_add_derived(self._cmp_df_ref, pd_df)
+        else:
+            self._cmp_add_derived(self.df, pd_df)
+
+        # ── kv ────────────────────────────────────────────────────────────────
+        kv_path = base + '.kv' if is_fac else base.replace('_cs', '_kv') + '.csv'
+        if not os.path.isfile(kv_path):
+            return
+        try:
+            if is_fac:
+                k_df, _v = load_facsimile_kv(kv_path)
+                # use k (rate constants); align time
+                k_df.index = (k_df.index.values.astype(float)
+                              + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
+                kv_out = k_df
+            else:
+                raw = pd.read_csv(kv_path, index_col=0, comment='#')
+                raw.index = (raw.index.values.astype(float)
+                             + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
+                # keep only k_ columns (rate constants); strip k_ prefix and R#####: tag
+                from compare_juice_facsimile import _canon_kv_label as _ckl
+                k_map = {}
+                for c in raw.columns:
+                    if not c.startswith('k_'):
+                        continue
+                    k_map[c] = _ckl(c)   # canonical label matching FACSIMILE
+                kv_out = raw[list(k_map)].rename(columns=k_map)
+            if ref:
+                self._cmp_kv_ref = kv_out
+            else:
+                self._cmp_kv_jui = kv_out
+        except Exception as _e:
+            import traceback
+            print(f"[kv load ERROR] {kv_path}:\n{traceback.format_exc()}")
+
     def _cmp_parse_facsimile(self, path):
         """Parse a FACSIMILE .cs file; align to hours-since-midnight of this experiment."""
         col_names = {}
@@ -2345,46 +2565,114 @@ class ResultsViewer(QMainWindow):
         except ValueError:
             threshold = 1e-6
 
-        mcm_cols = set(self.df.columns)
-        ref_cols = set(self._cmp_df_ref.columns)
-        react_only = (hasattr(self, '_cmp_react_only_btn')
-                      and self._cmp_react_only_btn.isChecked())
+        # Determine mode (0=Favorites, 1=c-Species, 2=s-Species, 3=k-Values)
+        _mode = 1
+        if hasattr(self, '_cmp_mode_group'):
+            _mode = self._cmp_mode_group.checkedId()
+            if _mode < 0:
+                _mode = 1
 
-        if react_only:
-            # Active: only chemical species (reactants/products in reactions).
-            # Exclude rate constants, physical parameters, ENZ columns.
-            def _is_reaction_species(name):
+        # Lazily load JUICE aux data (kv/pd/derived) on first slope compute
+        if not getattr(self, '_cmp_jui_aux_loaded', False) and self.csv_path:
+            self._cmp_kv_jui = None
+            self._cmp_load_aux(self.csv_path, ref=False)
+            self._cmp_jui_aux_loaded = True
+
+        # For k-Values mode: use kv turnover-rate DataFrames
+        if _mode == 3:
+            jui_kv = getattr(self, '_cmp_kv_jui', None)
+            ref_kv = getattr(self, '_cmp_kv_ref', None)
+            if jui_kv is None or ref_kv is None:
+                QMessageBox.information(self, "k-Values",
+                    "No kv files found. Load a FACSIMILE reference whose .kv file\n"
+                    "sits in the same folder as the .cs file.")
+                return
+            mcm_cols = set(jui_kv.columns)
+            ref_cols = set(ref_kv.columns)
+        else:
+            mcm_cols = set(self.df.columns)
+            ref_cols = set(self._cmp_df_ref.columns)
+
+        if _mode == 0:
+            # Favoriten: parameters listed in TOML, intersected with available columns
+            favs = getattr(self, '_cmp_favorites', [])
+            fav_upper = {f.upper(): f for f in favs}
+            # match case-insensitively against available columns
+            common = sorted(
+                c for c in mcm_cols & ref_cols
+                if c.upper() in fav_upper
+            )
+            # preserve TOML order where possible
+            _order = {v.upper(): i for i, v in enumerate(favs)}
+            common = sorted(common, key=lambda c: _order.get(c.upper(), 9999))
+            self._cmp_only_juice = []
+            self._cmp_only_ref   = []
+        elif _mode == 1:
+            # c-Species: ODE concentrations (reactants/products in reaction equations)
+            def _is_c_species(name):
                 n = name.upper()
                 if n.startswith('SAPHIR_'): return False
                 if n.startswith('KMT') or n.startswith('KRO') or n.startswith('KAP'): return False
                 if n.startswith('KBP') or n.startswith('KFP') or n.startswith('KNO'): return False
-                if n.startswith('KCH') or n.startswith('KRO') or n.startswith('KDE'): return False
-                if n.startswith('KRO'): return False
+                if n.startswith('KCH') or n.startswith('KDE') or n.startswith('KRO'): return False
                 if len(n) > 1 and n[0] == 'J' and n[1:].replace('_CS','').replace('_','').isdigit(): return False
                 if n in {'M','T','P','RH','SZ','SZA','HV','COSX','DIL','DILUTE',
                          'FLOW','LNO2','MNO2','NNO2','KDEC','KMT05','KRO2NO3',
-                         'DIL','N2','O2','H2O','TEMP','PRESS'}: return False
+                         'N2','O2','H2O','TEMP','PRESS'}: return False
                 return True
-            common = sorted(c for c in mcm_cols & ref_cols if _is_reaction_species(c))
+            common = sorted(c for c in mcm_cols & ref_cols if _is_c_species(c))
+            self._cmp_only_juice = []
+            self._cmp_only_ref   = []
+        elif _mode == 2:
+            # s-Species: physical settings (T, P, HV, SZ, RH, DILUTE, M, …)
+            _S_NAMES = {'T','TEMP','P','PRESS','M','HV','SZ','SZA','RH','COSX',
+                        'DIL','DILUTE','FLOW','N2','O2','H2O','DV','DVO3','WALLDEP',
+                        'LNO2','MNO2','NNO2','SHONO','SHCHO','RO2'}
+            def _is_s_species(name):
+                n = name.upper()
+                if n in _S_NAMES: return True
+                if n.startswith('SAPHIR_'): return True
+                return False
+            common = sorted(c for c in mcm_cols & ref_cols if _is_s_species(c))
+            self._cmp_only_juice = []
+            self._cmp_only_ref   = []
+        elif _mode == 3:
+            # k-Values: rate constants and photolysis rates
+            def _is_k_value(name):
+                n = name.upper()
+                if n.startswith('KMT'): return True
+                if n.startswith('KRO') or n.startswith('KAP') or n.startswith('KBP'): return True
+                if n.startswith('KFP') or n.startswith('KNO') or n.startswith('KCH'): return True
+                if n.startswith('KDE') or n.startswith('KRO'): return True
+                if n in {'KDEC','KROPRIM','KAPNO','KAPHO2','KRO2NO','KRO2HO2',
+                         'KRO2NO3','KCH3O2','KBPAN','KFPAN','KNO3AL'}: return True
+                if len(n) > 1 and n[0] == 'J' and n[1:].replace('_CS','').replace('_','').isdigit(): return True
+                if n.startswith('J') and '_CS' in n: return True
+                return False
+            common = sorted(c for c in mcm_cols & ref_cols if _is_k_value(c))
             self._cmp_only_juice = []
             self._cmp_only_ref   = []
         else:
-            # Inactive: everything from either dataset
+            # k-Values: all matched reaction turnover rates from kv files
             common = sorted(mcm_cols & ref_cols)
-            self._cmp_only_juice = sorted(mcm_cols - ref_cols)
-            self._cmp_only_ref   = sorted(ref_cols - mcm_cols)
+            self._cmp_only_juice = []
+            self._cmp_only_ref   = []
 
         if not common and not getattr(self, '_cmp_only_juice', []) and not getattr(self, '_cmp_only_ref', []):
-            QMessageBox.warning(self, "No Species",
-                                "Keine Spezies gefunden.")
+            QMessageBox.warning(self, "No Species", "No matching parameters found.")
             return
 
-        t_min = max(self.df.index.min(), self._cmp_df_ref.index.min())
-        t_max = min(self.df.index.max(), self._cmp_df_ref.index.max())
-        # Use the full JUICE time axis so sharp transitions (ENZ boundaries) are
-        # rendered at their correct time — a coarse linspace (e.g. 500 pts over 7h)
-        # would space points ~50 s apart, making a 10-s step appear to start ~40 s early.
-        common_t = self.df.index.values.astype(float)
+        # Choose data source: kv DataFrames for mode 3, cs DataFrames otherwise
+        if _mode == 3:
+            _df_jui = self._cmp_kv_jui
+            _df_ref = self._cmp_kv_ref
+        else:
+            _df_jui = self.df
+            _df_ref = self._cmp_df_ref
+
+        t_min = max(_df_jui.index.min(), _df_ref.index.min())
+        t_max = min(_df_jui.index.max(), _df_ref.index.max())
+        common_t = _df_jui.index.values.astype(float)
         mask = (common_t >= t_min) & (common_t <= t_max)
         common_t = common_t[mask]
 
@@ -2403,17 +2691,21 @@ class ResultsViewer(QMainWindow):
                       and not c.upper().startswith('MR_')]
         if not scale_cols:
             scale_cols = common
+        _sc_jui = [c for c in scale_cols if c in _df_jui.columns]
+        _sc_ref = [c for c in scale_cols if c in _df_ref.columns]
         py_scale = float(np.nanpercentile(
-            np.abs(self.df[scale_cols].select_dtypes(include='number').values), 99))
+            np.abs(_df_jui[_sc_jui].select_dtypes(include='number').values), 99)) if _sc_jui else 1.0
         ref_scale = float(np.nanpercentile(
-            np.abs(self._cmp_df_ref[scale_cols].select_dtypes(include='number').values), 99))
+            np.abs(_df_ref[_sc_ref].select_dtypes(include='number').values), 99)) if _sc_ref else 1.0
         py_scale  = py_scale  if py_scale  > 0 else 1.0
         ref_scale = ref_scale if ref_scale > 0 else 1.0
 
         self._cmp_slope_results = {}
         for sp in common:
-            py_s  = interp(self.df, sp)
-            ref_s = interp(self._cmp_df_ref, sp)
+            if sp not in _df_jui.columns or sp not in _df_ref.columns:
+                continue
+            py_s  = interp(_df_jui, sp)
+            ref_s = interp(_df_ref, sp)
 
             mask = np.isfinite(py_s) & np.isfinite(ref_s)
             if mask.sum() < 5:

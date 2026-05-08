@@ -133,6 +133,11 @@ _EASY_VAR_SUBS = [
     # T_in is the FACSIMILE alias for temperature (T = CONST(T_in) in EASY files)
     (r'(?<![A-Za-z0-9_])T_in(?![A-Za-z0-9_])',    'T'),
     (r'(?<![A-Za-z0-9_])t_in(?![A-Za-z0-9_])',    'T'),
+    # H2O_in is the raw ENZ input alias, H2O is the computed output.
+    # They must remain separate so H2O = CONST(1e-2*M*H2O_in) doesn't create
+    # a self-referential loop in the 3-pass var_assignment evaluation.
+    (r'(?<![A-Za-z0-9_])H2O_in(?![A-Za-z0-9_])', 'H2O_IN'),
+    (r'(?<![A-Za-z0-9_])h2o_in(?![A-Za-z0-9_])', 'H2O_IN'),
 ]
 
 
@@ -462,13 +467,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                        ENZ_COL_TO_ENV.get(var_up.lower()))
             if mapping:
                 env_key, canonical = mapping
-                # FLOW drives dilution. When dilution is disabled (analytical_dilution=False)
-                # the .dil files are commented and FLOW has no role — exclude it from env_map
-                # so it doesn't appear as a constrained variable in the GUI.
-                if env_key == "FLOW" and not analytical_dilution:
-                    skipped_notes.append("FLOW = INPUT(dilute): excluded from env_map (dilution inactive)")
-                else:
-                    env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
+                env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
             else:
                 injection_switches[var_up] = enz_col
             # Variable is ENZ-sourced — remove any prior CONST value from idl_parameters
@@ -488,18 +487,26 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             if var_up in ("P", "PRESS"):
                 try:
                     pressure_hpa = float(expr)
-                except Exception:
-                    pressure_hpa = 1013.25
-                env_map["PRESS"] = {"type": "Fixed Constant", "value": str(pressure_hpa)}
-                idl_parameters["P"] = py_expr   # also as var_assignment (overrides ENZ P)
+                    env_map["PRESS"] = {"type": "Fixed Constant", "value": str(pressure_hpa)}
+                    idl_parameters["P"] = py_expr
+                except (ValueError, TypeError):
+                    # Non-numeric expr e.g. P = CONST(P_in): P_in = INPUT(press) already set
+                    # env_map["PRESS"] = SAPHIR File — do NOT overwrite with a fixed value.
+                    if env_map.get("PRESS", {}).get("type") != "SAPHIR File":
+                        env_map["PRESS"] = {"type": "Fixed Constant", "value": "1013.25"}
+                        idl_parameters["P"] = py_expr
 
             elif var_up in ("T", "TEMP"):
                 try:
                     temp_k = float(expr)
-                except Exception:
-                    temp_k = 298.15
-                env_map["TEMP"] = {"type": "Fixed Constant", "value": str(temp_k)}
-                idl_parameters["T"] = py_expr   # also as var_assignment (overrides ENZ T)
+                    env_map["TEMP"] = {"type": "Fixed Constant", "value": str(temp_k)}
+                    idl_parameters["T"] = py_expr
+                except (ValueError, TypeError):
+                    # Non-numeric expr e.g. T = CONST(T_in): T_in = INPUT(t) already set
+                    # env_map["TEMP"] = SAPHIR File — do NOT overwrite with a fixed value.
+                    if env_map.get("TEMP", {}).get("type") != "SAPHIR File":
+                        env_map["TEMP"] = {"type": "Fixed Constant", "value": "298.15"}
+                        idl_parameters["T"] = py_expr
 
             elif var_up == "Y":
                 y_active = True
@@ -1032,7 +1039,6 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         raise ValueError(
             "DILUTE is used in dilution reactions but not defined in the EASY script. "
             "Add 'DILUTE = CONST((FLOW+...)/...)' to the EASY script.")
-        skipped_notes.append("DILUTE CONST not found in EASY — using fallback formula")
 
     # ---- burst injection summaries (informational) ---------------------------
     burst_injections = []

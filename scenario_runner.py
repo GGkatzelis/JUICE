@@ -95,6 +95,8 @@ class ScenarioRunner:
         self.t_span = None
         self.ctx_data = {}
         self.var_assignments = []
+        self._ctx_data_protected = set()   # raw ENZ aliases (e.g. H2O_IN) — never overwritten by var_assignments
+        self._idl_params_upper  = set()    # idl_parameter names — allowed to override env_map
         self.last_progress_print_time = -1
         self.t_start = 0
         self.t_end = 0
@@ -183,20 +185,14 @@ class ScenarioRunner:
                     # then build a pre-corrected interpolation so the per-timestep code never
                     # sees the ambiguous 0.02–1.0 grey zone.
                     if internal_key.upper() == 'H2O':
-                        t_arr = np.linspace(t_min, t_max, 500)
-                        raw_vals = raw_interp(t_arr)
-                        peak = float(np.nanmax(np.abs(raw_vals)))
-                        if peak > 1.0:
-                            # Stored as percentage (e.g. 1.27 for 1.27%) — divide once here
-                            scale = 1.0 / 100.0
-                        else:
-                            # Stored as VMR fraction (e.g. 0.0127)
-                            scale = 1.0
-                        corrected_vals = np.where(raw_vals < 0.02, 0.0, raw_vals * scale)
-                        self.ctx_data[internal_key] = interp1d(t_arr, corrected_vals,
-                                                               fill_value="extrapolate")
-                        print(f"  [ENV] H2O unit auto-detected: {'percentage /100' if scale < 1 else 'VMR fraction'}, "
-                              f"peak={peak:.4g}, noise floor < 0.02 zeroed.")
+                        # H2O_in in the ENZ is the raw mixing ratio (percentage or fraction).
+                        # The EASY script formula H2O = CONST(1e-2*M*H2O_in) converts it
+                        # to molec/cm³.  Store raw ENZ values unchanged — the formula handles
+                        # the unit conversion.  No scaling, no noise-floor zeroing.
+                        self.ctx_data[internal_key] = raw_interp
+                        # H2O_IN is auto-registered as a protected INPUT alias in
+                        # _finalize_mechanism via the generic INPUT-alias detection.
+                        print(f"  [ENV] H2O: raw ENZ values loaded (formula handles unit conversion)")
                     else:
                         self.ctx_data[internal_key] = raw_interp
             else:
@@ -460,6 +456,10 @@ class ScenarioRunner:
         # as the elog path.
         from easy_parser import expand_macros as _expand_macros
         _idl_params = list(self.cfg.get('idl_parameters', {}).items())
+        # idl_parameters are computed values (e.g. H2O = 1e-2*M*H2O_IN) that must
+        # override raw ENZ-sourced values even when the name is in env_map/active_s.
+        _idl_params_upper = {k.upper() for k, _ in _idl_params}
+        self._idl_params_upper = _idl_params_upper   # expose for _solve / _export_results
         for p_name, p_expr in reversed(_idl_params):
             p_clean = p_expr.upper().replace('@', '**')
             p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
@@ -730,9 +730,35 @@ class ScenarioRunner:
                 f"Fix: ensure the FUNCTION is defined in the EASY script before "
                 f"it is used, or add it to the elog.")
 
+        # ── Auto-register INPUT alias variables ──────────────────────────────────
+        # When the EASY script says  X_in = INPUT(col) / Y = CONST(X_in * ...)
+        # the easy_parser creates a var_assignment  X_IN = COL  (simple alias).
+        # Any such alias must be:
+        #   1. exposed in ctx_data with the raw ENZ value (so formulas can use it)
+        #   2. protected from being overwritten in the 3-pass evaluation loop
+        #      (X_in is an INPUT — it must stay at the ENZ value across all passes)
+        # Detection: var_assignment (NAME, code) where code.co_names == {single_name}
+        # and that single name is already in ctx_data (an ENZ-sourced variable).
+        for vn, ce in self.var_assignments:
+            co = set(getattr(ce, 'co_names', []))
+            if len(co) == 1:
+                src = next(iter(co))
+                if src in self.ctx_data and vn not in self.ctx_data:
+                    # vn is an alias (e.g. H2O_IN) for an ENZ variable (e.g. H2O)
+                    self.ctx_data[vn] = self.ctx_data[src]
+                    self._ctx_data_protected.add(vn)
+
         self._add_artifacts()
 
     def _add_artifacts(self):
+        # When loading from an EASY/ELOG file, all chamber chemistry (Y+OH,
+        # HONO wall source, HCHO source, …) must be defined in the EASY script
+        # itself.  Adding extra reactions here would silently override or
+        # duplicate what the EASY script specifies.  If a reaction is missing,
+        # fix the EASY script — not JUICE.
+        if self.cfg.get('elog_path'):
+            return   # EASY/ELOG mode: no artifact backdoors
+
         if not self.cfg.get('artifacts') or not self.cfg['artifacts'].get('active', False):
             return
         if self.cfg['artifacts']['active']:
@@ -745,8 +771,6 @@ class ScenarioRunner:
                 y_rate = f"({self.cfg['artifacts']['y_eqn']}) * 1e-9 * M * 2.4e-13"
                 self.mechanism.reactions.append(Reaction(['OH'], ["HO2"], y_rate))
             if self.cfg['artifacts'].get('wall_active', True):
-                # dark_hono expression is a direct production rate in molec cm⁻³ s⁻¹.
-                # H2O dependence (if any) must be explicit in the expression itself.
                 self.mechanism.reactions.append(Reaction([], ["HONO"], str(self.cfg['artifacts']['dark_hono'])))
 
     def _solve(self):
@@ -817,14 +841,11 @@ class ScenarioRunner:
             
             # KMT/COMPRC are now inline-expanded parameters — no mcm_kinetics injection
 
-            # Seed test PHTFKT callable using SZA=45 test conditions
             _test_cosx = max(np.cos(45.0 * 0.0174533), 0.01)
             test_ctx['COSX']     = _test_cosx
             test_ctx['LNO2']     = 1.165e-2
             test_ctx['MNO2']     = 0.244
             test_ctx['NNO2']     = -0.267
-            test_ctx['PHTFKT']   = lambda a, b, c, _c=_test_cosx: a * _c**b * np.exp(c / _c)
-            test_ctx['PHTFKT_CS']= test_ctx['PHTFKT']
             test_ctx['AMAX']     = np.maximum
             test_ctx['AMIN']     = np.minimum
 
@@ -1118,10 +1139,11 @@ class ScenarioRunner:
             T_s = float(T_fn_s(t_abs))
             ctx_s = SafeDict()
             active_s = set()
+            _env_map_up  = {k.upper() for k in self.cfg['env_map']}
             for k, v_func in self.ctx_data.items():
                 try:
                     ctx_s[k.upper()] = float(v_func(t_abs))
-                    if k.upper() in self.cfg['env_map']:
+                    if k.upper() in _env_map_up or k.upper() in self._ctx_data_protected:
                         active_s.add(k.upper())
                 except Exception:
                     pass
@@ -1143,29 +1165,16 @@ class ScenarioRunner:
                     ctx_s[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                 except Exception:
                     pass
-            if 'H2O' in active_s:
-                h2o_vmr = ctx_s['H2O']
-                ctx_s['H2O'] = h2o_vmr * M_s
-                if h2o_vmr > 0:
-                    p_sat = np.exp(21.36469 - 5339.66 / T_s)
-                    press = float(self.ctx_data['PRESS'](t_abs)) if 'PRESS' in self.ctx_data else 1013.25
-                    ctx_s['RH'] = h2o_vmr * press / p_sat * 100.0
-                else:
-                    ctx_s['RH'] = 0.0
-            # 3-pass var_assignments with current c and s
+            # 3-pass var_assignments with current c and s.
+            # _ctx_data_protected variables (e.g. H2O_IN) are INPUT variables in the
+            # EASY script — they must stay at their ENZ value across all passes.
             for _p in range(3):
-                _cx = max(float(ctx_s.get('COSX', np.cos(float(ctx_s.get('SZ',45.0))*0.0174533))),0.01)
-                _jx = float(ctx_s.get('JNO2',0.0)); _lx=float(ctx_s.get('LNO2',1.165e-2))
-                _mx = float(ctx_s.get('MNO2',0.244)); _nx=float(ctx_s.get('NNO2',-0.267))
-                _hx = float(ctx_s.get('HV',0.0))
-                def _pf(a,b,c,_c=_cx,_j=_jx,_l=_lx,_m=_mx,_n=_nx,_h=_hx):
-                    if _h==0 or _c<=0: return 0.0
-                    cs_j=a*_c**b*np.exp(c/_c)
-                    return cs_j*(min(_j/(_l*_c**_m*np.exp(_n/_c)),1.0) if _j>0 and _l*_c**_m*np.exp(_n/_c)>0 else 1.0)
-                ctx_s['PHTFKT']   =_pf
-                ctx_s['PHTFKT_CS']=lambda a,b,c,_c=_cx: a*_c**b*np.exp(c/_c)
                 for vn,ce in self.var_assignments:
-                    if vn in active_s: continue
+                    if vn in self._ctx_data_protected:
+                        continue  # INPUT variable: never overwrite with computed value
+                    if vn in active_s and vn not in self._idl_params_upper:
+                        if not self.cfg.get('elog_path'):
+                            continue
                     try: ctx_s[vn]=eval(ce,globals(),ctx_s)
                     except:
                         if _p==0: ctx_s[vn]=0.0
@@ -1226,23 +1235,11 @@ class ScenarioRunner:
                 for k in _snap_active:
                     try: ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                     except: pass
-                # 3-pass var_assignments (live settings, no _snap_active skip)
+                # 3-pass var_assignments (INPUT variables protected from overwrite)
                 for _p in range(3):
-                    _cx = max(float(ctx['COSX']) if 'COSX' in ctx else
-                              np.cos(float(ctx['SZ']) * 0.0174533 if 'SZ' in ctx else np.pi/4), 0.01)
-                    _jx = float(ctx.get('JNO2', 0.0))
-                    _lx = float(ctx.get('LNO2', 1.165e-2))
-                    _mx = float(ctx.get('MNO2', 0.244))
-                    _nx = float(ctx.get('NNO2', -0.267))
-                    _hx = float(ctx.get('HV', 0.0))
-                    def _pf(a, b, c, _c=_cx, _j=_jx, _l=_lx, _m=_mx, _n=_nx, _h=_hx):
-                        if _h == 0 or _c <= 0: return 0.0
-                        cs_j = a * _c**b * np.exp(c / _c)
-                        return cs_j * (min(_j / (_l * _c**_m * np.exp(_n / _c)), 1.0)
-                                       if _j > 0 and _l * _c**_m * np.exp(_n / _c) > 0 else 1.0)
-                    ctx['PHTFKT'] = _pf
-                    ctx['PHTFKT_CS'] = lambda a, b, c, _c=_cx: a * _c**b * np.exp(c / _c)
                     for vn, ce in self.var_assignments:
+                        if vn in self._ctx_data_protected:
+                            continue
                         try: ctx[vn] = eval(ce, globals(), ctx)
                         except:
                             if _p == 0: ctx[vn] = 0.0
@@ -1446,28 +1443,12 @@ class ScenarioRunner:
                 _hwj = float(ctx_j.get('H2O',0.0))
                 _kqj = 2.0e-11*_n2j*np.exp(130.0/_tj)+3.20e-11*_o2j*np.exp(67.0/_tj)+2.14e-10*_hwj
                 ctx_j['O1D'] = max(_j1j,0.0)*max(_o3j,0.0)/max(_kqj,1e-30)
-            # PHTFKT callable (from snapshot values)
-            _cosx  = max(float(ctx_j.get('COSX', np.cos(float(ctx_j.get('SZ', 45.0)) * 0.0174533))), 0.01)
-            _jno2  = float(ctx_j.get('JNO2',  0.0))
-            _lno2  = float(ctx_j.get('LNO2',  1.165e-2))
-            _mno2  = float(ctx_j.get('MNO2',  0.244))
-            _nnno2 = float(ctx_j.get('NNO2',  -0.267))
-            _hv    = float(ctx_j.get('HV',    0.0))
-            def _phtfkt_j(a, b, c, _c=_cosx, _j=_jno2, _l=_lno2, _m=_mno2, _n=_nnno2, _h=_hv):
-                if _h == 0 or _c <= 0: return 0.0
-                cs_j = a * _c**b * np.exp(c / _c)
-                if _j > 0:
-                    jno2_cs = _l * _c**_m * np.exp(_n / _c)
-                    scale = min(_j / jno2_cs, 1.0) if jno2_cs > 0 else 1.0
-                else:
-                    scale = 1.0
-                return cs_j * scale
-            ctx_j['PHTFKT']    = _phtfkt_j
-            ctx_j['PHTFKT_CS'] = lambda a, b, c, _c=_cosx: a * _c**b * np.exp(c / _c)
-            ctx_j['AMAX']      = np.maximum
-            ctx_j['AMIN']      = np.minimum
-            # 8. Pass 2: J-value var_assignments (uses PHTFKT from step 7)
+            ctx_j['AMAX'] = np.maximum
+            ctx_j['AMIN'] = np.minimum
+            # 8. Pass 2: J-value var_assignments (INPUT variables protected)
             for var_name, comp_expr in self.var_assignments:
+                if var_name in self._ctx_data_protected:
+                    continue
                 try:
                     ctx_j[var_name] = eval(comp_expr, globals(), ctx_j)
                 except Exception:
@@ -1544,17 +1525,29 @@ class ScenarioRunner:
         # T/P (k-values + thermal expansion) and all step-pattern columns (HV, Q*).
         import fnmatch as _fnm
         _step_pats = _load_step_col_patterns()
+        # T/P only need BDF restarts when they are FIXED CONSTANT overrides (an override
+        # creates a genuine step change at ENZ boundaries relative to a measured ENZ T/P).
+        # When T or P comes from the ENZ (SAPHIR File), it varies smoothly row-to-row;
+        # the BDF handles that without restarts.  Including ENZ-sourced T here would
+        # generate 1000+ spurious restarts (one per 60 s ENZ row), turning scene_04 into
+        # 1078 short segments where the HV-on phase immediately stalls.
+        _em = self.cfg.get('env_map', {})
+        _t_from_enz = _em.get('TEMP', _em.get('T', {})).get('type') == 'SAPHIR File'
+        _p_from_enz = _em.get('PRESS', _em.get('P', {})).get('type') == 'SAPHIR File'
         _RESTART_KEYS = {
             k for k in self.ctx_data
-            if k.upper() in {'T', 'TEMP', 'P', 'PRESS'}
+            if (k.upper() in {'T', 'TEMP'} and not _t_from_enz)
+            or (k.upper() in {'P', 'PRESS'} and not _p_from_enz)
             or any(_fnm.fnmatch(k.upper(), p.upper()) for p in _step_pats)
         }
         # ENZ breakpoints are shifted +1e-9 s in load_saphir_environment so that
         # exactly at the boundary time t, the interpolator returns the OLD value.
-        # To detect the change we must query AFTER the shift: use t + 2e-9 as the
-        # "right-hand limit" so _v_after sees the NEW value.
-        _eff_eps   = 1e-9   # left-hand query offset
-        _rh_offset = 2e-9   # right-hand query offset (> breakpoint shift of 1e-9)
+        # IMPORTANT: ENZ timestamps are absolute (seconds since 1.1.2000, ~7.74e8).
+        # At that scale, float64 ULP ≈ 119 ns.  1 ns offsets round to zero and both
+        # queries land on the same float64 value → filter incorrectly sees no change.
+        # Use 1e-4 (100 µs) >> 119 ns ULP, and << 60 s ENZ row spacing.
+        _eff_eps   = 1e-4   # left-hand query offset (must exceed float64 ULP at ENZ scale)
+        _rh_offset = 1e-4   # right-hand query offset (same reasoning)
         raw_sct = getattr(self, '_step_change_times', [])
         filtered_sct = []
         for _t in raw_sct:
@@ -1625,7 +1618,12 @@ class ScenarioRunner:
                 if not seg_sol.success:
                     print(f"\n[WARNING] Step {step_idx+1}/{n_out_steps} "
                           f"({t0:.0f}-{t1:.0f}s): {seg_sol.message}")
-                y_seg = seg_sol.y[:, -1]
+                _sol_y = seg_sol.y
+                if isinstance(_sol_y, list):
+                    _sol_y = np.column_stack(_sol_y) if _sol_y else np.empty((len(y_seg), 1))
+                y_seg = _sol_y[:, -1] if _sol_y.shape[1] > 0 else y_seg
+                if not np.all(np.isfinite(y_seg)):
+                    y_seg = np.where(np.isfinite(y_seg), y_seg, 0.0)
                 seg_t_list.append(np.array([t1]))
                 seg_y_list.append(y_seg[:, np.newaxis])
                 M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
@@ -1648,10 +1646,15 @@ class ScenarioRunner:
                 # Hybrid: no snap needed for ODE — live evaluation only.
                 # Store M at segment start for thermal expansion check.
                 _M_seg_start = self.get_M(t_seg0)
-                # Collect all output times within this segment
+                # Collect all output times within this segment.
+                # The segment ends at t_seg1 = t_ENZ_row - 1µs (placed 1µs before the
+                # step-change boundary).  ENZ row times in t_span are at t_ENZ_row, so
+                # the <= comparison misses the endpoint by 1µs for short segments
+                # (e.g. piecewise mode with 60 s ENZ intervals).  Always ensure at least
+                # [t_seg0, t_seg1] so every segment contributes at least one output point.
                 t_eval_seg = self.t_span[(self.t_span >= t_seg0) & (self.t_span <= t_seg1)]
-                if len(t_eval_seg) == 0:
-                    t_eval_seg = np.array([t_seg0, t_seg1])
+                if len(t_eval_seg) < 2 or t_eval_seg[-1] < t_seg1 - 0.5:
+                    t_eval_seg = np.union1d(t_eval_seg, [t_seg1])
                 _atol_vec = np.maximum(_atol_floor, _rtol * np.maximum(y_seg, 0.0))
                 seg_sol = solve_ivp(
                     system_ode,
@@ -1668,9 +1671,20 @@ class ScenarioRunner:
                 # last point is the boundary for seg_idx>0.  Without this skip,
                 # t=t_span[0] appears twice (once from init, once from sol.t[0]),
                 # the second occurrence with k=0 in the kv export — a spurious artefact.
+                # Defensive: if solver returns y as a plain list (can happen when atol
+                # contains NaN from a prior stalled segment), convert to numpy array.
+                _sol_y = seg_sol.y
+                if isinstance(_sol_y, list):
+                    _sol_y = np.column_stack(_sol_y) if _sol_y else np.empty((len(y_seg), 0))
                 seg_t_list.append(seg_sol.t[1:] + _t_offset)
-                seg_y_list.append(seg_sol.y[:, 1:])
-                y_seg = seg_sol.y[:, -1]
+                seg_y_list.append(_sol_y[:, 1:])
+                y_seg = _sol_y[:, -1] if _sol_y.shape[1] > 0 else y_seg
+                # Sanitize: replace NaN/Inf from a stalled solver with 0 to prevent
+                # cascading failures in subsequent segments.
+                if not np.all(np.isfinite(y_seg)):
+                    print(f"\n[WARNING] Segment {seg_idx+1}: non-finite concentrations "
+                          f"after solver failure — clamping to 0 for next segment.")
+                    y_seg = np.where(np.isfinite(y_seg), y_seg, 0.0)
 
                 # Thermal expansion at segment boundary.
                 # When T or P jumps discontinuously (piecewise ENZ), all concentrations
@@ -1714,15 +1728,14 @@ class ScenarioRunner:
         df = pd.DataFrame(np.maximum(self.sol.y, 0.0).T, columns=self.solver.species, index=self.sol.t)
         df.index.name = "TIME_s"
 
-        # FACSIMILE reporting convention: settings (T, M, KMT*, J-values, …) in the
-        # output row at t_i reflect the settings that were FROZEN during step [t_{i-1}, t_i],
-        # i.e. evaluated at t_{i-1} (step start), not at t_i (step end).
-        # Shifting ENZ evaluation by -1 ns replicates this: for piecewise ENZ the
-        # previous-segment value is returned at every row boundary; for linear ENZ
-        # the 1 ns shift is completely negligible.
-        _s_eval_t = self.sol.t.copy()
-        if len(_s_eval_t) > 1:
-            _s_eval_t[1:] = _s_eval_t[1:] - 1e-9
+        # Settings reporting convention (matches FACSIMILE):
+        # At output time t_i the c-values reflect the step [t_{i-1}, t_i] which was
+        # computed using settings from ENZ row i-1 (read at t_{i-1}).  The s-values
+        # in the output row should therefore also come from t_{i-1}, so they describe
+        # exactly the settings that produced the accompanying c-values.
+        # Implementation: evaluate ctx_data at sol.t[k-1] for output row k (k≥1).
+        # This is robust at any timestamp scale (no float64 precision issue).
+        _s_eval_t = np.concatenate([[self.sol.t[0]], self.sol.t[:-1]])
 
         # Calculate Air Density (M) at the (shifted) settings time
         df['M'] = [self.get_M(t) for t in _s_eval_t]
@@ -1756,7 +1769,8 @@ class ScenarioRunner:
         # Build export active_constraints: same alias logic as system_ode.
         # ENZ-sourced env_map variables (and their T/TEMP P/PRESS aliases) must not
         # be overwritten by CONST entries from idl_parameters in var_assignments.
-        _export_constraints = set()
+        # _ctx_data_protected raw aliases (e.g. H2O_IN) are also protected.
+        _export_constraints = set(self._ctx_data_protected)
         for _ek, _em in self.cfg.get('env_map', {}).items():
             if _em.get('type') == 'SAPHIR File' and _ek in _eval_ctx:
                 _export_constraints.add(_ek.upper())
@@ -1780,8 +1794,12 @@ class ScenarioRunner:
 
         for _pass in range(3):
             for var_name, compiled_expr in self.var_assignments:
-                if var_name in _export_constraints:
-                    continue
+                if var_name in _export_constraints and var_name not in self._idl_params_upper:
+                    # In ELOG mode the EASY script is the truth: all var_assignments run.
+                    # In legacy mode (no elog) block env_map variables to prevent constant
+                    # overrides of ENZ values.
+                    if not self.cfg.get('elog_path'):
+                        continue
                 if var_name in _ode_species_upper:
                     continue  # ODE species: never overwrite with parameter formula
                 try:
@@ -1906,10 +1924,18 @@ class ScenarioRunner:
 
         # ── PRE-EXTRACT: env time series by calling interpolators vectorized ───────
         # Same 1-ns shift as _export_results: s-values reflect settings from the
-        # STEP START (t_{i-1}), not the step end (t_i) — FACSIMILE convention.
-        _kv_eval_t = self.sol.t.copy()
-        if len(_kv_eval_t) > 1:
-            _kv_eval_t[1:] = _kv_eval_t[1:] - 1e-9
+        # Same FACSIMILE convention as _export_results: k-values at t_i reflect
+        # the ENZ settings from t_{i-1} (the settings that produced the c-values at t_i).
+        _kv_eval_t = np.concatenate([[self.sol.t[0]], self.sol.t[:-1]])
+        # Variables that come from ENZ / env_map must not be overwritten by var_assignments
+        # in the k-evaluation loop (same protection as _make_snap and _export_results).
+        # Without this, FLOW = INPUT(dilute) → FLOW = DILUTE (after uppercase) creates
+        # a circular dependency that computes DILUTE = 0.6/993600 instead of ~6.84e-6.
+        _kv_active = set(self._ctx_data_protected)
+        for _ke, _em in self.cfg.get('env_map', {}).items():
+            if _em.get('type') == 'SAPHIR File':
+                _kv_active.add(_ke.upper())
+
         env_arrs = {}   # key.upper() → numpy array shape (n_t,)
         for k_env, v_func in self.ctx_data.items():
             try:
@@ -1977,22 +2003,11 @@ class ScenarioRunner:
                 ctx[s] = float(y_matrix[t_i, j])
             # Multi-pass evaluation — same logic as system_ode (3 passes)
             for _kv_pass in range(3):
-                _cosx  = max(float(ctx.get('COSX', np.cos(float(ctx.get('SZ', 45.0)) * 0.0174533))), 0.01)
-                _jno2  = float(ctx.get('JNO2', 0.0))
-                _lno2  = float(ctx.get('LNO2', 1.165e-2))
-                _mno2  = float(ctx.get('MNO2', 0.244))
-                _nnno2 = float(ctx.get('NNO2', -0.267))
-                _hv    = float(ctx.get('HV', 0.0))
-                def _phtfkt(a, b, c, _c=_cosx, _j=_jno2, _l=_lno2, _m=_mno2, _n=_nnno2, _h=_hv):
-                    if _h == 0 or _c <= 0: return 0.0
-                    cs_j = a * _c**b * np.exp(c / _c)
-                    if _j > 0:
-                        jcs = _l * _c**_m * np.exp(_n / _c)
-                        return cs_j * min(_j / jcs, 1.0) if jcs > 0 else cs_j
-                    return 0.0
-                ctx['PHTFKT']    = _phtfkt
-                ctx['PHTFKT_CS'] = lambda a, b, c, _c=_cosx: a * _c**b * np.exp(c / _c)
                 for var_name, comp_expr in self.var_assignments:
+                    if var_name in self._ctx_data_protected:
+                        continue
+                    if var_name in _kv_active and var_name not in self._idl_params_upper:
+                        continue
                     try: ctx[var_name] = eval(comp_expr, globals(), ctx)
                     except:
                         if _kv_pass == 0: ctx[var_name] = 0.0
@@ -2119,6 +2134,11 @@ class ScenarioRunner:
         P_arr = np.zeros((n_t, n_sp), dtype=np.float64)
         D_arr = np.zeros((n_t, n_sp), dtype=np.float64)
 
+        # kOH = Σ k_i × [non-OH ODE reactants] × [env reactants]  (s⁻¹)
+        # Computed without [OH] in the product → valid even when [OH] = 0 (dark phase).
+        _oh_idx = _species_list.index('OH') if 'OH' in _species_list else -1
+        _kOH_arr = np.zeros(n_t, dtype=np.float64) if _oh_idx >= 0 else None
+
         for i, rxn in enumerate(self.mechanism.reactions):
             v_i = v_arr[:, i]
             for prod in getattr(rxn, 'products_parsed', []):
@@ -2126,10 +2146,40 @@ class ScenarioRunner:
             for react in getattr(rxn, 'reactants_parsed', []):
                 D_arr[:, react['idx']] += v_i * react['coeff']
 
+            # kOH: only for reactions where OH is an ODE reactant
+            if _kOH_arr is not None:
+                _oh_reacts = [r for r in getattr(rxn, 'reactants_parsed', [])
+                              if r['idx'] == _oh_idx]
+                if _oh_reacts:
+                    _ki = k_arr[:, i].copy()
+                    _valid = True
+                    for r in getattr(rxn, 'reactants_parsed', []):
+                        if r['idx'] == _oh_idx:
+                            continue  # skip OH itself
+                        _ci = _sp_idx_map.get(_species_list[r['idx']])
+                        if _ci is None:
+                            _valid = False; break
+                        _yc = y_matrix[:, _ci]
+                        _ki *= _yc if r['coeff'] == 1.0 else _yc ** r['coeff']
+                    if _valid:
+                        for r in getattr(rxn, 'reactants_env', []):
+                            _ec = _eff_env_arrs.get(r['name'])
+                            if _ec is None:
+                                if r['name'] == 'M':
+                                    _ec = M_arr
+                                else:
+                                    _valid = False; break
+                            _ecv = np.maximum(_ec, 0.0)
+                            _ki *= _ecv if r['coeff'] == 1.0 else _ecv ** r['coeff']
+                    if _valid:
+                        _kOH_arr += _ki
+
         pd_cols = {'TIME_s': self.sol.t}
         for j, sp in enumerate(_species_list):
             pd_cols[f"P_{sp}"] = P_arr[:, j]
             pd_cols[f"D_{sp}"] = D_arr[:, j]
+        if _kOH_arr is not None:
+            pd_cols['kOH'] = _kOH_arr  # Σ k_i × [X_i] s⁻¹, ohne [OH]
         pd_path = os.path.join(self.root, f"{self._stem}_pd.csv")
         _write_csv(pd_path, pd.DataFrame(pd_cols).set_index('TIME_s'), _juice_header(self._stem))
         print(f"  ... pd saved to {pd_path}")

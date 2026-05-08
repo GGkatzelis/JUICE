@@ -113,6 +113,27 @@ def _is_setting(col):
     return False
 
 
+def _trim_boundary_rows(df):
+    """Remove the duplicate last-timestamp row written by FACSIMILE at end-of-run.
+
+    FACSIMILE always writes a duplicate final row (same timestamp, wrong s-values)
+    because the WHENEVER fertig=1 block calls CALL print after the last ENZ row
+    has already been read for the next (non-existent) step.
+
+    The initial conditions row (t=t_0, c=INITIAL[*]) is NOT removed here —
+    it is handled automatically by the time-range alignment in compare():
+    JUICE skips its own initial row (iloc[1:]), so t_min = t_1, and the
+    FACSIMILE t_0 row falls outside the overlapping range.
+
+    New FACSIMILE files (after the LABEL 63/64 fix in easy_model2facsimile.pro)
+    no longer write the initial conditions row; the duplicate last row remains
+    and is still removed here.
+    """
+    if len(df) < 2:
+        return df
+    return df[~df.index.duplicated(keep='first')]  # drop duplicate last timestamp
+
+
 # ── FACSIMILE .cs parser ───────────────────────────────────────────────────
 def load_facsimile_cs(path):
     cols = {}
@@ -135,7 +156,7 @@ def load_facsimile_cs(path):
     rows = [[float(v) for v in r.split()] for r in data_lines]
     df = pd.DataFrame(rows, columns=headers[:len(rows[0])])
     df = df.set_index('TIME_s')
-    return df
+    return _trim_boundary_rows(df)
 
 
 # ── FACSIMILE .kv parser ──────────────────────────────────────────────────
@@ -177,6 +198,7 @@ def load_facsimile_kv(path):
     headers = [all_cols.get(i, f'COL{i}') for i in range(max(all_cols)+1)]
     rows = [[float(v) for v in r.split()] for r in data_lines]
     df = pd.DataFrame(rows, columns=headers[:len(rows[0])]).set_index('TIME_s')
+    df = _trim_boundary_rows(df)
     k_df = df[[c for c in df.columns if c.startswith('k_')]]
     v_df = df[[c for c in df.columns if c.startswith('v_')]]
     k_df.columns = [c[2:] for c in k_df.columns]
@@ -216,7 +238,7 @@ def load_facsimile_pd(path):
     headers = [all_cols.get(i, f'COL{i}') for i in range(max(all_cols)+1)]
     rows = [[float(v) for v in r.split()] for r in data_lines]
     df = pd.DataFrame(rows, columns=headers[:len(rows[0])]).set_index('TIME_s')
-    return df
+    return _trim_boundary_rows(df)
 
 
 def _show_juice_only_kv(kv_jui, k_jui, v_jui):
@@ -293,8 +315,9 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     if not os.path.isfile(cs_jui_path):
         sys.exit(f"JUICE _cs.csv not found: {cs_jui_path}")
 
-    fac = load_facsimile_cs(cs_fac_path)
+    fac = load_facsimile_cs(cs_fac_path)   # duplicate last row removed by _trim_boundary_rows
     jui = pd.read_csv(cs_jui_path, index_col=0, comment='#')
+    jui = jui.iloc[1:]   # JUICE row 0 = initial conditions (c=0); skip so t_ref starts at t_1
 
     # Align: interpolate FACSIMILE to JUICE time points (JUICE is the reference)
     t_jui = jui.index.values.astype(float)
@@ -478,6 +501,58 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
             _show_juice_only_pd(pd_jui, p_jui)
     else:
         print(f"\n  5. pd-values: {pd_jui_path} not found — run with kv/pd checkbox enabled")
+
+    # ── 6. kOH comparison (D_OH / [OH]) ─────────────────────────────────────
+    print(f"\n{'─'*60}")
+    print(f"  6. kOH  (JUICE: Σk·[X]  |  FACSIMILE: D_OH/([OH]+1))")
+    print(f"{'─'*60}")
+    _koh_done = False
+    if os.path.isfile(pd_jui_path):
+        _pd_jui = pd.read_csv(pd_jui_path, index_col=0, comment='#')
+        if 'kOH' in _pd_jui.columns:
+            _koh_j = np.interp(t_ref, _pd_jui.index.values.astype(float),
+                               _pd_jui['kOH'].values.astype(float))
+        elif 'D_OH' in _pd_jui.columns and 'OH' in jui.columns:
+            _d_oh_j = np.interp(t_ref, _pd_jui.index.values.astype(float),
+                                _pd_jui['D_OH'].values.astype(float))
+            _oh_j = jui['OH'].values.astype(float)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                _koh_j = np.where(_oh_j > 1e2, _d_oh_j / _oh_j, np.nan)
+        else:
+            _koh_j = None
+        if _koh_j is not None:
+            _valid_j = np.sum(np.isfinite(_koh_j))
+            _mean_j  = np.nanmean(_koh_j)
+            print(f"  JUICE   : mean={_mean_j:.3e} s⁻¹  ({_valid_j} valid points)")
+
+            if os.path.isfile(pd_fac_path):
+                try:
+                    _pd_fac2 = load_facsimile_pd(pd_fac_path)
+                    if 'D_OH' in _pd_fac2.columns and 'OH' in fac.columns:
+                        _d_oh_f = np.interp(t_ref, _pd_fac2.index.values.astype(float),
+                                            _pd_fac2['D_OH'].values.astype(float))
+                        _oh_f = fac['OH'].values.astype(float)
+                        # D_OH/([OH]+1): avoids 0/0 at night, correct when [OH]>>1
+                        _koh_f = _d_oh_f / (_oh_f + 1.0)
+                        _valid_f = np.sum(np.isfinite(_koh_f))
+                        _mean_f  = np.nanmean(_koh_f)
+                        print(f"  FACSIMILE: mean={_mean_f:.3e} s⁻¹  ({_valid_f} valid points)")
+                        _mask = np.isfinite(_koh_j) & np.isfinite(_koh_f)
+                        if _mask.any():
+                            _sc = np.maximum(np.abs(_koh_j[_mask]), np.abs(_koh_f[_mask]))
+                            _sc = np.maximum(_sc, 1e-30)
+                            _rel = np.max(np.abs(_koh_j[_mask] - _koh_f[_mask]) / _sc)
+                            _tag = "*** EXCEEDS TOLERANCE ***" if _rel > tol else ""
+                            print(f"  max_rel  = {_rel:.2e}  {_tag}")
+                        _koh_done = True
+                except Exception as _e:
+                    print(f"  [WARNING] FACSIMILE pd: {_e}")
+            if not _koh_done:
+                print("  (no FACSIMILE .pd — JUICE only)")
+        else:
+            print("  D_OH column missing in JUICE pd file.")
+    else:
+        print("  kOH not computed (pd file or OH missing).")
 
     print(f"\n{'='*60}")
     print("  All compared groups within tolerance.")
