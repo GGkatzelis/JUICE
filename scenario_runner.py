@@ -164,55 +164,52 @@ class ScenarioRunner:
             t_span = np.union1d(np.linspace(t_min, t_max, num=2000), enz_times)
         self.t_span = t_span
 
+        # Load all ENZ columns under their raw (uppercased) names.
+        # In ELOG mode this is sufficient: the EASY script uses INPUT(col) to
+        # read them and CONST(formula) to derive everything else.
         for raw_header, interp_func in providers.items():
             self.ctx_data[raw_header.upper()] = interp_func
+        # Remember raw ENZ column names for INPUT-alias auto-detection later.
+        self._enz_providers_up = {h.upper() for h in providers}
 
-        # In non-ELOG (legacy mechanism_files) mode: the ENZ 'dilute' column is raw flow
-        # (L/min or L/h). Legacy .dil mechanism files use CONST(DILUTE) as a rate
-        # constant (s⁻¹), which would be orders-of-magnitude too large.  Forcing
-        # DILUTE=0 disables those stale reactions; dilution is applied analytically.
-        # In ELOG mode: the EASY script contains DILUTE=CONST((FLOW+...)/...) which
-        # converts raw FLOW to a proper dilution rate.  Keeping raw ENZ DILUTE allows
-        # INPUT(dilute) → FLOW and then DILUTE = formula to work correctly.
-        if not self.cfg.get('elog_path'):
+        _using_elog = bool(self.cfg.get('elog_path', ''))
+
+        if _using_elog:
+            # ELOG mode: only Fixed Constant env_map entries go into ctx_data.
+            # SAPHIR File entries are already present as raw ENZ column names above.
+            # No renaming, no overrides, no alias syncing — the EASY script handles all of that.
+            for internal_key, mapping in self.cfg['env_map'].items():
+                if mapping['type'] != "SAPHIR File":
+                    val = float(mapping['value'])
+                    self.ctx_data[internal_key] = (
+                        lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v)
+        else:
+            # Non-ELOG (legacy mechanism_files) mode:
+            # Process env_map fully: rename ENZ columns to internal names, force
+            # DILUTE=0 to disable legacy .dil rate-constant abuse, sync T/TEMP aliases.
             self.ctx_data['DILUTE'] = lambda t: 0.0
 
-        for internal_key, mapping in self.cfg['env_map'].items():
-            if mapping['type'] == "SAPHIR File":
-                file_header = mapping['value'].lower()
-                if file_header not in providers:
-                    actual_header = next((h for h in headers if h.lower() == file_header), None)
-                    if actual_header: file_header = actual_header
-                if file_header in providers:
-                    raw_interp = providers[file_header]
-                    # For H2O: determine unit scaling once from the full-timeseries maximum,
-                    # then build a pre-corrected interpolation so the per-timestep code never
-                    # sees the ambiguous 0.02–1.0 grey zone.
-                    if internal_key.upper() == 'H2O':
-                        # H2O_in in the ENZ is the raw mixing ratio (percentage or fraction).
-                        # The EASY script formula H2O = CONST(1e-2*M*H2O_in) converts it
-                        # to molec/cm³.  Store raw ENZ values unchanged — the formula handles
-                        # the unit conversion.  No scaling, no noise-floor zeroing.
-                        self.ctx_data[internal_key] = raw_interp
-                        # H2O_IN is auto-registered as a protected INPUT alias in
-                        # _finalize_mechanism via the generic INPUT-alias detection.
-                        print(f"  [ENV] H2O: raw ENZ values loaded (formula handles unit conversion)")
-                    else:
-                        self.ctx_data[internal_key] = raw_interp
-            else:
-                val = float(mapping['value'])
-                self.ctx_data[internal_key] = lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v
+            for internal_key, mapping in self.cfg['env_map'].items():
+                if mapping['type'] == "SAPHIR File":
+                    file_header = mapping['value'].lower()
+                    if file_header not in providers:
+                        actual_header = next((h for h in headers if h.lower() == file_header), None)
+                        if actual_header:
+                            file_header = actual_header
+                    if file_header in providers:
+                        self.ctx_data[internal_key] = providers[file_header]
+                else:
+                    val = float(mapping['value'])
+                    self.ctx_data[internal_key] = (
+                        lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v)
 
-        # Synchronise T↔TEMP and P↔PRESS aliases so that a Fixed Constant set under
-        # one name also wins over any ENZ-sourced value stored under the other name.
-        # Without this, T=CONST(295) in the EASY file sets ctx_data["TEMP"]=295 but
-        # leaves ctx_data["T"] pointing at the ENZ interpolation, so Arrhenius rates
-        # (which use the symbol T) would silently use the measured ENZ temperature.
-        for const_key, enz_alias in (('TEMP', 'T'), ('T', 'TEMP'),
-                                     ('PRESS', 'P'), ('P', 'PRESS')):
-            cfg_entry = self.cfg.get('env_map', {}).get(const_key, {})
-            if cfg_entry.get('type') not in ('SAPHIR File', '') and const_key in self.ctx_data:
-                self.ctx_data[enz_alias] = self.ctx_data[const_key]
+            # Sync T↔TEMP and P↔PRESS so a Fixed Constant set under one name
+            # also wins over any ENZ-sourced value stored under the other name.
+            for const_key, enz_alias in (('TEMP', 'T'), ('T', 'TEMP'),
+                                         ('PRESS', 'P'), ('P', 'PRESS')):
+                cfg_entry = self.cfg.get('env_map', {}).get(const_key, {})
+                if cfg_entry.get('type') not in ('SAPHIR File', '') and const_key in self.ctx_data:
+                    self.ctx_data[enz_alias] = self.ctx_data[const_key]
 
     def get_M(self, t):
         temp_fn = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
@@ -735,30 +732,22 @@ class ScenarioRunner:
                 f"it is used, or add it to the elog.")
 
         # ── Auto-register INPUT alias variables ──────────────────────────────────
-        # When the EASY script says  X_in = INPUT(col) / Y = CONST(X_in * ...)
-        # the easy_parser creates a var_assignment  X_IN = COL  (simple alias).
-        # Any such alias must be:
-        #   1. exposed in ctx_data with the raw ENZ value (so formulas can use it)
-        #   2. protected from being overwritten in the 3-pass evaluation loop
-        #      (X_in is an INPUT — it must stay at the ENZ value across all passes)
-        # Detection: var_assignment (NAME, code) where code.co_names == {single_name}
-        # and that single name is already in ctx_data (an ENZ-sourced variable).
-        _env_map_saphir_up = {k.upper() for k, v in self.cfg.get('env_map', {}).items()
-                              if v.get('type') == 'SAPHIR File'}
+        # Any var_assignment whose compiled expression has exactly ONE co_name and
+        # that co_name is a raw ENZ column (present in _enz_providers_up) is an
+        # INPUT alias — it just reads a raw ENZ column under a different name.
+        # Examples:  H2O_IN = H2O,  T_IN = T,  HV_IN = HV,  FLOW = DILUTE
+        # These must be frozen in the 3-pass evaluation loop so that downstream
+        # formulas (DILUTE = f(FLOW), H2O = 1e-2*M*H2O_IN) always see the raw
+        # ENZ value, not a value that was computed in a previous pass.
+        _enz_up = getattr(self, '_enz_providers_up', set())
         for vn, ce in self.var_assignments:
             co = set(getattr(ce, 'co_names', []))
             if len(co) == 1:
                 src = next(iter(co))
-                # Pattern 1: X_IN = X  (e.g. H2O_IN=H2O, HV_IN=HV, T_IN=T)
-                if vn == src + '_IN' and src in self.ctx_data and vn not in self.ctx_data:
-                    self.ctx_data[vn] = self.ctx_data[src]
-                    self._ctx_data_protected.add(vn)
-                # Pattern 2: ENV_MAP_SAPHIR_VAR = ENZ_COL  (e.g. FLOW=INPUT(dilute)→FLOW=DILUTE)
-                # These are INPUT declarations where the env_map variable is just aliasing
-                # an ENZ column.  The 3-pass loop would overwrite FLOW with the computed
-                # DILUTE in pass 2, breaking the DILUTE = f(FLOW) formula.
-                elif (vn in _env_map_saphir_up and src in self.ctx_data
-                      and vn not in self._ctx_data_protected):
+                if src in _enz_up and vn not in self._ctx_data_protected:
+                    # Expose the alias in ctx_data so the restore loop can reload it.
+                    if vn not in self.ctx_data:
+                        self.ctx_data[vn] = self.ctx_data[src]
                     self._ctx_data_protected.add(vn)
 
         self._add_artifacts()
@@ -1179,18 +1168,16 @@ class ScenarioRunner:
                 except Exception:
                     pass
             # 3-pass var_assignments with current c and s.
-            # _ctx_data_protected variables (e.g. H2O_IN) are INPUT variables in the
-            # EASY script — they must stay at their ENZ value across all passes.
+            _snap_env_guard = active_s - self._idl_params_upper if not self.cfg.get('elog_path') else set()
             for _p in range(3):
-                for vn,ce in self.var_assignments:
+                for vn, ce in self.var_assignments:
                     if vn in self._ctx_data_protected:
-                        continue  # INPUT variable: never overwrite with computed value
-                    if vn in active_s and vn not in self._idl_params_upper:
-                        if not self.cfg.get('elog_path'):
-                            continue
-                    try: ctx_s[vn]=eval(ce,globals(),ctx_s)
+                        continue  # ENZ INPUT alias — value loaded from ctx_data above
+                    if vn in _snap_env_guard:
+                        continue  # non-ELOG: keep env_map ENZ value authoritative
+                    try: ctx_s[vn] = eval(ce, globals(), ctx_s)
                     except:
-                        if _p==0: ctx_s[vn]=0.0
+                        if _p == 0: ctx_s[vn] = 0.0
             # O1D PSS (uses current c at step start)
             if 'O1D' in _pss_species_set:
                 _j1s = float(ctx_s.get('J1',0.0))*float(ctx_s.get('HV',0.0))
@@ -1783,49 +1770,34 @@ class ScenarioRunner:
         # ENZ-sourced env_map variables (and their T/TEMP P/PRESS aliases) must not
         # be overwritten by CONST entries from idl_parameters in var_assignments.
         # _ctx_data_protected raw aliases (e.g. H2O_IN) are also protected.
-        _export_constraints = set(self._ctx_data_protected)
-        for _ek, _em in self.cfg.get('env_map', {}).items():
-            if _em.get('type') == 'SAPHIR File' and _ek in _eval_ctx:
-                _export_constraints.add(_ek.upper())
-        for _a, _b in (('TEMP', 'T'), ('T', 'TEMP'), ('PRESS', 'P'), ('P', 'PRESS')):
-            if _a in _export_constraints and _b.upper() in _eval_ctx:
-                _export_constraints.add(_b.upper())
+        # Non-ELOG mode: protect env_map SAPHIR File variables from being overwritten.
+        # In ELOG mode these aren't in ctx_data (no renaming), so nothing to protect.
+        _export_env_guard = set()
+        if not self.cfg.get('elog_path'):
+            for _ek, _em in self.cfg.get('env_map', {}).items():
+                if _em.get('type') == 'SAPHIR File' and _ek.upper() in _eval_ctx:
+                    _export_env_guard.add(_ek.upper())
+            for _a, _b in (('TEMP', 'T'), ('T', 'TEMP'), ('PRESS', 'P'), ('P', 'PRESS')):
+                if _a in _export_env_guard and _b.upper() in _eval_ctx:
+                    _export_env_guard.add(_b.upper())
 
-        # Inject vectorised PHTFKT / PHTFKT_CS so that J-value var_assignments
-        # (J1 = PHTFKT(a,b,c) etc.) evaluate correctly over the full time axis.
-        # The scalar closures used during ODE integration cannot handle array inputs;
-        # these numpy versions are needed for the export pass.
-        # Evaluate ALL var_assignments — multiple passes until stable.
-        # J-values (J1, J4, …) use PHTFKT which expand_macros already expanded
-        # inline at parse time — no PHTFKT callable needed here.  The only
-        # prerequisite was COS/SIN/TAN in _eval_ctx (added above).
-        # ODE species must not be overwritten by var_assignments: their values
-        # come from sol.y (the ODE integration) and are authoritative.  Some EASY
-        # scripts define species like OH analytically as parameters (e.g. PSS
-        # approximations) — those parameter expressions must not replace the ODE output.
         _ode_species_upper = {s.upper() for s in self.solver.species}
 
         for _pass in range(3):
-            # Restore protected ENZ INPUT aliases at the start of every pass so that
-            # any accidental write in a previous pass cannot propagate.
+            # Restore ENZ INPUT aliases at the start of every pass.
             for _prot in self._ctx_data_protected:
                 if _prot in self.ctx_data:
                     try:
-                        _prot_vals = self.ctx_data[_prot](_s_eval_t)
-                        _eval_ctx[_prot] = _prot_vals
+                        _eval_ctx[_prot] = self.ctx_data[_prot](_s_eval_t)
                     except Exception:
                         pass
             for var_name, compiled_expr in self.var_assignments:
                 if var_name in self._ctx_data_protected:
-                    continue  # INPUT alias: restore loop handles these — never re-evaluate
-                if var_name in _export_constraints and var_name not in self._idl_params_upper:
-                    # In ELOG mode the EASY script is the truth: all var_assignments run.
-                    # In legacy mode (no elog) block env_map variables to prevent constant
-                    # overrides of ENZ values.
-                    if not self.cfg.get('elog_path'):
-                        continue
+                    continue  # ENZ INPUT alias — restore loop handles it
+                if var_name in _export_env_guard and var_name not in self._idl_params_upper:
+                    continue  # non-ELOG: keep env_map ENZ value authoritative
                 if var_name in _ode_species_upper:
-                    continue  # ODE species: never overwrite with parameter formula
+                    continue  # ODE species — never replace with parameter formula
                 try:
                     result = eval(compiled_expr, globals(), _eval_ctx)
                     if isinstance(result, (int, float)):
@@ -1951,14 +1923,13 @@ class ScenarioRunner:
         # Same FACSIMILE convention as _export_results: k-values at t_i reflect
         # the ENZ settings from t_{i-1} (the settings that produced the c-values at t_i).
         _kv_eval_t = np.concatenate([[self.sol.t[0]], self.sol.t[:-1]])
-        # Variables that come from ENZ / env_map must not be overwritten by var_assignments
-        # in the k-evaluation loop (same protection as _make_snap and _export_results).
-        # Without this, FLOW = INPUT(dilute) → FLOW = DILUTE (after uppercase) creates
-        # a circular dependency that computes DILUTE = 0.6/993600 instead of ~6.84e-6.
-        _kv_active = set(self._ctx_data_protected)
-        for _ke, _em in self.cfg.get('env_map', {}).items():
-            if _em.get('type') == 'SAPHIR File':
-                _kv_active.add(_ke.upper())
+        # Non-ELOG mode: env_map SAPHIR File variables must not be overwritten.
+        # In ELOG mode _ctx_data_protected already covers all ENZ aliases.
+        _kv_env_guard = set()
+        if not self.cfg.get('elog_path'):
+            for _ke, _em in self.cfg.get('env_map', {}).items():
+                if _em.get('type') == 'SAPHIR File':
+                    _kv_env_guard.add(_ke.upper())
 
         env_arrs = {}   # key.upper() → numpy array shape (n_t,)
         for k_env, v_func in self.ctx_data.items():
@@ -2033,9 +2004,9 @@ class ScenarioRunner:
                         ctx[_prot] = float(env_arrs[_prot][t_i])
                 for var_name, comp_expr in self.var_assignments:
                     if var_name in self._ctx_data_protected:
-                        continue
-                    if var_name in _kv_active and var_name not in self._idl_params_upper:
-                        continue
+                        continue  # ENZ INPUT alias
+                    if var_name in _kv_env_guard and var_name not in self._idl_params_upper:
+                        continue  # non-ELOG: keep env_map ENZ value authoritative
                     try: ctx[var_name] = eval(comp_expr, globals(), ctx)
                     except:
                         if _kv_pass == 0: ctx[var_name] = 0.0
