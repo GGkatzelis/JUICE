@@ -2941,9 +2941,20 @@ class ResultsViewer(QMainWindow):
             ax.add_patch(rect)
             lum = 0.299*rgba[0] + 0.587*rgba[1] + 0.114*rgba[2]
             tc  = 'black' if lum > 0.45 else 'white'
-            ax.text(x + box_w/2, y + box_h*0.67, sp,
-                    ha='center', va='center', fontsize=fsize_name, fontweight='bold', color=tc)
-            ax.text(x + box_w/2, y + box_h*0.30, f"m={slope:.2f}",
+            # k-Values mode: split "A+B-->C+D" into three lines with --> on line 2
+            if _mode == 3 and '-->' in sp:
+                parts = sp.split('-->', 1)
+                display_name = parts[0] + '\n-->\n' + parts[1]
+                name_y  = y + box_h * 0.60
+                slope_y = y + box_h * 0.12
+            else:
+                display_name = sp
+                name_y  = y + box_h * 0.67
+                slope_y = y + box_h * 0.30
+            ax.text(x + box_w/2, name_y, display_name,
+                    ha='center', va='center', fontsize=fsize_name, fontweight='bold',
+                    color=tc, linespacing=1.1)
+            ax.text(x + box_w/2, slope_y, f"m={slope:.2f}",
                     ha='center', va='center', fontsize=fsize_val, color=tc)
             self._cmp_slope_box_map.append((x, y, x+box_w, y+box_h, sp))
 
