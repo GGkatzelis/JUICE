@@ -2860,8 +2860,16 @@ class ResultsViewer(QMainWindow):
         ax.axis('off')
 
         species_list = self._cmp_get_filtered_species()
-        n = len(species_list)
         total_n = len(self._cmp_slope_results)
+
+        # k-Values mode: only show tiles with large deviations (slope outside 0.8–1.2)
+        _mode = getattr(self._cmp_mode_group, 'checkedId', lambda: 1)()
+        if _mode == 3 and self._cmp_slope_results:
+            species_list = [sp for sp in species_list
+                            if sp in self._cmp_slope_results
+                            and not (0.8 <= self._cmp_slope_results[sp]['slope'] <= 1.2)]
+
+        n = len(species_list)
         if n == 0:
             msg = ("No species match the current filter / search.\n"
                    "Try 'Show all' or clear the search box."
@@ -2879,7 +2887,8 @@ class ResultsViewer(QMainWindow):
                       if hasattr(self, '_cmp_search_box') else "")
         limit_val  = (self._cmp_limit_spin.value()
                       if hasattr(self, '_cmp_limit_spin') else 9999)
-        count_str  = f"Showing {n} of {total_n} species"
+        count_str  = (f"Showing {n} of {total_n} reactions (slope outside 0.8–1.2)"
+                      if _mode == 3 else f"Showing {n} of {total_n} species")
         if sort_label and sort_label != "Alphabetical":
             count_str += f"  ·  {sort_label}"
         if search_q:
