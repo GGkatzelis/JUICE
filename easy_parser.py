@@ -300,6 +300,71 @@ class EasyParser:
                     return True
             return False
 
+        # ── Builtin function expansion helpers ──────────────────────────────────
+        # These are defined at parse() scope so they are available throughout
+        # _parse_line_pass1 regardless of execution order.
+        # _BUILTIN_FNS, _resolve_builtin, _check_unexpanded_builtins are the
+        # SINGLE control point for all FACSIMILE built-in function calls.
+
+        def _phtfkt_builtin(args_str):
+            al = [a.strip() for a in args_str.split(',')]
+            if len(al) < 3:
+                return None
+            a, b, c = al[0], al[1], al[2]
+            out = (f"({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01))"
+                   f" * AMIN(JNO2 / (LNO2 * AMAX(COSX,0.01)**MNO2"
+                   f" * EXP(NNO2/AMAX(COSX,0.01))), 1.0)")
+            return out.upper()
+
+        def _photmmsc_builtin(args_str):
+            al = [a.strip() for a in args_str.split(',')]
+            if len(al) < 7:
+                return None
+            a, b, c, d, e, f, g = al[:7]
+            out = (f"({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01))"
+                   f" * AMIN(({g}) / (({d}) * AMAX(COSX,0.01)**({e})"
+                   f" * EXP(({f})/AMAX(COSX,0.01))), 1.0)")
+            return out.upper()
+
+        _BUILTIN_FNS = {'PHTFKT': _phtfkt_builtin, 'PHOTMMSC': _photmmsc_builtin}
+
+        def _resolve_builtin(func_name, args_str, context_line=''):
+            """Single control point for FACSIMILE built-in function calls.
+            EASY script FUNCTION wins; ELOG mode + missing def → STOP."""
+            fn_up = func_name.upper()
+            if fn_up in self.functions:
+                return expand_macros(f"{fn_up}({args_str})", self.functions).upper()
+            if _is_elog:
+                raise RuntimeError(
+                    f"\n[PARSER ERROR] ELOG '{filename}':\n"
+                    f"  '{fn_up}(...)' is used but '{fn_up} = FUNCTION[...]'\n"
+                    f"  is not defined in the EASY script.\n"
+                    f"  All functions must be defined by the script itself.\n"
+                    + (f"  Line: {context_line}" if context_line else "")
+                )
+            if fn_up in _BUILTIN_FNS:
+                return _BUILTIN_FNS[fn_up](args_str)
+            raise RuntimeError(
+                f"\n[PARSER ERROR] '{filename}':\n"
+                f"  '{fn_up}(...)' is used but has no FUNCTION definition\n"
+                f"  and no builtin expansion exists for it.\n"
+                + (f"  Line: {context_line}" if context_line else "")
+            )
+
+        def _check_unexpanded_builtins(expr, context):
+            """After expand_macros: verify no FACSIMILE built-in calls remain."""
+            for fn in tuple(_BUILTIN_FNS) + ('TROE', 'COMPRC'):
+                if re.search(rf'\b{fn}\s*\(', expr, re.I):
+                    if _is_elog:
+                        raise RuntimeError(
+                            f"\n[PARSER ERROR] ELOG '{filename}':\n"
+                            f"  {context}: '{fn}(...)' remains unexpanded after\n"
+                            f"  macro expansion — '{fn} = FUNCTION[...]' is missing\n"
+                            f"  or defined after first use."
+                        )
+                    print(f"  [WARNING] {context}: '{fn}(...)' unexpanded "
+                          f"('{fn}' not defined in '{filename}').")
+
         def _parse_line_pass1(line_idx, line):
             """Pass 1: handle parameters, rate defs, photolysis defs, initials."""
             original_line = line.strip()
@@ -395,6 +460,8 @@ class EasyParser:
                     expr = re.sub(r'^(CONST|INPUT)\(\s*(.*?)\s*\)\s*$', r'\2', expr, flags=re.I)
                     # Expand any user-defined FUNCTION macros in the expression
                     expr = expand_macros(expr, self.functions)
+                    # Validate: no FACSIMILE built-in function calls may remain
+                    _check_unexpanded_builtins(expr, f"parameter '{name}'")
                     target_dict = self.mech.commented_parameters if is_commented else self.mech.parameters
                     target_dict[name] = expr.upper()
                 return
@@ -410,36 +477,12 @@ class EasyParser:
             # shared JNO2's spectrum) caused systematic 1.5–2× bias in scenarios driven by
             # clear-sky photolysis. Full PHOTMMSC(a,b,c,d,e,f,g) takes its own reference tuple
             # (d,e,f,g) instead of the global (LNO2,MNO2,NNO2,JNO2).
-            def _phtfkt_expansion(args_str):
-                al = [a.strip() for a in args_str.split(',')]
-                if len(al) < 3:
-                    return None
-                a, b, c = al[0], al[1], al[2]
-                # HV must NOT be folded into the J-value itself — it is already a
-                # reactant in the reaction equation (reactants_env) and gates the
-                # reaction there.  Keeping HV out of the rate constant makes JUICE
-                # J-values directly comparable with FACSIMILE output.
-                out = (f"({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01))"
-                       f" * AMIN(JNO2 / (LNO2 * AMAX(COSX,0.01)**MNO2 * EXP(NNO2/AMAX(COSX,0.01))), 1.0)")
-                return out.upper()
-            def _photmmsc_expansion(args_str):
-                al = [a.strip() for a in args_str.split(',')]
-                if len(al) < 7:
-                    return None
-                a, b, c, d, e, f, g = al[:7]
-                # HV excluded from rate constant — see note in _phtfkt_expansion.
-                out = (f"({a}) * AMAX(COSX,0.01)**({b}) * EXP(({c})/AMAX(COSX,0.01))"
-                       f" * AMIN(({g}) / (({d}) * AMAX(COSX,0.01)**({e}) * EXP(({f})/AMAX(COSX,0.01))), 1.0)")
-                return out.upper()
-
             photo_match = re.search(r'k\[(.*?)\](?:\{J<(\d+)>)\}\s*=\s*(PHTFKT|PHOTMMSC)\((.*?)\)', line_for_rxn, re.I)
             if photo_match:
                 rxn_str, j_num, func, args = photo_match.groups()
                 rate_param_name = f"J{j_num}"
-                new_rate = (_photmmsc_expansion(args) if func.upper() == 'PHOTMMSC'
-                            else _phtfkt_expansion(args))
+                new_rate = _resolve_builtin(func, args)
                 if new_rate is None:
-                    # Fallback — HV excluded from rate constant (see _phtfkt_expansion)
                     new_rate = f"JSCALE * {args.split(',')[0].strip()}"
                 self.mech.parameters[rate_param_name] = new_rate
                 raw_rxn_key = rxn_str.replace(' ', '').upper()
@@ -466,9 +509,9 @@ class EasyParser:
                     norm_key = raw_rxn_key
                 param_suffix = norm_key.replace('-->', '_').replace('+', '_').replace('*', 'x')
                 rate_param_name = f"J_{param_suffix}"
-                new_rate = _photmmsc_expansion(args)
+                new_rate = _resolve_builtin('PHOTMMSC', args)
                 if new_rate is None:
-                    new_rate = f"JSCALE * {args.split(',')[0].strip()} * HV"
+                    new_rate = f"JSCALE * {args.split(',')[0].strip()}"
                 self.mech.parameters[rate_param_name] = new_rate
                 self.rates_map[norm_key] = rate_param_name
                 return
