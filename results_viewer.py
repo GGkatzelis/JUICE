@@ -2553,8 +2553,11 @@ class ResultsViewer(QMainWindow):
         df.index = (df['TIME'] - midnight_saphir) / 3600.0
         df.index.name = 'Time_hours'
         df = df.drop(columns=['TIME'])
-        # Remove duplicate last-timestamp row written by FACSIMILE's WHENEVER block.
-        df = df[~df.index.duplicated(keep='first')]
+        try:
+            from compare_juice_facsimile import _trim_boundary_rows
+            df = _trim_boundary_rows(df)
+        except ImportError:
+            pass
         return df
 
     # ── Slope analysis ────────────────────────────────────────────────────────
