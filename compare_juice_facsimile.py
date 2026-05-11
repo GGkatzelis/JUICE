@@ -266,7 +266,8 @@ def _show_juice_only_pd(pd_jui, p_jui):
 
 
 # ── Main comparison ────────────────────────────────────────────────────────
-def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = False):
+def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = False,
+            juice_dir_override: str = None, fac_dir_override: str = None):
     # ── Read paths from TOML ─────────────────────────────────────────────
     toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
     with open(toml_path, "rb") as fh:
@@ -275,8 +276,8 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     easy_root   = paths.get("easy_root",   "")
     output_root = paths.get("output_root", "")
 
-    juice_dir = os.path.join(output_root, scenario)
-    easy_dir  = os.path.join(easy_root,  scenario)
+    juice_dir = juice_dir_override or os.path.join(output_root, scenario)
+    easy_dir  = fac_dir_override   or os.path.join(easy_root,  scenario)
 
     cs_fac_path = os.path.join(easy_dir,  f"{scenario}.cs")
     # Support both naming conventions.
@@ -336,6 +337,17 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
 
     if len(t_ref) == 0:
         sys.exit("No overlapping time range between JUICE and FACSIMILE output.")
+
+    # Case-insensitive column matching: FACSIMILE uses lowercase ENZ names (jno2),
+    # JUICE uses uppercase (JNO2). Rename JUICE columns to FAC case where they
+    # differ only in capitalisation so they are treated as the same column.
+    _fac_lower = {c.lower(): c for c in fac.columns}
+    _jui_lower = {c.lower(): c for c in jui.columns}
+    _jui_rename = {_jui_lower[k]: _fac_lower[k]
+                   for k in set(_fac_lower) & set(_jui_lower)
+                   if _fac_lower[k] != _jui_lower[k]}
+    if _jui_rename:
+        jui = jui.rename(columns=_jui_rename)
 
     common_cols = sorted(set(fac.columns) & set(jui.columns))
     s_cols = [c for c in common_cols if _is_setting(c)]
@@ -569,13 +581,17 @@ if __name__ == "__main__":
                         help="Write all columns to log (default: top 100)")
     parser.add_argument("--no-stop", action="store_true",
                         help="Continue through all groups even if tolerance is exceeded")
+    parser.add_argument("--juice-dir", default=None,
+                        help="Override JUICE output directory (default: output_root/scenario)")
+    parser.add_argument("--fac-dir", default=None,
+                        help="Override FACSIMILE reference directory (default: easy_root/scenario)")
     args = parser.parse_args()
 
     # Derive log path from TOML output_root
     toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
     with open(toml_path, "rb") as fh:
         _toml = tomllib.load(fh)
-    _juice_dir = os.path.join(
+    _juice_dir = args.juice_dir or os.path.join(
         _toml.get("paths", {}).get("output_root", "."), args.scenario)
     os.makedirs(_juice_dir, exist_ok=True)
     log_path = os.path.join(_juice_dir,
@@ -601,7 +617,8 @@ if __name__ == "__main__":
     sys.stdout = _Tee(_saved_stdout, log_fh)
 
     try:
-        compare(args.scenario, args.tol, show_all=args.all, no_stop=args.no_stop)
+        compare(args.scenario, args.tol, show_all=args.all, no_stop=args.no_stop,
+                juice_dir_override=args.juice_dir, fac_dir_override=args.fac_dir)
     finally:
         sys.stdout = _saved_stdout
         log_fh.close()
