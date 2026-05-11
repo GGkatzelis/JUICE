@@ -49,10 +49,14 @@ def generate_juice_elog(easy_path: str,
         if os.path.isfile(candidate):
             return candidate
         basename = os.path.basename(name)
+        basename_lower = basename.lower()
         for d in search_dirs:
             for root, _, files in os.walk(d):
-                if basename in files:
-                    return os.path.join(root, basename)
+                # Case-insensitive match so that #include methan.fac.mech
+                # finds Methan.fac.mech on case-preserving filesystems (Windows).
+                for f in files:
+                    if f.lower() == basename_lower:
+                        return os.path.join(root, f)
         return None
 
     def expand(file_path: str, visited: set = None) -> list:
