@@ -2730,13 +2730,17 @@ class ResultsViewer(QMainWindow):
         only_juice = getattr(self, '_cmp_only_juice', [])
         only_ref   = getattr(self, '_cmp_only_ref',   [])
 
-        # Populate species combos: slope species first, then remaining df columns,
-        # then JUICE-only and Ref-only entries
+        # Populate species combos.
+        # k-Values mode: dropdown shows only reaction strings from kv files,
+        # not cs-file columns (which have species names, not reaction strings).
         species_list = sorted(self._cmp_slope_results.keys())
-        all_cols = sorted(c for c in self.df.columns if c not in species_list)
         juice_only_items = [f"{c} (nur JUICE)" for c in only_juice]
         ref_only_items   = [f"{c} (nur Ref)"   for c in only_ref]
-        full_list = species_list + all_cols + juice_only_items + ref_only_items
+        if _mode == 3:
+            full_list = species_list + juice_only_items + ref_only_items
+        else:
+            all_cols = sorted(c for c in self.df.columns if c not in species_list)
+            full_list = species_list + all_cols + juice_only_items + ref_only_items
         for slot, combo in enumerate(self._cmp_ts_combos):
             prev = combo.currentText()
             combo.blockSignals(True)
@@ -2862,12 +2866,18 @@ class ResultsViewer(QMainWindow):
         species_list = self._cmp_get_filtered_species()
         total_n = len(self._cmp_slope_results)
 
-        # k-Values mode: only show tiles with large deviations (slope outside 0.8–1.2)
+        # k-Values mode: show all reactions with |slope-1| > 0.2, plus always
+        # the 20 worst matches (so the grid is never empty even if all agree).
         _mode = getattr(self._cmp_mode_group, 'checkedId', lambda: 1)()
         if _mode == 3 and self._cmp_slope_results:
-            species_list = [sp for sp in species_list
-                            if sp in self._cmp_slope_results
-                            and not (0.8 <= self._cmp_slope_results[sp]['slope'] <= 1.2)]
+            _in_results = [sp for sp in species_list if sp in self._cmp_slope_results]
+            _exceeding  = {sp for sp in _in_results
+                           if not (0.8 <= self._cmp_slope_results[sp]['slope'] <= 1.2)}
+            _worst20    = set(sorted(_in_results,
+                                     key=lambda s: abs(self._cmp_slope_results[s]['slope'] - 1.0),
+                                     reverse=True)[:20])
+            _show = _exceeding | _worst20
+            species_list = [sp for sp in species_list if sp in _show]
 
         n = len(species_list)
         if n == 0:
@@ -2887,7 +2897,7 @@ class ResultsViewer(QMainWindow):
                       if hasattr(self, '_cmp_search_box') else "")
         limit_val  = (self._cmp_limit_spin.value()
                       if hasattr(self, '_cmp_limit_spin') else 9999)
-        count_str  = (f"Showing {n} of {total_n} reactions (slope outside 0.8–1.2)"
+        count_str  = (f"Showing {n} of {total_n} reactions (worst 20 + |slope−1|>0.2)"
                       if _mode == 3 else f"Showing {n} of {total_n} species")
         if sort_label and sort_label != "Alphabetical":
             count_str += f"  ·  {sort_label}"
