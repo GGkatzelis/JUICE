@@ -182,22 +182,68 @@ def topological_sort(s_entries, function_entries):
     return ordered
 
 
-def update_s_vec(s_entries, function_entries, c_vec, enz_vec):
+def precompile_s_vec(s_entries, function_entries):
+    """Pre-compile each s entry's definition to a code object.
+
+    Call once after topological_sort. The hot loop then uses
+    eval(entry._code, ctx) directly, avoiding string parsing overhead.
+    INPUT entries get _code=None; _input_col holds the ENZ column name.
+    """
+    func_dict = {f.name: f.definition for f in function_entries}
+    for entry in s_entries:
+        definition = entry.definition.strip()
+        m = re.match(r'^(\w+)\s*\((.*)\)\s*$', definition, re.DOTALL | re.IGNORECASE)
+        if m and m.group(1).upper() == 'INPUT':
+            entry._code      = None
+            entry._input_col = m.group(2).strip().upper()
+            continue
+        # Expand template + nested macros, then compile
+        expr = definition
+        if m:
+            fname    = m.group(1).upper()
+            args_str = m.group(2)
+            template = func_dict.get(fname, '%1')
+            args     = _split_top_level_args(args_str)
+            expr     = template
+            for i, arg in enumerate(args, 1):
+                expr = re.sub(rf'%{i}\b', f'({arg.strip()})', expr)
+            expr = expand_macros(expr, func_dict)
+        expr = expr.upper().replace('@', '**')
+        expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
+        try:
+            entry._code      = compile(expr.strip(), '<string>', 'eval')
+            entry._input_col = None
+        except Exception:
+            entry._code      = None
+            entry._input_col = None
+
+
+def update_s_vec(s_entries, function_entries, c_vec, enz_vec, _ordered=None):
     """Evaluate all s entries in topological order and update their .value.
 
-    This replaces the 3-pass var_assignment loop.
-    c_vec and enz_vec must already hold current values.
+    Requires precompile_s_vec() to have been called first (entry._code set).
+    The hot loop uses eval(code, ctx) — same speed as the old var_assignments.
     """
-    ordered = topological_sort(s_entries, function_entries)
+    ordered = _ordered if _ordered is not None else topological_sort(s_entries, function_entries)
+    ctx = build_ctx(s_entries, c_vec, enz_vec)
     for entry in ordered:
         try:
-            entry.value = evaluate(
-                entry.definition, function_entries, s_entries, c_vec, enz_vec)
+            if getattr(entry, '_input_col', None) is not None:
+                for e in enz_vec:
+                    if e.name.upper() == entry._input_col:
+                        entry.value = e.value
+                        ctx[entry.name] = e.value
+                        break
+            elif getattr(entry, '_code', None) is not None:
+                entry.value = float(eval(entry._code, {"__builtins__": {}}, ctx))
+                ctx[entry.name] = entry.value
+            else:
+                entry.value = evaluate(
+                    entry.definition, function_entries, s_entries, c_vec, enz_vec)
+                ctx[entry.name] = entry.value
         except Exception as ex:
-            # Keep previous value (0.0) — report for debugging
             import warnings
-            warnings.warn(f"update_s_vec: error evaluating '{entry.name}' "
-                          f"({entry.definition[:60]}): {ex}")
+            warnings.warn(f"update_s_vec: '{entry.name}' ({entry.definition[:50]}): {ex}")
 
 
 def update_enz_vec(enz_vec, providers, t):

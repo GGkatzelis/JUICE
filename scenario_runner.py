@@ -265,6 +265,10 @@ class ScenarioRunner:
             self.mechanism.species.extend(m_part.species)
             self.mechanism.reactions.extend(m_part.reactions)
             self.mechanism.functions.update(m_part.functions)
+            # Phase 1/2/3 structured entries — copy from parsed result
+            self.mechanism.function_entries.extend(m_part.function_entries)
+            self.mechanism.k_entries.extend(m_part.k_entries)
+            self.mechanism.s_entries.extend(m_part.s_entries)
             for p_name, p_expr in m_part.parameters.items():
                 p_clean = p_expr.replace('@', '**')
                 p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
@@ -752,6 +756,43 @@ class ScenarioRunner:
                         self.ctx_data[vn] = self.ctx_data[src]
                     self._ctx_data_protected.add(vn)
 
+        # ── Phase 3: build k/s/c/enz/function vectors ────────────────────────
+        # These run alongside the existing var_assignments for now.
+        # Phase 3 wires them into the ODE loops; Phase 4 removes the old code.
+        if self.cfg.get('elog_path'):
+            from mechanism import SEntry, EnzEntry
+            from evaluator import update_enz_vec as _uenz, update_s_vec as _us
+            # enz_vec: one entry per raw ENZ column (original case)
+            self._enz_vec = [EnzEntry(name=col) for col in self._enz_providers_up
+                             if col.lower() in {h.lower() for h in
+                                                getattr(self, '_enz_providers_up', set())}]
+            # rebuild properly from ctx_data keys that are ENZ providers
+            _prov_names = {k for k in self.ctx_data
+                           if k.upper() in self._enz_providers_up}
+            self._enz_vec = [EnzEntry(name=n) for n in _prov_names]
+            # Store the providers dict for update_enz_vec
+            self._enz_providers = {n: self.ctx_data[n] for n in _prov_names}
+
+            # s_vec: all entries from mech.s_entries (populated by easy_parser)
+            self._s_vec = [SEntry(name=e.name, definition=e.definition)
+                           for e in self.mechanism.s_entries]
+
+            # function_entries from mechanism
+            self._function_entries = list(self.mechanism.function_entries)
+
+            # Pre-compute evaluation order once (avoid topological_sort at every ODE call)
+            from evaluator import topological_sort as _tsort, precompile_s_vec as _pcs
+            self._s_vec_ordered = _tsort(self._s_vec, self._function_entries)
+            _pcs(self._s_vec_ordered, self._function_entries)  # pre-compile code objects
+
+            print(f"  [Phase3] enz_vec: {len(self._enz_vec)}  "
+                  f"s_vec: {len(self._s_vec)}  "
+                  f"function_entries: {len(self._function_entries)}")
+        else:
+            self._enz_vec = []
+            self._s_vec = []
+            self._function_entries = []
+
         self._add_artifacts()
 
     def _add_artifacts(self):
@@ -1169,17 +1210,27 @@ class ScenarioRunner:
                     ctx_s[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                 except Exception:
                     pass
-            # 3-pass var_assignments with current c and s.
-            _snap_env_guard = active_s - self._idl_params_upper if not self.cfg.get('elog_path') else set()
-            for _p in range(3):
-                for vn, ce in self.var_assignments:
-                    if vn in self._ctx_data_protected:
-                        continue  # ENZ INPUT alias — value loaded from ctx_data above
-                    if vn in _snap_env_guard:
-                        continue  # non-ELOG: keep env_map ENZ value authoritative
-                    try: ctx_s[vn] = eval(ce, globals(), ctx_s)
-                    except:
-                        if _p == 0: ctx_s[vn] = 0.0
+            # Evaluate settings via new vector system (ELOG) or old 3-pass (non-ELOG)
+            if self._s_vec:
+                from evaluator import update_enz_vec as _uenz, update_s_vec as _us, build_ctx as _bctx
+                from mechanism import CEntry
+                _uenz(self._enz_vec, self._enz_providers, t_abs)
+                _c_vec = [CEntry(name=sp, value=float(y_state[i]))
+                          for i, sp in enumerate(_species_names)]
+                _us(self._s_vec, self._function_entries, _c_vec, self._enz_vec,
+                    _ordered=self._s_vec_ordered)
+                ctx_s.update(_bctx(self._s_vec, _c_vec, self._enz_vec))
+            else:
+                _snap_env_guard = active_s - self._idl_params_upper if not self.cfg.get('elog_path') else set()
+                for _p in range(3):
+                    for vn, ce in self.var_assignments:
+                        if vn in self._ctx_data_protected:
+                            continue
+                        if vn in _snap_env_guard:
+                            continue
+                        try: ctx_s[vn] = eval(ce, globals(), ctx_s)
+                        except:
+                            if _p == 0: ctx_s[vn] = 0.0
             # O1D PSS (uses current c at step start)
             if 'O1D' in _pss_species_set:
                 _j1s = float(ctx_s.get('J1',0.0))*float(ctx_s.get('HV',0.0))
@@ -1237,14 +1288,23 @@ class ScenarioRunner:
                 for k in _snap_active:
                     try: ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                     except: pass
-                # 3-pass var_assignments (INPUT variables protected from overwrite)
-                for _p in range(3):
-                    for vn, ce in self.var_assignments:
-                        if vn in self._ctx_data_protected:
-                            continue
-                        try: ctx[vn] = eval(ce, globals(), ctx)
-                        except:
-                            if _p == 0: ctx[vn] = 0.0
+                # Evaluate settings: new vector system (ELOG) or old 3-pass (non-ELOG)
+                if self._s_vec:
+                    from evaluator import update_enz_vec as _uenz, update_s_vec as _us, build_ctx as _bctx
+                    from mechanism import CEntry
+                    _uenz(self._enz_vec, self._enz_providers, t_abs)
+                    _c_vec_h = [CEntry(name=sp, value=float(y[i]))
+                                for i, sp in enumerate(self.solver.species)]
+                    _us(self._s_vec, self._function_entries, _c_vec_h, self._enz_vec)
+                    ctx.update(_bctx(self._s_vec, _c_vec_h, self._enz_vec))
+                else:
+                    for _p in range(3):
+                        for vn, ce in self.var_assignments:
+                            if vn in self._ctx_data_protected:
+                                continue
+                            try: ctx[vn] = eval(ce, globals(), ctx)
+                            except:
+                                if _p == 0: ctx[vn] = 0.0
 
             if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
                 h2o_vmr = ctx['H2O']
