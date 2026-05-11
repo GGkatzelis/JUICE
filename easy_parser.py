@@ -154,7 +154,8 @@ class EasyParser:
         # Use an ordered dict to deduplicate reactions by normalised key (last definition wins,
         # matching FACSIMILE override semantics — duplicate k[A-->B] lines in .mech files are
         # treated as overrides, not additions).
-        self._rxn_map = {}   # normalised_key -> (reacs, prods, rate_expr)
+        self._rxn_map = {}       # normalised_key -> (reacs, prods, rate_expr)
+        self._k_raw_defs = {}    # normalised_key -> original definition string (Phase 1)
         full_content = self.preprocess(filename)
         lines = full_content.split('\n')
 
@@ -445,6 +446,11 @@ class EasyParser:
                     body  = func_m.group(2).strip()
                     self.functions[fname] = body
                     self.mech.functions[fname] = body
+                    from mechanism import FunctionEntry
+                    # Last-wins: replace existing entry with same name
+                    self.mech.function_entries = [
+                        e for e in self.mech.function_entries if e.name != fname]
+                    self.mech.function_entries.append(FunctionEntry(name=fname, definition=body))
                 return
 
             # Parameter definitions
@@ -464,6 +470,13 @@ class EasyParser:
                     _check_unexpanded_builtins(expr, f"parameter '{name}'")
                     target_dict = self.mech.commented_parameters if is_commented else self.mech.parameters
                     target_dict[name] = expr.upper()
+                    if not is_commented:
+                        from mechanism import SEntry
+                        raw_def = (line_for_rxn.split('=', 1)[1].strip()
+                                   if '=' in line_for_rxn else expr)
+                        self.mech.s_entries = [
+                            e for e in self.mech.s_entries if e.name != name]
+                        self.mech.s_entries.append(SEntry(name=name, definition=raw_def))
                 return
 
             if is_commented:
@@ -492,6 +505,7 @@ class EasyParser:
                 else:
                     norm_key = raw_rxn_key
                 self.rates_map[norm_key] = rate_param_name
+                self._k_raw_defs[norm_key] = f"{func.upper()}({args})"
                 return
 
             # PHOTMMSC without J<N>
@@ -514,6 +528,7 @@ class EasyParser:
                     new_rate = f"JSCALE * {args.split(',')[0].strip()}"
                 self.mech.parameters[rate_param_name] = new_rate
                 self.rates_map[norm_key] = rate_param_name
+                self._k_raw_defs[norm_key] = f"PHOTMMSC({args})"
                 return
 
             # INITIAL conditions
@@ -540,6 +555,8 @@ class EasyParser:
                 else:
                     norm_key = raw_key
                 self.rates_map[norm_key] = rate_val
+                raw_def = line_for_rxn.split('=', 1)[1].strip() if '=' in line_for_rxn else rate_val
+                self._k_raw_defs[norm_key] = raw_def
 
         def _parse_line_pass2(line):
             """Pass 2: register bare reaction lines using the complete rates_map."""
@@ -604,5 +621,21 @@ class EasyParser:
         for canon_key, (reacs, prods, rate_expr) in self._rxn_map.items():
             if canon_key not in self.disabled_rxn_keys:
                 self.mech.reactions.append(Reaction(reacs, prods, rate_expr))
+
+        # ── Phase 1: populate k_entries from _rxn_map + _k_raw_defs ─────────
+        from mechanism import KEntry
+        for canon_key, (reacs, prods, rate_expr) in self._rxn_map.items():
+            if canon_key in self.disabled_rxn_keys:
+                continue
+            raw_def = self._k_raw_defs.get(canon_key)
+            if raw_def is None:
+                # Bare reaction with no explicit k[]: definition from rates_map value
+                raw_def = f"CONST({rate_expr})" if rate_expr != '0.0' else 'CONST(0)'
+            self.mech.k_entries.append(KEntry(
+                name=canon_key,
+                definition=raw_def,
+                reactants=reacs,
+                products=prods,
+            ))
 
         return self.mech
