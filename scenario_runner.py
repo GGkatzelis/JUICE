@@ -1845,30 +1845,61 @@ class ScenarioRunner:
 
         _ode_species_upper = {s.upper() for s in self.solver.species}
 
-        for _pass in range(3):
-            # Restore ENZ INPUT aliases at the start of every pass.
-            for _prot in self._ctx_data_protected:
-                if _prot in self.ctx_data:
+        if self._s_vec:
+            # ELOG mode: evaluate s_vec in topological order using pre-compiled code.
+            # Build vectorized ENZ arrays over _s_eval_t.
+            for _e in self._enz_vec:
+                _fn = self._enz_providers.get(_e.name)
+                if _fn:
                     try:
-                        _eval_ctx[_prot] = self.ctx_data[_prot](_s_eval_t)
+                        _arr = _fn(_s_eval_t)
+                        _e.value = _arr if isinstance(_arr, np.ndarray) else np.full(len(df), float(_arr))
                     except Exception:
-                        pass
-            for var_name, compiled_expr in self.var_assignments:
-                if var_name in self._ctx_data_protected:
-                    continue  # ENZ INPUT alias — restore loop handles it
-                if var_name in _export_env_guard and var_name not in self._idl_params_upper:
-                    continue  # non-ELOG: keep env_map ENZ value authoritative
-                if var_name in _ode_species_upper:
-                    continue  # ODE species — never replace with parameter formula
+                        _e.value = np.zeros(len(df))
+                _eval_ctx[_e.name.upper()] = _e.value
+
+            for _entry in self._s_vec_ordered:
+                _input_col = getattr(_entry, '_input_col', None)
+                _code      = getattr(_entry, '_code', None)
                 try:
-                    result = eval(compiled_expr, globals(), _eval_ctx)
-                    if isinstance(result, (int, float)):
-                        result = np.full(len(df), float(result))
-                    if isinstance(result, np.ndarray) and result.shape == (len(df),):
-                        _eval_ctx[var_name] = result
-                        df[var_name] = result
+                    if _input_col is not None:
+                        _result = _eval_ctx.get(_input_col, np.zeros(len(df)))
+                    elif _code is not None:
+                        _result = eval(_code, {"__builtins__": {}}, _eval_ctx)
+                    else:
+                        continue
+                    if isinstance(_result, (int, float)):
+                        _result = np.full(len(df), float(_result))
+                    if isinstance(_result, np.ndarray) and _result.shape == (len(df),):
+                        _eval_ctx[_entry.name] = _result
+                        df[_entry.name] = _result
                 except Exception:
                     pass
+        else:
+            # Non-ELOG mode: old 3-pass var_assignments loop.
+            for _pass in range(3):
+                for _prot in self._ctx_data_protected:
+                    if _prot in self.ctx_data:
+                        try:
+                            _eval_ctx[_prot] = self.ctx_data[_prot](_s_eval_t)
+                        except Exception:
+                            pass
+                for var_name, compiled_expr in self.var_assignments:
+                    if var_name in self._ctx_data_protected:
+                        continue
+                    if var_name in _export_env_guard and var_name not in self._idl_params_upper:
+                        continue
+                    if var_name in _ode_species_upper:
+                        continue
+                    try:
+                        result = eval(compiled_expr, globals(), _eval_ctx)
+                        if isinstance(result, (int, float)):
+                            result = np.full(len(df), float(result))
+                        if isinstance(result, np.ndarray) and result.shape == (len(df),):
+                            _eval_ctx[var_name] = result
+                            df[var_name] = result
+                    except Exception:
+                        pass
 
         # --- O1D pseudo-steady-state correction ------------------------------------
         # O1D has a lifetime of ~1 ns (quenched mainly by N2 and O2).  The ODE
@@ -2058,20 +2089,34 @@ class ScenarioRunner:
             # Species from numpy (no pandas .iloc)
             for j, s in enumerate(_sp_cols):
                 ctx[s] = float(y_matrix[t_i, j])
-            # Multi-pass evaluation — same logic as system_ode (3 passes)
-            for _kv_pass in range(3):
-                # Restore protected ENZ INPUT aliases at the start of each pass.
-                for _prot in self._ctx_data_protected:
-                    if _prot in env_arrs:
-                        ctx[_prot] = float(env_arrs[_prot][t_i])
-                for var_name, comp_expr in self.var_assignments:
-                    if var_name in self._ctx_data_protected:
-                        continue  # ENZ INPUT alias
-                    if var_name in _kv_env_guard and var_name not in self._idl_params_upper:
-                        continue  # non-ELOG: keep env_map ENZ value authoritative
-                    try: ctx[var_name] = eval(comp_expr, globals(), ctx)
-                    except:
-                        if _kv_pass == 0: ctx[var_name] = 0.0
+            # Evaluate settings via new vector system (ELOG) or old 3-pass (non-ELOG)
+            if self._s_vec:
+                from evaluator import update_s_vec as _us, build_ctx as _bctx
+                from mechanism import CEntry
+                _uenz_kv = getattr(self, '_enz_vec', [])
+                for _e in _uenz_kv:
+                    _e.value = float(env_arrs.get(_e.name.upper(), [0]*n_t)[t_i]
+                                     if _e.name.upper() in env_arrs
+                                     else env_arrs.get(_e.name, [0]*n_t)[t_i]
+                                     if _e.name in env_arrs else 0.0)
+                _c_kv = [CEntry(name=s, value=float(y_matrix[t_i, j]))
+                         for j, s in enumerate(_sp_cols)]
+                _us(self._s_vec, self._function_entries, _c_kv, _uenz_kv,
+                    _ordered=self._s_vec_ordered)
+                ctx.update(_bctx(self._s_vec, _c_kv, _uenz_kv))
+            else:
+                for _kv_pass in range(3):
+                    for _prot in self._ctx_data_protected:
+                        if _prot in env_arrs:
+                            ctx[_prot] = float(env_arrs[_prot][t_i])
+                    for var_name, comp_expr in self.var_assignments:
+                        if var_name in self._ctx_data_protected:
+                            continue
+                        if var_name in _kv_env_guard and var_name not in self._idl_params_upper:
+                            continue
+                        try: ctx[var_name] = eval(comp_expr, globals(), ctx)
+                        except:
+                            if _kv_pass == 0: ctx[var_name] = 0.0
 
             # O1D PSS — must be in ctx before _compute_rates so that reactions
             # using O1D as a reactant (O1D+H2O→2OH, O1D→O, etc.) get correct turnovers.
