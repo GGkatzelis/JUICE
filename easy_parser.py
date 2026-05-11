@@ -506,6 +506,11 @@ class EasyParser:
                     norm_key = raw_rxn_key
                 self.rates_map[norm_key] = rate_param_name
                 self._k_raw_defs[norm_key] = f"{func.upper()}({args})"
+                # Phase 1: register in s_entries if not already there (from a separate param line)
+                from mechanism import SEntry
+                if not any(e.name == rate_param_name for e in self.mech.s_entries):
+                    self.mech.s_entries.append(
+                        SEntry(name=rate_param_name, definition=f"{func.upper()}({args})"))
                 return
 
             # PHOTMMSC without J<N>
@@ -529,6 +534,12 @@ class EasyParser:
                 self.mech.parameters[rate_param_name] = new_rate
                 self.rates_map[norm_key] = rate_param_name
                 self._k_raw_defs[norm_key] = f"PHOTMMSC({args})"
+                # Phase 1: also register in s_entries so the evaluator can use it
+                from mechanism import SEntry
+                self.mech.s_entries = [e for e in self.mech.s_entries
+                                       if e.name != rate_param_name]
+                self.mech.s_entries.append(
+                    SEntry(name=rate_param_name, definition=f"PHOTMMSC({args})"))
                 return
 
             # INITIAL conditions
