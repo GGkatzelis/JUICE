@@ -744,8 +744,10 @@ class ScenarioRunner:
             co = set(getattr(ce, 'co_names', []))
             if len(co) == 1:
                 src = next(iter(co))
-                if src in _enz_up and vn not in self._ctx_data_protected:
-                    # Expose the alias in ctx_data so the restore loop can reload it.
+                if (src in _enz_up and vn not in self._ctx_data_protected
+                        and not getattr(ce, 'co_consts', ())):
+                    # Pure INPUT alias: vn = src (no constants, no operations).
+                    # Formulas like OH = 3e6*HV have co_consts=(3e6,) → not an alias.
                     if vn not in self.ctx_data:
                         self.ctx_data[vn] = self.ctx_data[src]
                     self._ctx_data_protected.add(vn)
