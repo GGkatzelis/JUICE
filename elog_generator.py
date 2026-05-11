@@ -268,12 +268,18 @@ def generate_both(easy_path: str,
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python elog_generator.py <path/to/scenario.easy> [search_dir ...]")
-        sys.exit(1)
-    easy = sys.argv[1]
-    dirs = sys.argv[2:] if len(sys.argv) > 2 else []
-    raw, canon = generate_both(easy, search_dirs=dirs)
+    import sys, argparse
+    ap = argparse.ArgumentParser(
+        description="Generate JUICE elog from an EASY file.")
+    ap.add_argument("easy", help="Path to the .easy file")
+    ap.add_argument("search_dirs", nargs="*",
+                    help="Additional #include search directories")
+    ap.add_argument("--output-dir", default=None,
+                    help="Directory for output elogs (default: same dir as .easy file). "
+                         "Set to the JUICE scenario folder to keep EASY directory clean.")
+    args = ap.parse_args()
+    raw, canon = generate_both(args.easy,
+                               search_dirs=args.search_dirs,
+                               output_dir=args.output_dir)
     print(f"Raw elog:       {raw}")
     print(f"Canonical elog: {canon}")
