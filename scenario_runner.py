@@ -1838,6 +1838,13 @@ class ScenarioRunner:
                           'ABS': np.abs, 'SQRT': np.sqrt,
                           'COS': np.cos, 'SIN': np.sin, 'TAN': np.tan})
 
+        # Only output columns that are defined in the EASY script (c or s entries).
+        # Extra ENZ columns (TEMP, PRESS, Q_* switches) are NOT in the EASY script
+        # and should not appear in the cs output — keep the output clean and
+        # consistent with what FACSIMILE outputs.
+        _easy_names_upper = ({e.name.upper() for e in self.mechanism.s_entries}
+                             | {s.upper() for s in self.solver.species})
+
         # Add ctx_data (ENZ inputs) under their EASY names (T, HV, JNO2, etc.)
         # Evaluated at _s_eval_t (shifted) so reported values match the step-start snap.
         for k, v_func in self.ctx_data.items():
@@ -1851,8 +1858,8 @@ class ScenarioRunner:
                         vals = np.full(len(df), float(vals))
                     if k_up not in _eval_ctx:    # don't overwrite ODE species
                         _eval_ctx[k_up] = vals
-                    if k_up not in df.columns:
-                        df[k_up] = vals
+                    if k_up not in df.columns and k_up in _easy_names_upper:
+                        df[k_up] = vals          # only if in EASY script
                 except Exception:
                     pass
 

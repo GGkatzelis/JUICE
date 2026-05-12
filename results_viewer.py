@@ -831,6 +831,26 @@ class ResultsViewer(QMainWindow):
         self._midnight_unix = self._t0_unix - (self._t0_unix % 86400)
         self._last_nc_dir = None
 
+        # Load s_entries from the EASY elog so we can classify columns structurally.
+        # s_entries = anything defined with a function call in the EASY script.
+        self._easy_s_names = set()   # lowercase names of s_entries
+        self._easy_c_names = set()   # lowercase names of ODE species
+        try:
+            _jui_stem = os.path.splitext(csv_path)[0].replace('_cs', '')
+            _jui_json = _jui_stem + '.json'
+            if os.path.isfile(_jui_json):
+                import json as _json
+                with open(_jui_json) as _fh:
+                    _jcfg = _json.load(_fh)
+                _elog = _jcfg.get('elog_path', '')
+                if _elog and os.path.isfile(_elog):
+                    from easy_parser import EasyParser as _EP
+                    _mech = _EP().parse(_elog)
+                    self._easy_s_names = {e.name.lower() for e in _mech.s_entries}
+                    self._easy_c_names = {sp.lower() for sp in _mech.species}
+        except Exception:
+            pass
+
         # Instrument data loaded from NC files: display_key -> {t, v, nc_file, nc_var, mcm_match}
         self._inst_data = {}
 
@@ -1023,12 +1043,14 @@ class ResultsViewer(QMainWindow):
         self._auto_load_config(csv_path)
 
     # ── Virtual / derived species ────────────────────────────────────────────
-    @staticmethod
-    def _add_virtual_species(df):
+    def _add_virtual_species(self, df):
         """Add derived columns that are not in the data but can be computed from it.
         These exist only in memory — never written to the output CSV.
-        Partial sums: if some constituents are missing they are skipped; the
-        virtual species is only created when at least 2 constituents are found.
+
+        In ELOG mode (when _easy_s_names is populated), virtual species are only
+        added if they are NOT defined in the EASY script — otherwise they would
+        already be in the data as s_entries or c_entries.
+        If they ARE in the EASY script, they come from the cs.csv directly.
         """
         df = df.copy()
         col_upper = {c.upper(): c for c in df.columns}   # upper→actual name map
@@ -1038,10 +1060,18 @@ class ResultsViewer(QMainWindow):
             actual = col_upper.get(name.upper())
             return df[actual].values.astype(float) if actual is not None else None
 
+        # Only add a virtual species if it is NOT defined in the EASY script.
+        # If it IS defined in the script it already appears in the cs.csv as an s-entry.
+        # When _easy_s_names is empty (no elog loaded) we add all virtual species.
+        easy_s = getattr(self, '_easy_s_names', set())
+
         def _virtual_sum(label, constituents, df_out, col_upper_out):
-            """Sum constituents into label if ≥2 found and label not already present."""
+            """Sum constituents into label if ≥2 found, label not already present,
+            and label not defined in the EASY script (those come from cs directly)."""
             if label.upper() in col_upper_out:
-                return df_out, col_upper_out
+                return df_out, col_upper_out          # already in data
+            if easy_s and label.lower() in easy_s:
+                return df_out, col_upper_out          # defined in EASY script
             total = None
             found = []
             for sp, factor in constituents:
@@ -1053,7 +1083,6 @@ class ResultsViewer(QMainWindow):
                 df_out = df_out.copy() if id(df_out) == id(df) else df_out
                 df_out[label] = total
                 col_upper_out = col_upper_out | {label.upper(): label}
-                print(f"[Virtual] {label} = {' + '.join(found)}")
             return df_out, col_upper_out
 
         # NOx = NO + NO2
@@ -1081,6 +1110,16 @@ class ResultsViewer(QMainWindow):
                       'JSCALE', 'COSX', 'N2', 'O2'}
 
     def _is_setting_col(self, col):
+        """True if col is a setting (s-value) from the EASY script.
+
+        Uses structural classification from s_entries when available
+        (anything defined by a function call in the EASY script).
+        Falls back to name-based heuristic if no elog was loaded.
+        """
+        cl = col.lower()
+        if self._easy_s_names:
+            return cl in self._easy_s_names
+        # Fallback: name-based heuristic
         cu = col.upper()
         if cu in self._SETTING_NAMES:
             return True
@@ -2730,17 +2769,26 @@ class ResultsViewer(QMainWindow):
         only_juice = getattr(self, '_cmp_only_juice', [])
         only_ref   = getattr(self, '_cmp_only_ref',   [])
 
-        # Populate species combos.
-        # k-Values mode: dropdown shows only reaction strings from kv files,
-        # not cs-file columns (which have species names, not reaction strings).
+        # Populate species combos — filtered to the current mode:
+        #   mode 0 (Favorites): all matched columns
+        #   mode 1 (c-Species): only c-columns (not settings)
+        #   mode 2 (s-Species): only s-columns (settings)
+        #   mode 3 (k-Values): reaction strings from kv files only
         species_list = sorted(self._cmp_slope_results.keys())
         juice_only_items = [f"{c} (nur JUICE)" for c in only_juice]
         ref_only_items   = [f"{c} (nur Ref)"   for c in only_ref]
         if _mode == 3:
             full_list = species_list + juice_only_items + ref_only_items
+        elif _mode == 2:
+            # s-Species: only settings columns
+            full_list = [c for c in species_list if self._is_setting_col(c)]
+            full_list += juice_only_items + ref_only_items
+        elif _mode == 1:
+            # c-Species: only non-settings columns
+            full_list = [c for c in species_list if not self._is_setting_col(c)]
+            full_list += juice_only_items + ref_only_items
         else:
-            all_cols = sorted(c for c in self.df.columns if c not in species_list)
-            full_list = species_list + all_cols + juice_only_items + ref_only_items
+            full_list = species_list + juice_only_items + ref_only_items
         for slot, combo in enumerate(self._cmp_ts_combos):
             prev = combo.currentText()
             combo.blockSignals(True)
