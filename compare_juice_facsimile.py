@@ -350,8 +350,34 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
         jui = jui.rename(columns=_jui_rename)
 
     common_cols = sorted(set(fac.columns) & set(jui.columns))
-    s_cols = [c for c in common_cols if _is_setting(c)]
-    c_cols = [c for c in common_cols if not _is_setting(c)]
+
+    # Classify s vs c: a setting is anything defined by a function in the EASY
+    # script (s_entries) that is not a k-value. Load from the JUICE elog if available.
+    _s_names = set()
+    try:
+        _jui_stem = os.path.splitext(cs_jui_path)[0].replace('_cs', '')
+        _jui_json  = _jui_stem + '.json'
+        if not os.path.isfile(_jui_json):  # try without stem replacement
+            _jui_json = os.path.splitext(cs_jui_path)[0] + '.json'
+        if os.path.isfile(_jui_json):
+            import json as _json
+            with open(_jui_json) as _fh:
+                _jcfg = _json.load(_fh)
+            _elog = _jcfg.get('elog_path', '')
+            if _elog and os.path.isfile(_elog):
+                from easy_parser import EasyParser as _EP
+                _mech = _EP().parse(_elog)
+                _s_names = {e.name.lower() for e in _mech.s_entries}
+    except Exception:
+        pass
+
+    def _is_s_col(c):
+        if _s_names:
+            return c.lower() in _s_names    # from actual EASY script s_entries
+        return _is_setting(c)               # fallback: name-based heuristic
+
+    s_cols = [c for c in common_cols if _is_s_col(c)]
+    c_cols = [c for c in common_cols if not _is_s_col(c)]
 
     fac_only = sorted(set(fac.columns) - set(jui.columns))
     jui_only = sorted(set(jui.columns) - set(fac.columns))

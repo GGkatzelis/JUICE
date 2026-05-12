@@ -636,7 +636,7 @@ class ScenarioRunner:
             all_species.discard('O1D')
             self._pss_species.add('O1D')
             _o1d_pss = (
-                "np.maximum(JO1D, 0.0) * np.maximum(O3, 0.0) / "
+                "np.maximum(JO1D, 0.0) * np.maximum(HV, 0.0) * np.maximum(O3, 0.0) / "
                 "np.maximum("
                 "2.0e-11 * N2 * np.exp(130.0 / T) + "
                 "3.20e-11 * O2 * np.exp(67.0 / T) + "
@@ -1232,8 +1232,9 @@ class ScenarioRunner:
                         except:
                             if _p == 0: ctx_s[vn] = 0.0
             # O1D PSS (uses current c at step start)
+            # Rate from measured jo1d (k[O3+HV→O1D]=JO1D), not theoretical J1
             if 'O1D' in _pss_species_set:
-                _j1s = float(ctx_s.get('J1',0.0))*float(ctx_s.get('HV',0.0))
+                _j1s = float(ctx_s.get('JO1D',ctx_s.get('J1',0.0)))*float(ctx_s.get('HV',0.0))
                 _o3s = float(ctx_s.get('O3',0.0))
                 _ts  = float(ctx_s.get('T',298.15))
                 _n2s = float(ctx_s.get('N2',0.0)); _o2s=float(ctx_s.get('O2',0.0))
@@ -1318,10 +1319,9 @@ class ScenarioRunner:
                 else:
                     ctx['RH'] = 0.0
 
-            # O1D PSS: recompute using current O3, H2O from y, but frozen J1 and HV.
-            # J1 comes from snap (HV already gated), HV from snap (frozen at step start).
+            # O1D PSS: use measured JO1D (k[O3+HV→O1D]) not theoretical J1.
             if 'O1D' in _pss_species_set:
-                _j1_now  = float(ctx.get('J1',  0.0)) * float(ctx.get('HV', 0.0))
+                _j1_now  = float(ctx.get('JO1D', ctx.get('J1', 0.0))) * float(ctx.get('HV', 0.0))
                 _o3_now  = float(ctx.get('O3',  0.0))
                 _t_now   = float(ctx.get('T',   298.15))
                 _n2_now  = float(ctx.get('N2',  0.0))
@@ -1497,9 +1497,9 @@ class ScenarioRunner:
                 h2o_vmr = ctx_j['H2O']
                 M_now = float(_s_snap.get('M', self.get_M(t_abs)))
                 ctx_j['H2O'] = h2o_vmr * M_now
-            # O1D PSS with current values
+            # O1D PSS with current values (use measured JO1D, not theoretical J1)
             if 'O1D' in _pss_species_set:
-                _j1j = float(ctx_j.get('J1',0.0))*float(ctx_j.get('HV',0.0))
+                _j1j = float(ctx_j.get('JO1D',ctx_j.get('J1',0.0)))*float(ctx_j.get('HV',0.0))
                 _o3j = float(ctx_j.get('O3',0.0)); _tj=float(ctx_j.get('T',298.15))
                 _n2j = float(ctx_j.get('N2',0.0)); _o2j=float(ctx_j.get('O2',0.0))
                 _hwj = float(ctx_j.get('H2O',0.0))
@@ -1515,9 +1515,9 @@ class ScenarioRunner:
                     ctx_j[var_name] = eval(comp_expr, globals(), ctx_j)
                 except Exception:
                     ctx_j[var_name] = 0.0
-            # 9b. Recompute O1D PSS using final J1 (Jacobian must match system_ode)
+            # 9b. Recompute O1D PSS using JO1D (Jacobian must match system_ode)
             if 'O1D' in _pss_species_set:
-                _j1j = float(ctx_j.get('J1', 0.0))
+                _j1j = float(ctx_j.get('JO1D', ctx_j.get('J1', 0.0))) * float(ctx_j.get('HV', 0.0))
                 _o3j = float(ctx_j.get('O3', 0.0))
                 _tj  = float(ctx_j.get('T', 298.15))
                 _n2j = float(ctx_j.get('N2', 0.0))
@@ -1526,7 +1526,7 @@ class ScenarioRunner:
                 _kqj = (2.0e-11 * _n2j * np.exp(130.0 / _tj) +
                         3.20e-11 * _o2j * np.exp(67.0  / _tj) +
                         2.14e-10 * _hwj)
-                ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)
+                ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)  # _j1j=JO1D*HV
 
             # 9c. O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
 
@@ -1916,10 +1916,12 @@ class ScenarioRunner:
             _M   = df['M'].values
             _HV  = df['HV'].values if 'HV' in df.columns else np.ones(len(df))
             _o3  = df['O3'].values if 'O3' in df.columns else np.zeros(len(df))
-            _j1  = (df['J1'].values if 'J1' in df.columns else np.zeros(len(df)))
-            # J1 from PHTFKT does not include HV. In FACSIMILE, HV is a reactant
-            # concentration that multiplies the rate: O1D = J1 × HV × O3 / kq.
-            _j1  = _j1 * _HV   # scale by HV (0 at night, 0.5 or 1.0 at day)
+            # Use measured JO1D (rate of k[O3+HV→O1D]) not theoretical J1 (PHTFKT).
+            # HV is a reactant → multiply by HV concentration.
+            _jo1d = (df['JO1D'].values if 'JO1D' in df.columns else
+                     df['jo1d'].values if 'jo1d' in df.columns else
+                     df['J1'].values   if 'J1'   in df.columns else np.zeros(len(df)))
+            _j1   = _jo1d * _HV
             _h2o = df['H2O'].values if 'H2O' in df.columns else np.zeros(len(df))
             _n2  = df['N2'].values  if 'N2'  in df.columns else 0.7809 * _M
             _o2  = df['O2'].values  if 'O2'  in df.columns else 0.2095 * _M
@@ -1929,7 +1931,7 @@ class ScenarioRunner:
             _o1d_pss = np.where(_kq > 0, _j1 * _o3 / np.maximum(_kq, 1e-30), 0.0)
             df['O1D'] = _o1d_pss
             _eval_ctx['O1D'] = _o1d_pss
-            print("  [O1D] PSS concentration written to output (J1·O3/k_quench)")
+            print("  [O1D] PSS concentration written to output (JO1D·HV·O3/k_quench)")
 
         # --- O atom export: disabled (was post-process PSS overwrite) ---------------
         # FACSIMILE keeps O in the ODE state and reports values O(~10²) molec/cm³,
@@ -2121,7 +2123,7 @@ class ScenarioRunner:
             # O1D PSS — must be in ctx before _compute_rates so that reactions
             # using O1D as a reactant (O1D+H2O→2OH, O1D→O, etc.) get correct turnovers.
             if 'O1D' in getattr(self, '_pss_species', set()):
-                _j1_kv  = float(ctx.get('J1', 0.0)) * float(ctx.get('HV', 0.0))
+                _j1_kv  = float(ctx.get('JO1D', ctx.get('J1', 0.0))) * float(ctx.get('HV', 0.0))
                 _o3_kv  = float(ctx.get('O3', 0.0))
                 _t_kv   = float(ctx.get('T',  298.15))
                 _n2_kv  = float(ctx.get('N2', 0.0))
