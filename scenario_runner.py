@@ -102,6 +102,44 @@ class ScenarioRunner:
         self.t_end = 0
         self.eval_count = 0
         self.real_start_time = 0.0
+        self._o1d_prod_rxns = []   # populated in _solve() after mechanism is built
+        self._o1d_loss_rxns = []
+        self._sp_by_idx = {}       # idx → species name
+
+    def _pss_o1d(self, ctx):
+        """Compute [O1D] dynamically from mechanism production/loss reactions.
+
+        Works with scalar (ODE/snap) and numpy-array (export) contexts.
+        Production = Σ(rate × Π[other reactants]) for reactions producing O1D.
+        k_eff      = Σ(rate × Π[other reactants]) per unit [O1D] for loss reactions.
+        [O1D]      = production / k_eff
+        """
+        prod  = 0.0
+        k_eff = 0.0
+        for rxn in self._o1d_prod_rxns:
+            try:
+                v = eval(rxn.safe_expr, globals(), ctx)
+                for r in rxn.reactants_parsed:   # ODE species: look up by idx
+                    sp = self._sp_by_idx.get(r['idx'], '')
+                    v = v * np.maximum(ctx.get(sp, 0.0), 0.0) ** r['coeff']
+                for r in rxn.reactants_env:       # ENV/PSS species: look up by name
+                    v = v * np.maximum(ctx.get(r['name'], 0.0), 0.0) ** r['coeff']
+                prod = prod + np.maximum(v, 0.0)
+            except Exception:
+                pass
+        for rxn in self._o1d_loss_rxns:
+            try:
+                v = eval(rxn.safe_expr, globals(), ctx)
+                for r in rxn.reactants_parsed:
+                    sp = self._sp_by_idx.get(r['idx'], '')
+                    v = v * np.maximum(ctx.get(sp, 0.0), 0.0) ** r['coeff']
+                for r in rxn.reactants_env:
+                    if r['name'].upper() != 'O1D':   # exclude O1D itself (k_eff side)
+                        v = v * np.maximum(ctx.get(r['name'], 0.0), 0.0) ** r['coeff']
+                k_eff = k_eff + np.maximum(v, 0.0)
+            except Exception:
+                pass
+        return prod / np.maximum(k_eff, 1e-30)
 
     def run(self):
         try:
@@ -635,14 +673,12 @@ class ScenarioRunner:
         if 'O1D' in all_species:
             all_species.discard('O1D')
             self._pss_species.add('O1D')
-            _o1d_pss = (
-                "np.maximum(JO1D, 0.0) * np.maximum(HV, 0.0) * np.maximum(O3, 0.0) / "
-                "np.maximum("
-                "2.0e-11 * N2 * np.exp(130.0 / T) + "
-                "3.20e-11 * O2 * np.exp(67.0 / T) + "
-                "2.14e-10 * H2O, 1e-30)"
-            )
-            print("  [PSS] O1D removed from ODE state — computed analytically per step (J1·O3/k_quench)")
+            # Dynamic PSS: pre-identify which reactions produce and consume O1D.
+            # This works regardless of how the photolysis reaction is written
+            # (O3+HV→O1D, O3→O1D, etc.) and uses the actual EASY-script rate.
+            self._o1d_prod_rxns = []   # reactions that have O1D as a product
+            self._o1d_loss_rxns = []   # reactions that consume O1D
+            print("  [PSS] O1D removed from ODE — PSS computed dynamically from mechanism reactions")
 
         # --- O atom: kept in ODE (not PSS) ---
         # FACSIMILE also integrates O in the ODE.  Both models share the same
@@ -1057,6 +1093,27 @@ class ScenarioRunner:
         # PSS species set — captured in system_ode closure for O1D (and future additions)
         _pss_species_set = getattr(self, '_pss_species', set())
 
+        # Identify O1D production/loss reactions now that reactants_parsed/env are set.
+        # Use raw rxn.products (not products_parsed) since PSS species are not in ODE.
+        if 'O1D' in _pss_species_set and hasattr(self, '_o1d_prod_rxns'):
+            for rxn in self.mechanism.reactions:
+                prods_up = {p.split('*')[-1].strip().upper() for p in rxn.products}
+                reacts_env_up = {r['name'].upper() for r in rxn.reactants_env}
+                if 'O1D' in prods_up:
+                    self._o1d_prod_rxns.append(rxn)
+                elif 'O1D' in reacts_env_up:
+                    self._o1d_loss_rxns.append(rxn)
+            print(f"  [PSS] O1D: {len(self._o1d_prod_rxns)} production, "
+                  f"{len(self._o1d_loss_rxns)} loss reactions")
+
+        # O1D production/loss reactions are identified after reactants_parsed/env
+        # are built in _solve() — see the block after vectorised stoichiometry setup.
+
+        # ── Dynamic PSS helper ─────────────────────────────────────────────────
+        # Store index→name map on self so _pss_o1d (bound method) can use it.
+        self._sp_by_idx = {idx: sp for sp, idx in self.solver.species_to_idx.items()}
+        _pss_o1d = self._pss_o1d   # alias for closures inside _solve
+
         cont_sources = []
         for s in self.cfg.get('continuous_sources', []):
             if not s.get('target') or not s.get('rate'): continue
@@ -1231,16 +1288,9 @@ class ScenarioRunner:
                         try: ctx_s[vn] = eval(ce, globals(), ctx_s)
                         except:
                             if _p == 0: ctx_s[vn] = 0.0
-            # O1D PSS (uses current c at step start)
-            # Rate from measured jo1d (k[O3+HV→O1D]=JO1D), not theoretical J1
+            # O1D PSS — dynamic from mechanism reactions
             if 'O1D' in _pss_species_set:
-                _j1s = float(ctx_s.get('JO1D',ctx_s.get('J1',0.0)))*float(ctx_s.get('HV',0.0))
-                _o3s = float(ctx_s.get('O3',0.0))
-                _ts  = float(ctx_s.get('T',298.15))
-                _n2s = float(ctx_s.get('N2',0.0)); _o2s=float(ctx_s.get('O2',0.0))
-                _wts = float(ctx_s.get('H2O',0.0))
-                _kqs = (2.0e-11*_n2s*np.exp(130.0/_ts)+3.20e-11*_o2s*np.exp(67.0/_ts)+2.14e-10*_wts)
-                ctx_s['O1D'] = max(_j1s,0.0)*max(_o3s,0.0)/max(_kqs,1e-30)
+                ctx_s['O1D'] = float(_pss_o1d(ctx_s))
             _s_snap.clear()
             _s_snap.update(ctx_s)
             _snap_active.clear()
@@ -1321,16 +1371,7 @@ class ScenarioRunner:
 
             # O1D PSS: use measured JO1D (k[O3+HV→O1D]) not theoretical J1.
             if 'O1D' in _pss_species_set:
-                _j1_now  = float(ctx.get('JO1D', ctx.get('J1', 0.0))) * float(ctx.get('HV', 0.0))
-                _o3_now  = float(ctx.get('O3',  0.0))
-                _t_now   = float(ctx.get('T',   298.15))
-                _n2_now  = float(ctx.get('N2',  0.0))
-                _o2_now  = float(ctx.get('O2',  0.0))
-                _h2o_now = float(ctx.get('H2O', 0.0))
-                _kq_now  = (2.0e-11*_n2_now*np.exp(130.0/_t_now) +
-                            3.20e-11*_o2_now*np.exp(67.0/_t_now)  +
-                            2.14e-10*_h2o_now)
-                ctx['O1D'] = max(_j1_now,0.0)*max(_o3_now,0.0)/max(_kq_now,1e-30)
+                ctx['O1D'] = float(_pss_o1d(ctx))
 
 
             try:
@@ -1497,14 +1538,9 @@ class ScenarioRunner:
                 h2o_vmr = ctx_j['H2O']
                 M_now = float(_s_snap.get('M', self.get_M(t_abs)))
                 ctx_j['H2O'] = h2o_vmr * M_now
-            # O1D PSS with current values (use measured JO1D, not theoretical J1)
+            # O1D PSS — dynamic from mechanism reactions
             if 'O1D' in _pss_species_set:
-                _j1j = float(ctx_j.get('JO1D',ctx_j.get('J1',0.0)))*float(ctx_j.get('HV',0.0))
-                _o3j = float(ctx_j.get('O3',0.0)); _tj=float(ctx_j.get('T',298.15))
-                _n2j = float(ctx_j.get('N2',0.0)); _o2j=float(ctx_j.get('O2',0.0))
-                _hwj = float(ctx_j.get('H2O',0.0))
-                _kqj = 2.0e-11*_n2j*np.exp(130.0/_tj)+3.20e-11*_o2j*np.exp(67.0/_tj)+2.14e-10*_hwj
-                ctx_j['O1D'] = max(_j1j,0.0)*max(_o3j,0.0)/max(_kqj,1e-30)
+                ctx_j['O1D'] = float(_pss_o1d(ctx_j))
             ctx_j['AMAX'] = np.maximum
             ctx_j['AMIN'] = np.minimum
             # 8. Pass 2: J-value var_assignments (INPUT variables protected)
@@ -1515,18 +1551,9 @@ class ScenarioRunner:
                     ctx_j[var_name] = eval(comp_expr, globals(), ctx_j)
                 except Exception:
                     ctx_j[var_name] = 0.0
-            # 9b. Recompute O1D PSS using JO1D (Jacobian must match system_ode)
+            # 9b. Recompute O1D PSS (Jacobian must match system_ode)
             if 'O1D' in _pss_species_set:
-                _j1j = float(ctx_j.get('JO1D', ctx_j.get('J1', 0.0))) * float(ctx_j.get('HV', 0.0))
-                _o3j = float(ctx_j.get('O3', 0.0))
-                _tj  = float(ctx_j.get('T', 298.15))
-                _n2j = float(ctx_j.get('N2', 0.0))
-                _o2j = float(ctx_j.get('O2', 0.0))
-                _hwj = float(ctx_j.get('H2O', 0.0))
-                _kqj = (2.0e-11 * _n2j * np.exp(130.0 / _tj) +
-                        3.20e-11 * _o2j * np.exp(67.0  / _tj) +
-                        2.14e-10 * _hwj)
-                ctx_j['O1D'] = max(_j1j, 0.0) * max(_o3j, 0.0) / max(_kqj, 1e-30)  # _j1j=JO1D*HV
+                ctx_j['O1D'] = float(_pss_o1d(ctx_j))
 
             # 9c. O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
 
@@ -1822,7 +1849,8 @@ class ScenarioRunner:
                     vals = v_func(_s_eval_t)
                     if isinstance(vals, (float, int)):
                         vals = np.full(len(df), float(vals))
-                    _eval_ctx[k_up] = vals
+                    if k_up not in _eval_ctx:    # don't overwrite ODE species
+                        _eval_ctx[k_up] = vals
                     if k_up not in df.columns:
                         df[k_up] = vals
                 except Exception:
@@ -1856,7 +1884,8 @@ class ScenarioRunner:
                         _e.value = _arr if isinstance(_arr, np.ndarray) else np.full(len(df), float(_arr))
                     except Exception:
                         _e.value = np.zeros(len(df))
-                _eval_ctx[_e.name.upper()] = _e.value
+                if _e.name.upper() not in _eval_ctx:   # don't overwrite ODE species
+                    _eval_ctx[_e.name.upper()] = _e.value
 
             for _entry in self._s_vec_ordered:
                 _input_col = getattr(_entry, '_input_col', None)
@@ -1910,28 +1939,15 @@ class ScenarioRunner:
         # O1D: always export as PSS — either replacing an ODE column (legacy path where
         # O1D was kept in the ODE) or adding it fresh (current path where O1D is PSS-only).
         if 'O1D' in df.columns or 'O1D' in getattr(self, '_pss_species', set()):
-            _T   = (df['TEMP'].values if 'TEMP' in df.columns else
-                    df['T'].values    if 'T'    in df.columns else
-                    np.full(len(df), 298.15))
-            _M   = df['M'].values
-            _HV  = df['HV'].values if 'HV' in df.columns else np.ones(len(df))
-            _o3  = df['O3'].values if 'O3' in df.columns else np.zeros(len(df))
-            # Use measured JO1D (rate of k[O3+HV→O1D]) not theoretical J1 (PHTFKT).
-            # HV is a reactant → multiply by HV concentration.
-            _jo1d = (df['JO1D'].values if 'JO1D' in df.columns else
-                     df['jo1d'].values if 'jo1d' in df.columns else
-                     df['J1'].values   if 'J1'   in df.columns else np.zeros(len(df)))
-            _j1   = _jo1d * _HV
-            _h2o = df['H2O'].values if 'H2O' in df.columns else np.zeros(len(df))
-            _n2  = df['N2'].values  if 'N2'  in df.columns else 0.7809 * _M
-            _o2  = df['O2'].values  if 'O2'  in df.columns else 0.2095 * _M
-            _kq  = (2.15e-11 * np.exp(110.0 / _T) * _n2 +
-                    3.30e-11 * np.exp( 55.0 / _T) * _o2 +
-                    2.20e-10 * _h2o)
-            _o1d_pss = np.where(_kq > 0, _j1 * _o3 / np.maximum(_kq, 1e-30), 0.0)
+            # Dynamic O1D PSS from mechanism reactions (vectorised over all time steps).
+            _o1d_pss = self._pss_o1d(_eval_ctx)
+            if isinstance(_o1d_pss, np.ndarray) and _o1d_pss.shape == (len(df),):
+                pass
+            else:
+                _o1d_pss = np.full(len(df), float(_o1d_pss))
             df['O1D'] = _o1d_pss
             _eval_ctx['O1D'] = _o1d_pss
-            print("  [O1D] PSS concentration written to output (JO1D·HV·O3/k_quench)")
+            print("  [O1D] PSS concentration written to output (dynamic from mechanism reactions)")
 
         # --- O atom export: disabled (was post-process PSS overwrite) ---------------
         # FACSIMILE keeps O in the ODE state and reports values O(~10²) molec/cm³,
@@ -2120,21 +2136,11 @@ class ScenarioRunner:
                         except:
                             if _kv_pass == 0: ctx[var_name] = 0.0
 
-            # O1D PSS — must be in ctx before _compute_rates so that reactions
-            # using O1D as a reactant (O1D+H2O→2OH, O1D→O, etc.) get correct turnovers.
+            # O1D PSS — dynamic from mechanism reactions
             if 'O1D' in getattr(self, '_pss_species', set()):
-                _j1_kv  = float(ctx.get('JO1D', ctx.get('J1', 0.0))) * float(ctx.get('HV', 0.0))
-                _o3_kv  = float(ctx.get('O3', 0.0))
-                _t_kv   = float(ctx.get('T',  298.15))
-                _n2_kv  = float(ctx.get('N2', 0.0))
-                _o2_kv  = float(ctx.get('O2', 0.0))
-                _h2o_kv = float(ctx.get('H2O', 0.0))
-                _kq_kv  = (2.15e-11 * np.exp(110.0 / _t_kv) * _n2_kv +
-                           3.30e-11 * np.exp( 55.0 / _t_kv) * _o2_kv +
-                           2.20e-10 * _h2o_kv)
-                ctx['O1D'] = max(_j1_kv, 0.0) * max(_o3_kv, 0.0) / max(_kq_kv, 1e-30)
+                ctx['O1D'] = float(self._pss_o1d(ctx))
                 if _o1d_pss_arr is not None:
-                    _o1d_pss_arr[t_i] = ctx['O1D']  # collect for vectorised turnover
+                    _o1d_pss_arr[t_i] = ctx['O1D']
 
             try:
                 _compute_rates(ctx, _k_loc)
