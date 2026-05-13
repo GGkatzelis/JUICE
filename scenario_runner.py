@@ -11,15 +11,65 @@ import warnings
 import time
 import datetime
 
-JUICE_VERSION = "1.0.0"
+try:
+    from version import __version__ as JUICE_VERSION
+except ImportError:
+    JUICE_VERSION = "unknown"
+
+_FAC_AMP = "&" * 44   # separator line before data (≥8 & required)
+_FAC_TIME_COL = "TIME / SEC SINCE 1.1.2000 00:00:00"
 
 
-def _write_csv(path: str, df: pd.DataFrame, comment: str = "") -> None:
-    """Write a CSV file with an optional leading comment line (# ...)."""
+def _col_to_fac_header(col: str, col_idx: int, file_type: str) -> str:
+    """Map a DataFrame column name to a FACSIMILE-style COLUMN N= header string."""
+    if col_idx == 1:  # first column is always TIME
+        return _FAC_TIME_COL
+    if file_type == 'kv':
+        m = re.match(r'^([kv])_R(\d+):(.+)$', col)
+        if m:
+            return f"{m.group(1)}<{int(m.group(2))},0> !U{m.group(3)}!N"
+        return f"{col}<0>"
+    if file_type == 'pd':
+        if col.startswith('P_'):
+            return f"p<0> {col[2:]}"
+        if col.startswith('D_'):
+            return f"d<0> {col[2:]}"
+        return f"{col}<0>"
+    return f"{col}<0>"   # cs: every column gets <0>
+
+
+def _write_csv(path: str, df: pd.DataFrame, comment: str = "",
+               file_type: str = 'cs') -> None:
+    """Write a FACSIMILE-compatible output file (COLUMN headers + &&&& + space-sep data).
+
+    Format:
+      # comment
+      COLUMN 1=TIME / SEC SINCE 1.1.2000 00:00:00
+      COLUMN 2=OH<0>          (cs)  or  k<1,0> !U...!N  (kv)  or  p<0> SP  (pd)
+      ...
+      NUMBER OF COLUMNS=N
+      &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+       value value ...         ← space-separated data rows
+    """
+    all_cols = [df.index.name or 'TIME_s'] + list(df.columns)
+    idx_vals = df.index.values.astype(float)
+    col_arrs = [df[c].values.astype(float) for c in df.columns]
+
     with open(path, 'w', newline='', encoding='utf-8') as fh:
         if comment:
             fh.write(f"# {comment}\n")
-        df.to_csv(fh)
+        for i, col in enumerate(all_cols, 1):
+            fh.write(f"COLUMN {i}={_col_to_fac_header(col, i, file_type)}\n")
+        fh.write(f"NUMBER OF COLUMNS={len(all_cols)}\n")
+        fh.write(_FAC_AMP + "\n")
+        for t_i in range(len(idx_vals)):
+            # Time column with full float64 precision (.15E = 16 sig figs) so that
+            # BDF boundary times like 773812899.9999847 are never rounded to the same
+            # value as the exact boundary 773812900.0 (relative diff ~2e-14 needs ≥14 sig figs)
+            row = f'{idx_vals[t_i]:.15E}'
+            for arr in col_arrs:
+                row += f' {arr[t_i]:.6E}'
+            fh.write(row + '\n')
 
 
 def _juice_header(scenario_stem: str) -> str:
@@ -810,7 +860,8 @@ class ScenarioRunner:
             self._enz_providers = {n: self.ctx_data[n] for n in _prov_names}
 
             # s_vec: all entries from mech.s_entries (populated by easy_parser)
-            self._s_vec = [SEntry(name=e.name, definition=e.definition)
+            self._s_vec = [SEntry(name=e.name, definition=e.definition,
+                                  is_synthetic=getattr(e, 'is_synthetic', False))
                            for e in self.mechanism.s_entries]
 
             # function_entries from mechanism
@@ -1480,7 +1531,7 @@ class ScenarioRunner:
         #                       10-s output step (2520 restarts). Not what FACSIMILE does.
         _perstep_snap = bool(self.cfg.get('perstep_snap',
                              _solver_toml.get('perstep_snap', False)))
-        print(f"  [SOLVER] mode={'sub-step (every 10s, NOT FACSIMILE)' if _perstep_snap else 'FACSIMILE-konform (ENZ-segment)'}")
+        print(f"  [SOLVER] mode={'per-ENZ-row (BDF restart each step)' if _perstep_snap else 'FACSIMILE-konform (ENZ-segment)'}")
 
         _atol = float(_solver_toml.get('atol', 1e4))
         # Absolute tolerance floor for species-specific atol (option 2).
@@ -1692,8 +1743,8 @@ class ScenarioRunner:
         y_seg = y0.copy()
 
         if _perstep_snap:
-            # ── Strict FACSIMILE mode: one solve_ivp per 10-s output step ──────
-            # Settings frozen from snap at each step start.  ~2520 BDF restarts.
+            # ── Per-ENZ-row mode: one solve_ivp per output step ──────────────────
+            # Settings frozen from snap at each step start.
             n_out_steps = len(self.t_span) - 1
             for step_idx in range(n_out_steps):
                 t0 = self.t_span[step_idx]
@@ -1842,7 +1893,8 @@ class ScenarioRunner:
         # Extra ENZ columns (TEMP, PRESS, Q_* switches) are NOT in the EASY script
         # and should not appear in the cs output — keep the output clean and
         # consistent with what FACSIMILE outputs.
-        _easy_names_upper = ({e.name.upper() for e in self.mechanism.s_entries}
+        _easy_names_upper = ({e.name.upper() for e in self.mechanism.s_entries
+                               if not getattr(e, 'is_synthetic', False)}
                              | {s.upper() for s in self.solver.species})
 
         # Add ctx_data (ENZ inputs) under their EASY names (T, HV, JNO2, etc.)
@@ -1894,12 +1946,21 @@ class ScenarioRunner:
                 if _e.name.upper() not in _eval_ctx:   # don't overwrite ODE species
                     _eval_ctx[_e.name.upper()] = _e.value
 
+            # Build a name→value map from the ENZ vec for O(1) INPUT() lookup.
+            # This mirrors update_s_vec() in the ODE: INPUT entries always read
+            # from the raw ENZ column, never from _eval_ctx (which can be
+            # overwritten by a CONST() definition for the same name).
+            _enz_export_map = {_e.name.upper(): _e.value for _e in self._enz_vec}
+
             for _entry in self._s_vec_ordered:
                 _input_col = getattr(_entry, '_input_col', None)
                 _code      = getattr(_entry, '_code', None)
                 try:
                     if _input_col is not None:
-                        _result = _eval_ctx.get(_input_col, np.zeros(len(df)))
+                        # Always resolve INPUT from ENZ vec (consistent with ODE)
+                        _raw = _enz_export_map.get(_input_col)
+                        _result = (_raw if isinstance(_raw, np.ndarray) and _raw.shape == (len(df),)
+                                   else np.zeros(len(df)))
                     elif _code is not None:
                         _result = eval(_code, {"__builtins__": {}}, _eval_ctx)
                     else:
@@ -1908,7 +1969,8 @@ class ScenarioRunner:
                         _result = np.full(len(df), float(_result))
                     if isinstance(_result, np.ndarray) and _result.shape == (len(df),):
                         _eval_ctx[_entry.name] = _result
-                        df[_entry.name] = _result
+                        if not getattr(_entry, 'is_synthetic', False):
+                            df[_entry.name] = _result   # synthetic entries: ODE only, not in cs
                 except Exception:
                     pass
         else:
@@ -1993,8 +2055,8 @@ class ScenarioRunner:
             except Exception:
                 pass
 
-        out_path = os.path.join(self.root, f"{self._stem}_cs.csv")
-        _write_csv(out_path, df, _juice_header(self._stem))
+        out_path = os.path.join(self.root, f"{self._stem}.cs")
+        _write_csv(out_path, df, _juice_header(self._stem), file_type='cs')
         print(f"  ... Saved to {out_path}")
 
         # Export kv/pd only when requested via checkbox in FR_GUI
@@ -2232,7 +2294,10 @@ class ScenarioRunner:
               f"({n_rxn} reactions × {n_t} timesteps, float32)")
 
         man_path = os.path.join(self.root, f"{self._stem}_reactions.csv")
-        _write_csv(man_path, pd.DataFrame(rows_manifest), _juice_header(self._stem))
+        man_df = pd.DataFrame(rows_manifest)
+        with open(man_path, 'w', newline='', encoding='utf-8') as _mfh:
+            _mfh.write(f"# {_juice_header(self._stem)}\n")
+            man_df.to_csv(_mfh, index=False)
         print(f"  ... Reaction manifest saved to {man_path}")
 
         # ── KV: rate constants and turnover rates per reaction ────────────────────
@@ -2244,8 +2309,9 @@ class ScenarioRunner:
             hdr   = f"{lbl}:{r_str}-->{p_str}"[:60]
             kv_cols[f"k_{hdr}"] = k_arr[:, i]
             kv_cols[f"v_{hdr}"] = v_arr[:, i]
-        kv_path = os.path.join(self.root, f"{self._stem}_kv.csv")
-        _write_csv(kv_path, pd.DataFrame(kv_cols).set_index('TIME_s'), _juice_header(self._stem))
+        kv_path = os.path.join(self.root, f"{self._stem}.kv")
+        _write_csv(kv_path, pd.DataFrame(kv_cols).set_index('TIME_s'),
+                   _juice_header(self._stem), file_type='kv')
         print(f"  ... kv saved to {kv_path}")
 
         # ── PD: production and destruction rates per species ──────────────────────
@@ -2301,8 +2367,9 @@ class ScenarioRunner:
             pd_cols[f"D_{sp}"] = D_arr[:, j]
         if _kOH_arr is not None:
             pd_cols['kOH'] = _kOH_arr  # Σ k_i × [X_i] s⁻¹, ohne [OH]
-        pd_path = os.path.join(self.root, f"{self._stem}_pd.csv")
-        _write_csv(pd_path, pd.DataFrame(pd_cols).set_index('TIME_s'), _juice_header(self._stem))
+        pd_path = os.path.join(self.root, f"{self._stem}.pd")
+        _write_csv(pd_path, pd.DataFrame(pd_cols).set_index('TIME_s'),
+                   _juice_header(self._stem), file_type='pd')
         print(f"  ... pd saved to {pd_path}")
 
     def _show_results(self, out_path):

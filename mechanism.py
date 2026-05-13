@@ -43,6 +43,7 @@ class SEntry:
     name: str        # "T", "KMT06", "M", "J4", "NO" (if prescribed)
     definition: str  # "INPUT(t)", "CONST(f(T,H2O))", "DENSITY(P,T)"
     value: float = 0.0
+    is_synthetic: bool = False  # True = synthesized from reaction rate, not in EASY script
 
 
 @dataclass

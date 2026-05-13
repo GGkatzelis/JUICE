@@ -13,10 +13,10 @@ Options:
 Paths are read from FR_GUI.toml (easy_root, output_root).
 Files compared (in order):
   1. s-values  : settings (KMT, J-values, COSX, T, M, …)
-  2. k-values  : reaction rate constants  (needs *_kv.csv)
+  2. k-values  : reaction rate constants  (needs *.kv)
   3. c-values  : concentrations (ODE species)
-  4. v-values  : reaction turnover rates  (needs *_kv.csv)
-  5. pd-values : production/destruction   (needs *_pd.csv)
+  4. v-values  : reaction turnover rates  (needs *.kv)
+  5. pd-values : production/destruction   (needs *.pd)
 Stops and reports the first column whose max relative deviation exceeds --tol.
 """
 
@@ -31,6 +31,7 @@ import tomllib
 import datetime as _dt
 import numpy as np
 import pandas as pd
+from column_file_reader import load_column_file
 
 # ── Reaction-string canonicaliser (mirrors easy_parser._canon_rxn_key) ───────
 def _canon_rxn_str(rxn_str: str) -> str:
@@ -293,9 +294,9 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
             return juice
         return plain  # return plain so the "not found" error names the expected file
 
-    cs_jui_path = _find_juice_file("_cs.csv")
-    kv_jui_path = _find_juice_file("_kv.csv")
-    pd_jui_path = _find_juice_file("_pd.csv")
+    cs_jui_path = _find_juice_file(".cs")
+    kv_jui_path = _find_juice_file(".kv")
+    pd_jui_path = _find_juice_file(".pd")
     kv_fac_path = os.path.join(easy_dir, f"{scenario}.kv")
     pd_fac_path = os.path.join(easy_dir, f"{scenario}.pd")
 
@@ -314,10 +315,10 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     if not os.path.isfile(cs_fac_path):
         sys.exit(f"FACSIMILE .cs not found: {cs_fac_path}")
     if not os.path.isfile(cs_jui_path):
-        sys.exit(f"JUICE _cs.csv not found: {cs_jui_path}")
+        sys.exit(f"JUICE .cs not found: {cs_jui_path}")
 
     fac = load_facsimile_cs(cs_fac_path)   # duplicate last row removed by _trim_boundary_rows
-    jui = pd.read_csv(cs_jui_path, index_col=0, comment='#')
+    jui = load_column_file(cs_jui_path)
     jui = jui.iloc[1:]   # JUICE row 0 = initial conditions (c=0); skip so t_ref starts at t_1
 
     # Align: interpolate FACSIMILE to JUICE time points (JUICE is the reference)
@@ -456,7 +457,7 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
 
     # k-values and v-values: compare against FACSIMILE .kv if available
     if os.path.isfile(kv_jui_path):
-        kv_jui = pd.read_csv(kv_jui_path, index_col=0, comment='#')
+        kv_jui = load_column_file(kv_jui_path)
         # Build canonical-key → JUICE-column mapping
         k_jui = {_canon_kv_label(c): c for c in kv_jui.columns if c.startswith('k_')}
         v_jui = {_canon_kv_label(c): c for c in kv_jui.columns if c.startswith('v_')}
@@ -504,7 +505,7 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
 
     # pd values: compare against FACSIMILE .pd if available
     if os.path.isfile(pd_jui_path):
-        pd_jui = pd.read_csv(pd_jui_path, index_col=0, comment='#')
+        pd_jui = load_column_file(pd_jui_path)
         p_jui = [c for c in pd_jui.columns if c.startswith('P_')]
         d_jui = [c for c in pd_jui.columns if c.startswith('D_')]
 
@@ -546,7 +547,7 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     print(f"{'─'*60}")
     _koh_done = False
     if os.path.isfile(pd_jui_path):
-        _pd_jui = pd.read_csv(pd_jui_path, index_col=0, comment='#')
+        _pd_jui = load_column_file(pd_jui_path)
         if 'kOH' in _pd_jui.columns:
             _koh_j = np.interp(t_ref, _pd_jui.index.values.astype(float),
                                _pd_jui['kOH'].values.astype(float))

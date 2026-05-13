@@ -6,6 +6,16 @@ import warnings
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from column_file_reader import load_column_file
+
+
+def _is_juice_output(path: str) -> bool:
+    """Return True if path is a JUICE output file (first line starts with '# Calculated by JUICE')."""
+    try:
+        with open(path, encoding='latin-1') as _f:
+            return _f.readline().strip().startswith('# Calculated by JUICE')
+    except Exception:
+        return False
 
 # Set Windows AppUserModelID as early as possible so the taskbar uses our icon
 if sys.platform == "win32":
@@ -846,7 +856,8 @@ class ResultsViewer(QMainWindow):
                 if _elog and os.path.isfile(_elog):
                     from easy_parser import EasyParser as _EP
                     _mech = _EP().parse(_elog)
-                    self._easy_s_names = {e.name.lower() for e in _mech.s_entries}
+                    self._easy_s_names = {e.name.lower() for e in _mech.s_entries
+                                          if not getattr(e, 'is_synthetic', False)}
                     self._easy_c_names = {sp.lower() for sp in _mech.species}
         except Exception:
             pass
@@ -1294,7 +1305,7 @@ class ResultsViewer(QMainWindow):
         try:
             from version import __version__, __date__, __authors__
         except ImportError:
-            __version__, __date__, __authors__ = "2.0", "", []
+            __version__, __date__, __authors__ = "unknown", "", []
         dlg = QDialog(self)
         dlg.setWindowTitle("About JUICE")
         dlg.setFixedWidth(380)
@@ -2035,10 +2046,12 @@ class ResultsViewer(QMainWindow):
         # kOH from pd file: direct kOH column (Σ k_i×[X_i], no division by [OH])
         if radical.upper() == 'OH' and self.csv_path:
             import os as _os
-            _pd_path = self.csv_path.replace('_cs.csv', '_pd.csv')
+            _pd_path = (self.csv_path.replace('_cs.csv', '_pd.csv')
+                        if self.csv_path.endswith('_cs.csv')
+                        else os.path.splitext(self.csv_path)[0] + '.pd')
             if _os.path.isfile(_pd_path):
                 try:
-                    _pd_df = pd.read_csv(_pd_path, index_col=0, comment='#')
+                    _pd_df = load_column_file(_pd_path)
                     if 'kOH' in _pd_df.columns:
                         _koh_pd = np.interp(t, _pd_df.index.values.astype(float),
                                             _pd_df['kOH'].values.astype(float))
@@ -2430,7 +2443,7 @@ class ResultsViewer(QMainWindow):
             if not path:
                 return
             try:
-                df = pd.read_csv(path, index_col=0, comment='#')
+                df = load_column_file(path)
                 # Same SAPHIR-epoch → hours-since-midnight conversion as main CSV
                 t_unix = df.index.astype(float) + _NC_EPOCH_OFFSET
                 df.index = (t_unix - self._midnight_unix) / 3600.0
@@ -2504,10 +2517,14 @@ class ResultsViewer(QMainWindow):
             return
 
         base = os.path.splitext(cs_path)[0]
-        is_fac = cs_path.endswith('.cs')   # FACSIMILE: no underscore convention
+        # FACSIMILE .cs: ends in .cs but NOT a JUICE output file
+        is_fac = cs_path.endswith('.cs') and not _is_juice_output(cs_path)
 
         # ── pd ────────────────────────────────────────────────────────────────
-        pd_path = base + '.pd' if is_fac else base.replace('_cs', '_pd') + '.csv'
+        if cs_path.endswith('_cs.csv'):         # old JUICE format (backward compat)
+            pd_path = base.replace('_cs', '_pd') + '.csv'
+        else:
+            pd_path = base + '.pd'
         pd_df = None
         if os.path.isfile(pd_path):
             try:
@@ -2517,7 +2534,7 @@ class ResultsViewer(QMainWindow):
                     pd_df.index = (pd_df.index.values.astype(float)
                                    + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
                 else:
-                    pd_df = pd.read_csv(pd_path, index_col=0, comment='#')
+                    pd_df = load_column_file(pd_path)
                     pd_df.index = (pd_df.index.values.astype(float)
                                    + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
             except Exception:
@@ -2531,7 +2548,10 @@ class ResultsViewer(QMainWindow):
             self._cmp_add_derived(self.df, pd_df)
 
         # ── kv ────────────────────────────────────────────────────────────────
-        kv_path = base + '.kv' if is_fac else base.replace('_cs', '_kv') + '.csv'
+        if cs_path.endswith('_cs.csv'):          # old JUICE format (backward compat)
+            kv_path = base.replace('_cs', '_kv') + '.csv'
+        else:
+            kv_path = base + '.kv'
         if not os.path.isfile(kv_path):
             return
         try:
@@ -2542,7 +2562,7 @@ class ResultsViewer(QMainWindow):
                               + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
                 kv_out = k_df
             else:
-                raw = pd.read_csv(kv_path, index_col=0, comment='#')
+                raw = load_column_file(kv_path)
                 raw.index = (raw.index.values.astype(float)
                              + _NC_EPOCH_OFFSET - self._midnight_unix) / 3600.0
                 # keep only k_ columns (rate constants); strip k_ prefix and R#####: tag
@@ -2745,8 +2765,20 @@ class ResultsViewer(QMainWindow):
             if np.nanmax(np.abs(px)) == 0 and np.nanmax(np.abs(rx)) == 0:
                 continue
 
-            # Slope: median of ratios at points where reference > 0
-            ratio_mask = (np.abs(rx) > 0) & np.isfinite(px / np.where(rx != 0, rx, np.nan))
+            # Slope filter depends on the quantity type:
+            #   c-Species (mode 1): filter by JUICE >= atol=1e4.
+            #     The ODE cannot reliably resolve concentrations below its
+            #     absolute tolerance (e.g. OH at night → JUICE=0, FAC=1e-13
+            #     GEAR noise → ratio=0 biases the median).
+            #   s-Settings (mode 2) and k-Values (mode 3): these have units
+            #     unrelated to molec/cm³ (K, s⁻¹, cm³ molec⁻¹ s⁻¹, …).
+            #     atol=1e4 is meaningless here; use rx > 0 (physically, settings
+            #     and rate constants are always positive when chemically active).
+            _atol = 1e4  # ODE absolute tolerance — only valid for c-species
+            if _mode == 1:  # c-Species: concentrations in molec/cm³
+                ratio_mask = (px >= _atol) & (rx > 0) & np.isfinite(px / np.where(rx > 0, rx, np.nan))
+            else:           # s-Settings, k-Values: use reference > 0
+                ratio_mask = (rx > 0) & np.isfinite(px / np.where(rx > 0, rx, np.nan))
             if ratio_mask.sum() >= 3:
                 slope = float(np.median(px[ratio_mask] / rx[ratio_mask]))
             elif np.nanmean(np.abs(rx)) > 0:
@@ -2757,12 +2789,22 @@ class ResultsViewer(QMainWindow):
             if not np.isfinite(slope):
                 continue
 
+            # σ = √(median((F-J)²)) / mean([F,J])  — median-based relative deviation.
+            # Using the median of squared differences (instead of the mean) makes
+            # this robust against outlier time steps (e.g. phase transitions where
+            # one model drops faster). Normalized by the mean concentration over
+            # the same filtered points so the result is dimensionless (%).
+            _diff = px[ratio_mask] - rx[ratio_mask]
+            _rmeds = float(np.sqrt(np.median(_diff ** 2)))
+            _mean_fj = float(np.mean(np.concatenate([px[ratio_mask], rx[ratio_mask]])))
+            sigma = _rmeds / _mean_fj if _mean_fj > 0 else np.nan
+
             # theta: angle of the mean ratio line from the x-axis (degrees).
             # 45° = perfect 1:1, >45° MCM overestimates, <45° underestimates.
             theta = float(np.degrees(np.arctan(slope)))
 
             self._cmp_slope_results[sp] = {
-                'slope': slope, 'theta': theta,
+                'slope': slope, 'theta': theta, 'sigma': sigma,
                 'py': px, 'ref': rx, 'common_t': common_t[mask],
             }
 
@@ -2844,10 +2886,18 @@ class ResultsViewer(QMainWindow):
         self._cmp_draw_slope_matrix()
 
     def _cmp_get_filtered_species(self):
-        """Return the species list to display, applying filter → sort → search."""
+        """Return the species list to display, applying mode → filter → sort → search."""
         all_sp = sorted(self._cmp_slope_results.keys())
         if not all_sp:
             return all_sp
+
+        # ── 0. c/s mode filter (same as the dropdown) ────────────────────────
+        _mode = getattr(self._cmp_mode_group, 'checkedId', lambda: 1)()
+        if _mode == 2:   # s-Species: settings only
+            all_sp = [s for s in all_sp if self._is_setting_col(s)]
+        elif _mode == 1:  # c-Species: concentrations only
+            all_sp = [s for s in all_sp if not self._is_setting_col(s)]
+        # mode 0 (all) or 3 (k-Values): no c/s filter
 
         # ── 1. Filter by agreement quality ───────────────────────────────────
         choice = self._cmp_filter_combo.currentText() if hasattr(self, '_cmp_filter_combo') else "Show all"
@@ -2985,6 +3035,7 @@ class ResultsViewer(QMainWindow):
             y = (nrows - 1 - row) * (box_h + pad)
             slope = self._cmp_slope_results[sp]['slope']
             theta = self._cmp_slope_results[sp]['theta']
+            sigma = self._cmp_slope_results[sp].get('sigma', np.nan)
             rgba  = cmap(norm(float(np.clip(slope, vmin, vmax))))
             # Highlight border if this species is selected in either slot
             edge_color = '#333'
@@ -3003,17 +3054,23 @@ class ResultsViewer(QMainWindow):
             if _mode == 3 and '-->' in sp:
                 parts = sp.split('-->', 1)
                 display_name = parts[0] + '\n-->\n' + parts[1]
-                name_y  = y + box_h * 0.60
-                slope_y = y + box_h * 0.12
+                name_y  = y + box_h * 0.62
+                slope_y = y + box_h * 0.20
+                range_y = y + box_h * 0.05
             else:
                 display_name = sp
-                name_y  = y + box_h * 0.67
-                slope_y = y + box_h * 0.30
+                name_y  = y + box_h * 0.70
+                slope_y = y + box_h * 0.42
+                range_y = y + box_h * 0.15
             ax.text(x + box_w/2, name_y, display_name,
                     ha='center', va='center', fontsize=fsize_name, fontweight='bold',
                     color=tc, linespacing=1.1)
             ax.text(x + box_w/2, slope_y, f"m={slope:.2f}",
                     ha='center', va='center', fontsize=fsize_val, color=tc)
+            if np.isfinite(sigma):
+                sigma_str = f"σ={sigma*100:.3g}%"
+                ax.text(x + box_w/2, range_y, sigma_str,
+                        ha='center', va='center', fontsize=fsize_val * 0.85, color=tc)
             self._cmp_slope_box_map.append((x, y, x+box_w, y+box_h, sp))
 
         # Tight limits — no extra whitespace around the grid
@@ -3107,6 +3164,7 @@ class ResultsViewer(QMainWindow):
             return
 
         slope, theta = data['slope'], data['theta']
+        sigma = data.get('sigma', np.nan)
         py_vals  = _to_unit(data['py'],  data['common_t'])
         ref_vals = _to_unit(data['ref'], data['common_t'])
         common_t = data['common_t']
@@ -3211,7 +3269,9 @@ class ResultsViewer(QMainWindow):
         ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
         ax.set_xlabel("Time of Day (UTC)", fontsize=9)
         ax.set_ylabel(lax_lbl, fontsize=9)
-        ax.set_title(f"{sp}   m={slope:.3f}", fontweight='bold', fontsize=10, loc='left')
+        _sig_str = f"   σ={sigma*100:.3g}%" if np.isfinite(sigma) else ""
+        ax.set_title(f"{sp}   m={slope:.3f}{_sig_str}",
+                     fontweight='bold', fontsize=10, loc='left')
         # Prevent matplotlib from adding its own "+offset" to the tick exponent area.
         # Our lax_lbl already carries the only scale/offset information shown.
         # Use a fresh ScalarFormatter with useOffset=False — more reliable than
@@ -4749,7 +4809,7 @@ class ResultsViewer(QMainWindow):
 def show_results(out_path):
     if HAS_PYQT:
         print(">>> [VISUALIZATION] Launching Interactive PyQt Viewer...")
-        df = pd.read_csv(out_path, index_col=0, comment='#')
+        df = load_column_file(out_path)
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
@@ -4765,7 +4825,7 @@ def show_results(out_path):
         return
 
     print("[WARNING] PyQt6 is not installed. Falling back to simple Matplotlib visualization.")
-    df = pd.read_csv(out_path, index_col=0, comment='#')
+    df = load_column_file(out_path)
     midnight_unix = df.index[0] - (df.index[0] % 86400)
     t_hours = (df.index - midnight_unix) / 3600.0
 
