@@ -27,9 +27,12 @@ try:
     def _stoich_eval_numba(k_buf, y, env_vals,
                            ode_r_rxn, ode_r_sp, ode_r_coeff,
                            env_r_rxn, env_r_name_idx, env_r_coeff,
-                           stoich_rxn, stoich_sp, stoich_sc):
-        n_sp = len(y)
-        v_buf = k_buf.copy()
+                           stoich_rxn, stoich_sp, stoich_sc,
+                           v_buf, dydt_out):
+        """In-place kernel: fills dydt_out (pre-zeroed) and uses v_buf as scratch.
+        No internal array allocations — caller owns both buffers."""
+        for i in range(len(k_buf)):
+            v_buf[i] = k_buf[i]
         for j in range(len(ode_r_rxn)):
             i = ode_r_rxn[j]
             if v_buf[i] != 0.0:
@@ -39,10 +42,8 @@ try:
             if v_buf[i] != 0.0:
                 ev = env_vals[env_r_name_idx[j]]
                 v_buf[i] *= ev ** env_r_coeff[j]
-        dydt = np.zeros(n_sp)
         for j in range(len(stoich_rxn)):
-            dydt[stoich_sp[j]] += v_buf[stoich_rxn[j]] * stoich_sc[j]
-        return dydt
+            dydt_out[stoich_sp[j]] += v_buf[stoich_rxn[j]] * stoich_sc[j]
 
     _NUMBA_AVAILABLE = True
 except ImportError:
@@ -909,9 +910,121 @@ class ScenarioRunner:
             self._s_vec_ordered = _tsort(self._s_vec, self._function_entries)
             _pcs(self._s_vec_ordered, self._function_entries)  # pre-compile code objects
 
+            # Build a single precompiled batch function for s_vec evaluation.
+            # Replaces N eval() calls in update_s_vec with one Python function call.
+            # Same principle as _compute_rates for reaction rates.
+            _svec_fn_lines = ["def _eval_s_vec_batch(_ctx):"]
+            _svec_fn_lines.append("    _c = _ctx  # shorthand")
+            for _e in self._s_vec_ordered:
+                _n = _e.name
+                if getattr(_e, '_input_col', None) is not None:
+                    _col = _e._input_col
+                    _svec_fn_lines.append(
+                        f"    {_n} = _c.get('{_col}', _c.get('{_col.lower()}', 0.0)); _c['{_n}'] = {_n}")
+                elif getattr(_e, '_expr_str', None) is not None:
+                    _svec_fn_lines.append(
+                        f"    try:\n"
+                        f"        {_n} = float({_e._expr_str}); _c['{_n}'] = {_n}\n"
+                        f"    except: pass")
+            if len(_svec_fn_lines) == 2:
+                _svec_fn_lines.append("    pass")
+            _svec_src = "\n".join(_svec_fn_lines)
+            _svec_ns = {
+                '__builtins__': {'abs': abs, 'max': max, 'min': min,
+                                 'float': float, 'int': int},
+                'exp': np.exp, 'EXP': np.exp, 'log': np.log, 'LOG': np.log,
+                'log10': np.log10, 'LOG10': np.log10,
+                'cos': np.cos, 'sin': np.sin, 'sqrt': np.sqrt, 'SQRT': np.sqrt,
+                'np': np,
+            }
+            try:
+                exec(_svec_src, _svec_ns)
+                self._eval_s_vec_batch = _svec_ns['_eval_s_vec_batch']
+            except Exception as _exc:
+                self._eval_s_vec_batch = None
+
+            # ── @njit version of the s_vec batch (array-based, no dict) ──────
+            # Build index map: name → position in a float64 vals array.
+            # vals[0..N_enz-1] = ENZ column values (filled by caller before call).
+            # vals[N_enz..]    = s_vec computed values (written by @njit).
+            self._eval_s_vec_njit = None
+            self._svec_enz_names  = []   # ENZ column names in vals order
+            self._svec_s_names    = []   # s_vec output names in vals order
+            if _NUMBA_AVAILABLE and self._eval_s_vec_batch is not None:
+                import re as _re2
+                _MATH_WORDS = {'EXP','LOG','LOG10','SQRT','SIN','COS','TAN','ABS',
+                               'AMAX','AMIN','MAX','MIN','NP','FLOAT','INT'}
+                _enz_names_ord = [_e.name.upper() for _e in self._enz_vec]
+                _svec_names_ord = []
+                _seen_n = set(_enz_names_ord)
+                for _e in self._s_vec_ordered:
+                    nm = _e.name.upper()
+                    if nm not in _seen_n:
+                        _svec_names_ord.append(nm)
+                        _seen_n.add(nm)
+                _all_names = _enz_names_ord + _svec_names_ord
+                _n2i = {nm: i for i, nm in enumerate(_all_names)}
+                _N_enz = len(_enz_names_ord)
+                self._svec_enz_names = _enz_names_ord
+                self._svec_s_names   = _svec_names_ord
+                self._svec_n2i       = _n2i
+                self._svec_N_enz     = _N_enz
+
+                def _replace_vars(expr_s):
+                    out = expr_s
+                    for _nm, _idx in sorted(_n2i.items(), key=lambda x: -len(x[0])):
+                        if _nm in _MATH_WORDS: continue
+                        out = _re2.sub(rf'\b{_re2.escape(_nm)}\b',
+                                       f'_v[{_idx}]', out)
+                    return out
+
+                _nj_lines = ["def _s_vec_njit_fn(_v):"]
+                _nj_lines.append("    import math as _m")
+                for _e in self._s_vec_ordered:
+                    _nm  = _e.name.upper()
+                    _idx = _n2i.get(_nm, -1)
+                    if _idx < 0: continue
+                    _ic  = getattr(_e, '_input_col', None)
+                    _es  = getattr(_e, '_expr_str', None)
+                    if _ic is not None:
+                        _col_idx = _n2i.get(_ic.upper(), -1)
+                        if _col_idx >= 0:
+                            _nj_lines.append(f"    _v[{_idx}] = _v[{_col_idx}]")
+                    elif _es is not None:
+                        _expr_r = _replace_vars(_es)
+                        _expr_r = _re2.sub(r'\bEXP\b',   '_m.exp',   _expr_r)
+                        _expr_r = _re2.sub(r'\bLOG10\b', '_m.log10', _expr_r)
+                        _expr_r = _re2.sub(r'\bLOG\b',   '_m.log',   _expr_r)
+                        _expr_r = _re2.sub(r'\bSQRT\b',  '_m.sqrt',  _expr_r)
+                        _expr_r = _re2.sub(r'\bCOS\b',   '_m.cos',   _expr_r)
+                        _expr_r = _re2.sub(r'\bSIN\b',   '_m.sin',   _expr_r)
+                        _expr_r = _re2.sub(r'\bAMAX\b\s*\(', 'max(', _expr_r)
+                        _expr_r = _re2.sub(r'\bAMIN\b\s*\(', 'min(', _expr_r)
+                        _nj_lines.append(
+                            f"    try: _v[{_idx}] = float({_expr_r})\n    except: pass")
+                if len(_nj_lines) == 2: _nj_lines.append("    pass")
+                _nj_src = "\n".join(_nj_lines)
+                _nj_ns = {'__builtins__': {'abs': abs, 'max': max, 'min': min,
+                                           'float': float, 'int': int}}
+                try:
+                    exec(_nj_src, _nj_ns)
+                    _py_fn = _nj_ns['_s_vec_njit_fn']
+                    self._eval_s_vec_njit = _numba.njit(cache=True)(_py_fn)
+                    # Warm up JIT with a dummy call
+                    _dummy = np.zeros(len(_all_names), dtype=np.float64)
+                    self._eval_s_vec_njit(_dummy)
+                    _nj_label = "njit+batch"
+                except Exception as _exc2:
+                    self._eval_s_vec_njit = None
+                    _nj_label = f"batch only (njit failed: {_exc2})"
+            else:
+                _nj_label = "batch only (numba unavailable)"
+
+            _batch_ok = "OK" if self._eval_s_vec_batch else "FAILED"
             print(f"  [Phase3] enz_vec: {len(self._enz_vec)}  "
                   f"s_vec: {len(self._s_vec)}  "
-                  f"function_entries: {len(self._function_entries)}")
+                  f"function_entries: {len(self._function_entries)}  "
+                  f"(batch={_batch_ok}, {_nj_label})")
         else:
             self._enz_vec = []
             self._s_vec = []
@@ -1396,19 +1509,84 @@ class ScenarioRunner:
         _backend_label = _ode_backend + (" (python kernel)" if _numba_missing else "")
         print(f">>> [ODE] Backend: {_backend_label}")
 
-        # Pre-allocated buffer for env-variable extraction inside system_ode.
-        # Avoids a new array allocation on every ODE call.
-        _env_vals_buf = np.zeros(len(_env_r_unique_names), dtype=np.float64)
+        # Pre-allocated buffers — avoids array allocation on every ODE call.
+        _env_vals_buf    = np.zeros(len(_env_r_unique_names), dtype=np.float64)
+        _v_buf_stoich    = np.zeros(len(self.mechanism.reactions), dtype=np.float64)
+        _dydt_stoich_buf = np.zeros(self.solver.num_species, dtype=np.float64)
+        # vals buffer for @njit s_vec evaluation
+        _svec_njit_fn  = getattr(self, '_eval_s_vec_njit', None)
+        _svec_n2i      = getattr(self, '_svec_n2i', {})
+        _svec_enz_nms  = getattr(self, '_svec_enz_names', [])
+        _svec_s_nms    = getattr(self, '_svec_s_names', [])
+        _svec_N_enz    = getattr(self, '_svec_N_enz', 0)
+        _n_svals       = len(_svec_enz_nms) + len(_svec_s_nms)
+        _svals_buf     = np.zeros(_n_svals, dtype=np.float64) if _n_svals > 0 else None
+
+        # Profiling accumulators — time (s) spent in each section of system_ode.
+        _prof = {'snap_read': 0.0, 'ctx_data': 0.0, 'elog': 0.0,
+                 'rates': 0.0, 'stoich': 0.0, 'other': 0.0, 'calls': 0}
+
+        # Cache for t-dependent environment (perstep_snap=False only).
+        # T, HV, ENZ columns and k-values depend only on t, not on y.
+        # Newton iterations within one solver step share the same t → reuse.
+        _env_cache_t = [float('nan')]  # mutable container for closure
+        _env_cache    = {}             # cached environment dict (t-dependent only)
+
+        # Vectorised ENZ evaluator: replace 28 individual scipy calls with one
+        # numpy searchsorted + fancy-index operation per cache miss.
+        _venz_names  = []   # column names (uppercase)
+        _venz_x      = []   # breakpoint arrays
+        _venz_y      = []   # value arrays
+        _venz_kind   = []   # 'prev' or 'lin'
+        _venz_scalar = []   # fallback callables for non-standard providers
+        for _k, _fn in self.ctx_data.items():
+            if hasattr(_fn, 'x') and hasattr(_fn, 'y'):
+                _venz_names.append(_k.upper())
+                _venz_x.append(np.asarray(_fn.x, dtype=np.float64))
+                _venz_y.append(np.asarray(_fn.y, dtype=np.float64))
+                _venz_kind.append('prev' if getattr(_fn, '_kind', '') == 'previous' else 'lin')
+                _venz_scalar.append(None)
+            else:
+                _venz_names.append(_k.upper())
+                _venz_x.append(None)
+                _venz_y.append(None)
+                _venz_kind.append('call')
+                _venz_scalar.append(_fn)
+
+        def _eval_ctx_data_fast(t_q):
+            """Evaluate all ctx_data providers at t_q using vectorised numpy."""
+            result = {}
+            for _i, _name in enumerate(_venz_names):
+                if _venz_kind[_i] == 'call':
+                    try: result[_name] = float(_venz_scalar[_i](t_q))
+                    except: pass
+                else:
+                    _xs = _venz_x[_i]
+                    _ys = _venz_y[_i]
+                    _idx = np.searchsorted(_xs, t_q, side='right') - 1
+                    _idx = max(0, min(_idx, len(_ys) - 1))
+                    if _venz_kind[_i] == 'prev':
+                        result[_name] = float(_ys[_idx])
+                    else:
+                        if _idx < len(_xs) - 1:
+                            _frac = (t_q - _xs[_idx]) / (_xs[_idx+1] - _xs[_idx])
+                            result[_name] = float(_ys[_idx] + _frac * (_ys[_idx+1] - _ys[_idx]))
+                        else:
+                            result[_name] = float(_ys[_idx])
+            return result
 
         def system_ode(t, y):
+            _t0 = time.perf_counter()
             y = np.maximum(y, 0.0)
             t_abs = t + _t_offset
             dydt = np.zeros(self.solver.num_species)
+            _prof['calls'] += 1
 
             ctx = SafeDict()
             if _perstep_snap:
                 # FACSIMILE-exact: ALL settings frozen from step start (snap).
                 # Only c-species update from ODE y.
+                _t1 = time.perf_counter()
                 ctx.update(_s_snap)
                 ctx.update(zip(_species_names, y.tolist()))
                 for k in _snap_active:
@@ -1418,44 +1596,67 @@ class ScenarioRunner:
                         ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                     except Exception:
                         pass
+                _prof['snap_read'] += time.perf_counter() - _t1
             else:
-                # Hybrid: settings evaluated live from ENZ + var_assignments at every
-                # ODE call (old architecture).  T/HV/JNO2 update continuously, so
-                # photolysis correctly stops at night even within a long segment.
-                # The snap is used ONLY for thermal expansion at segment boundaries
-                # and for the -1ns export convention — NOT for rate computation.
-                M_now = self.get_M(t_abs)
-                _temp_fn_h = self.ctx_data.get('TEMP') or self.ctx_data.get('T')
-                T_now = float(_temp_fn_h(t_abs)) if _temp_fn_h else 298.15
-                for k, v_func in self.ctx_data.items():
-                    try: ctx[k.upper()] = float(v_func(t_abs))
-                    except: pass
-                ctx.update({"T": T_now, "TEMP": T_now, "M": M_now,
-                            "np": np, "EXP": np.exp, "LOG": np.log,
-                            "LOG10": np.log10, "AMAX": np.maximum, "AMIN": np.minimum,
-                            "ABS": np.abs, "SQRT": np.sqrt,
-                            "COS": np.cos, "SIN": np.sin, "TAN": np.tan})
+                # Hybrid: settings evaluated live. Cache t-dependent env so Newton
+                # iterations at the same t reuse it without recomputing.
+                if t_abs != _env_cache_t[0]:
+                    _t1 = time.perf_counter()
+                    M_now = self.get_M(t_abs)
+                    _ec = _eval_ctx_data_fast(t_abs)
+                    _temp_val = _ec.get('TEMP', _ec.get('T', 298.15))
+                    T_now = float(_temp_val) if _temp_val else 298.15
+                    _ec.update({"T": T_now, "TEMP": T_now, "M": M_now,
+                                "np": np, "EXP": np.exp, "LOG": np.log,
+                                "LOG10": np.log10, "AMAX": np.maximum, "AMIN": np.minimum,
+                                "ABS": np.abs, "SQRT": np.sqrt,
+                                "COS": np.cos, "SIN": np.sin, "TAN": np.tan})
+                    _prof['ctx_data'] += time.perf_counter() - _t1
+                    _t1 = time.perf_counter()
+                    if self._s_vec:
+                        from evaluator import update_enz_vec as _uenz, build_ctx as _bctx
+                        from mechanism import CEntry
+                        _uenz(self._enz_vec, self._enz_providers, t_abs)
+                        if _svec_njit_fn is not None and _svals_buf is not None:
+                            # @njit path: fill ENZ values, call compiled fn, read back
+                            for _si, _sn in enumerate(_svec_enz_nms):
+                                for _ev in self._enz_vec:
+                                    if _ev.name.upper() == _sn:
+                                        _svals_buf[_si] = _ev.value
+                                        break
+                                else:
+                                    _svals_buf[_si] = _ec.get(_sn, 0.0)
+                            _svec_njit_fn(_svals_buf)
+                            for _si, _sn in enumerate(_svec_s_nms):
+                                _ec[_sn] = _svals_buf[_svec_N_enz + _si]
+                        elif getattr(self, '_eval_s_vec_batch', None) is not None:
+                            _ctx_batch = SafeDict(_ec)
+                            for _e in self._enz_vec:
+                                _ctx_batch[_e.name.upper()] = _e.value
+                                _ctx_batch[_e.name.lower()] = _e.value
+                            self._eval_s_vec_batch(_ctx_batch)
+                            _ec.update(_ctx_batch)
+                        else:
+                            from evaluator import update_s_vec as _us
+                            _c_vec_h = [CEntry(name=sp, value=0.0)
+                                        for sp in self.solver.species]
+                            _us(self._s_vec, self._function_entries, _c_vec_h, self._enz_vec)
+                            _ec.update(_bctx(self._s_vec, _c_vec_h, self._enz_vec))
+                    else:
+                        _ctx_tmp = SafeDict(_ec)
+                        for _p in range(3):
+                            for vn, ce in self.var_assignments:
+                                if vn in self._ctx_data_protected:
+                                    continue
+                                try: _ec[vn] = eval(ce, globals(), _ctx_tmp)
+                                except:
+                                    if _p == 0: _ec[vn] = 0.0
+                    _prof['elog'] += time.perf_counter() - _t1
+                    _env_cache.clear()
+                    _env_cache.update(_ec)
+                    _env_cache_t[0] = t_abs
+                ctx.update(_env_cache)
                 ctx.update(zip(_species_names, y.tolist()))
-                for k in _snap_active:
-                    try: ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
-                    except: pass
-                # Evaluate settings: new vector system (ELOG) or old 3-pass (non-ELOG)
-                if self._s_vec:
-                    from evaluator import update_enz_vec as _uenz, update_s_vec as _us, build_ctx as _bctx
-                    from mechanism import CEntry
-                    _uenz(self._enz_vec, self._enz_providers, t_abs)
-                    _c_vec_h = [CEntry(name=sp, value=float(y[i]))
-                                for i, sp in enumerate(self.solver.species)]
-                    _us(self._s_vec, self._function_entries, _c_vec_h, self._enz_vec)
-                    ctx.update(_bctx(self._s_vec, _c_vec_h, self._enz_vec))
-                else:
-                    for _p in range(3):
-                        for vn, ce in self.var_assignments:
-                            if vn in self._ctx_data_protected:
-                                continue
-                            try: ctx[vn] = eval(ce, globals(), ctx)
-                            except:
-                                if _p == 0: ctx[vn] = 0.0
 
             if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
                 h2o_vmr = ctx['H2O']
@@ -1473,24 +1674,29 @@ class ScenarioRunner:
             if 'O1D' in _pss_species_set:
                 ctx['O1D'] = float(_pss_o1d(ctx))
 
+            _t1 = time.perf_counter()
             try:
                 _compute_rates(ctx, _k_buf)
             except Exception:
-                # Fallback: individual eval() per reaction (handles edge cases gracefully)
                 for i, rxn in enumerate(self.mechanism.reactions):
                     try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx)
                     except: _k_buf[i] = 0.0
             np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            _prof['rates'] += time.perf_counter() - _t1
 
+            _t1 = time.perf_counter()
             if _use_numba:
                 for _ni, _nn in enumerate(_env_r_unique_names):
                     _env_vals_buf[_ni] = ctx[_nn]
-                dydt += _stoich_eval_numba(
+                _dydt_stoich_buf[:] = 0.0
+                _stoich_eval_numba(
                     _k_buf, y, _env_vals_buf,
                     _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
                     _env_r_rxn, _env_r_name_idx, _env_r_coeff,
                     _stoich_rxn, _stoich_sp, _stoich_sc,
+                    _v_buf_stoich, _dydt_stoich_buf,
                 )
+                dydt += _dydt_stoich_buf
             else:
                 for i, rxn in enumerate(self.mechanism.reactions):
                     k = float(_k_buf[i])
@@ -1500,6 +1706,8 @@ class ScenarioRunner:
                         for r in rxn.reactants_env: v *= (ctx.get(r['name'], 0.0) ** r['coeff'])
                         for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
                         for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
+            _prof['stoich'] += time.perf_counter() - _t1
+            _t1 = time.perf_counter()   # checkpoint: start of "other" section
 
             # Analytical dilution: applied only when explicit +DIL reactions are
             # NOT already handling it. We detect this at setup via _has_explicit_dil.
@@ -1541,6 +1749,8 @@ class ScenarioRunner:
                 if imp['start_s'] <= t_abs <= imp['start_s'] + imp['dur']:
                     dydt[imp['idx']] += imp['rate']
 
+            _prof['other'] += time.perf_counter() - _t1
+
             self.eval_count += 1
             if self.eval_count % 500 == 0 or t > self.last_progress_print_time + 300:
                 progress = max(0.0, min(t / _t_duration, 1.0))
@@ -1552,7 +1762,15 @@ class ScenarioRunner:
                     rem_secs = int(total_est - elapsed)
                     eta_str = f" | ETA: {rem_secs // 60}m {rem_secs % 60}s"
 
-                print(f"  ... ODE Eval Step: {self.eval_count} | Sim Time: {t:.1f}s / {_t_duration:.1f}s | Fraction Done: {progress:.3f} ({progress*100:.1f}%){eta_str}")
+                _n = max(_prof['calls'], 1)
+                _pt = (_prof['snap_read'] + _prof['ctx_data'] + _prof['elog']
+                       + _prof['rates'] + _prof['stoich'] + _prof['other'])
+                _prof_str = (f" | snap={_prof['snap_read']/_n*1e3:.2f} "
+                             f"ctx={_prof['ctx_data']/_n*1e3:.2f} "
+                             f"elog={_prof['elog']/_n*1e3:.2f} "
+                             f"rates={_prof['rates']/_n*1e3:.2f} "
+                             f"stoich={_prof['stoich']/_n*1e3:.2f} ms/call")
+                print(f"  ... ODE Eval Step: {self.eval_count} | Sim Time: {t:.1f}s / {_t_duration:.1f}s | Fraction Done: {progress:.3f} ({progress*100:.1f}%){eta_str}{_prof_str}", flush=True)
                 if t > self.last_progress_print_time + 300:
                     self.last_progress_print_time = t
 
@@ -1591,7 +1809,8 @@ class ScenarioRunner:
         #                       10-s output step (2520 restarts). Not what FACSIMILE does.
         _perstep_snap = bool(self.cfg.get('perstep_snap',
                              _solver_toml.get('perstep_snap', False)))
-        print(f"  [SOLVER] mode={'per-ENZ-row (BDF restart each step)' if _perstep_snap else f'continuous {solver_method_cont} (restarts at step changes only)'}")
+        print(f"  [SOLVER] mode={'per-ENZ-row' if _perstep_snap else 'continuous'}  "
+              f"solver={solver_method}  jac={_jac_mode}")
 
         _atol = float(_solver_toml.get('atol', 1e4))
         # Absolute tolerance floor for species-specific atol (option 2).
@@ -1629,8 +1848,7 @@ class ScenarioRunner:
         _jac_factors  = np.array(_jac_factors_l,   dtype=np.float64)
         _jac_rxn_idxs = np.array(_jac_rxn_idxs_l, dtype=np.int32)
         print(f">>> [JAC] Analytical Jacobian: {N}×{N}, {len(_jac_rows)} terms "
-              f"across {len(self.mechanism.reactions)} reactions"
-              f" (jac_mode={_jac_mode})")
+              f"({'passed to solver' if _jac_mode == 'analytic' else 'built but not used — FD active'})")
 
         def analytical_jac(t, y_raw):
             """Analytical Jacobian using the pre-computed settings snapshot."""
@@ -1772,37 +1990,31 @@ class ScenarioRunner:
                         break
                 except Exception:
                     pass
-        if len(filtered_sct) != len(raw_sct):
+        if len(filtered_sct) != len(raw_sct) and not _perstep_snap:
             print(f"  [SOLVER] step_change_times: {len(raw_sct)} raw "
                   f"-> {len(filtered_sct)} effective "
-                  f"({len(raw_sct)-len(filtered_sct)} spurious ENZ boundaries removed "
-                  f"by CONST overrides)")
+                  f"({len(raw_sct)-len(filtered_sct)} suppressed by CONST overrides)")
         if filtered_sct and not _perstep_snap:
             import datetime as _dt
             _epoch = _dt.datetime(2000, 1, 1)
             _show = min(len(filtered_sct), 50)
-            print(f"  [SOLVER] Restart boundaries ({len(filtered_sct)}, showing first {_show}):")
+            print(f"  [SOLVER] Restart boundaries ({len(filtered_sct)}"
+                  f"{f', showing first {_show}' if len(filtered_sct) > _show else ''}):")
             for _t, _k in zip(filtered_sct[:_show], _sct_triggers[:_show]):
                 _ts = (_epoch + _dt.timedelta(seconds=_t)).strftime("%Y-%m-%d %H:%M")
                 print(f"           {_ts}  trigger={_k}")
         self._step_change_times = filtered_sct
 
-        # --- SEGMENT BOUNDARIES FOR BDF RESTARTS ---
-        # step_change_times now contains only times where an effective control
-        # variable (HV, Q*, T, P) actually changes after CONST overrides.
-        # Place segment boundaries 1 µs BEFORE each step change so the solver
-        # evaluates the ODE with the "old" value of Q/HV at the segment endpoint.
         _eps = 1e-6
         event_times = [float(t) - _eps for t in self._step_change_times
                        if self.t_start < t < self.t_end]
-        n_events_by_col = {'step changes': len(event_times)}
 
-        if event_times:
-            summary = ', '.join(f'{k}:{v}' for k, v in sorted(n_events_by_col.items()))
-            print(f">>> [SOLVER] {len(event_times)} discontinuity event(s) detected "
-                  f"({summary}) — splitting integration at step changes.")
-        else:
-            print(f">>> [SOLVER] No discontinuity events detected.")
+        if not _perstep_snap:
+            if event_times:
+                print(f">>> [SOLVER] {len(event_times)} segment boundary/ies "
+                      f"detected — integration split at step changes.")
+            else:
+                print(f">>> [SOLVER] No step changes detected — single continuous segment.")
 
         # Build list of (t0, t1) segment boundaries
         boundaries = sorted(set([self.t_start] + event_times + [self.t_end]))
@@ -1810,10 +2022,9 @@ class ScenarioRunner:
         boundaries = [boundaries[0]] + [b for i, b in enumerate(boundaries[1:], 1)
                                          if b - boundaries[i - 1] > 1.0]
 
-        _method_label = solver_method if _perstep_snap else solver_method_cont
-        print(f">>> [DEBUG] Solving {len(self.mechanism.species)} species with {_method_label} "
-              f"in {len(boundaries)-1 if not _perstep_snap else len(self.t_span)-1} segment(s) "
-              f"(max_step={step_limit}s)...")
+        _n_segs = len(self.t_span)-1 if _perstep_snap else len(boundaries)-1
+        print(f">>> [SOLVER] {len(self.mechanism.species)} species  "
+              f"solver={solver_method}  segments={_n_segs}  max_step={step_limit}s")
 
         # ── Integration loop ──────────────────────────────────────────────────────
         seg_t_list = [np.array([self.t_span[0]])]
@@ -1934,6 +2145,18 @@ class ScenarioRunner:
                 print(f"  ... segment {seg_idx+1}/{n_segs} done  "
                       f"({t_seg0:.0f}–{t_seg1:.0f}s, {elapsed:.1f}s elapsed)", end='\r')
         print()
+
+        # ── Profiling summary ─────────────────────────────────────────────────
+        _n = max(_prof['calls'], 1)
+        _total = (_prof['snap_read'] + _prof['ctx_data'] + _prof['elog']
+                  + _prof['rates'] + _prof['stoich'] + _prof['other'])
+        print(f"  [PROF] system_ode called {_n}x  total={_total:.2f}s  per_call={_total/_n*1000:.3f}ms")
+        for _k, _lbl in [('snap_read','snap/ctx_data'), ('ctx_data','ctx_data(live)'),
+                          ('elog','ELOG-evaluator'), ('rates','_compute_rates'),
+                          ('stoich','stoichiometry'), ('other','other')]:
+            _s = _prof[_k]
+            if _s > 0.001:
+                print(f"         {_lbl:20s}  {_s:7.3f}s  {_s/_total*100:5.1f}%  {_s/_n*1000:.3f}ms/call")
 
         # Stitch segments into a single solution object
         all_t = np.concatenate(seg_t_list)

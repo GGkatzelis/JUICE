@@ -212,9 +212,11 @@ def precompile_s_vec(s_entries, function_entries):
         expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
         try:
             entry._code      = compile(expr.strip(), '<string>', 'eval')
+            entry._expr_str  = expr.strip()   # kept for batch-function generation
             entry._input_col = None
         except Exception:
             entry._code      = None
+            entry._expr_str  = None
             entry._input_col = None
 
 
