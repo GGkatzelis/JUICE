@@ -1558,7 +1558,9 @@ class ScenarioRunner:
 
             return dydt
 
-        solver_method = 'BDF'
+        # Solver method and Jacobian mode from scenario JSON (set by GUI dropdowns).
+        solver_method = solver_method_cont = self.cfg.get('solver_method', 'BDF')
+        _jac_mode = self.cfg.get('jac_mode', 'analytic')
         # Solver settings: FACS[HMAX] from EASY takes precedence over TOML defaults
         _hmax_easy = self.cfg.get('hmax', None)
         try:
@@ -1589,7 +1591,7 @@ class ScenarioRunner:
         #                       10-s output step (2520 restarts). Not what FACSIMILE does.
         _perstep_snap = bool(self.cfg.get('perstep_snap',
                              _solver_toml.get('perstep_snap', False)))
-        print(f"  [SOLVER] mode={'per-ENZ-row (BDF restart each step)' if _perstep_snap else 'FACSIMILE-konform (ENZ-segment)'}")
+        print(f"  [SOLVER] mode={'per-ENZ-row (BDF restart each step)' if _perstep_snap else f'continuous {solver_method_cont} (restarts at step changes only)'}")
 
         _atol = float(_solver_toml.get('atol', 1e4))
         # Absolute tolerance floor for species-specific atol (option 2).
@@ -1627,7 +1629,8 @@ class ScenarioRunner:
         _jac_factors  = np.array(_jac_factors_l,   dtype=np.float64)
         _jac_rxn_idxs = np.array(_jac_rxn_idxs_l, dtype=np.int32)
         print(f">>> [JAC] Analytical Jacobian: {N}×{N}, {len(_jac_rows)} terms "
-              f"across {len(self.mechanism.reactions)} reactions")
+              f"across {len(self.mechanism.reactions)} reactions"
+              f" (jac_mode={_jac_mode})")
 
         def analytical_jac(t, y_raw):
             """Analytical Jacobian using the pre-computed settings snapshot."""
@@ -1730,12 +1733,17 @@ class ScenarioRunner:
         # generate 1000+ spurious restarts (one per 60 s ENZ row), turning scene_04 into
         # 1078 short segments where the HV-on phase immediately stalls.
         _em = self.cfg.get('env_map', {})
-        _t_from_enz = _em.get('TEMP', _em.get('T', {})).get('type') == 'SAPHIR File'
-        _p_from_enz = _em.get('PRESS', _em.get('P', {})).get('type') == 'SAPHIR File'
+        _t_type = _em.get('TEMP', _em.get('T', {})).get('type', '')
+        _p_type = _em.get('PRESS', _em.get('P', {})).get('type', '')
+        # T/P trigger restarts only when NOT from ENZ and NOT Fixed Constant.
+        # Fixed Constant: k-values don't change at ENZ boundaries → no restart needed.
+        # SAPHIR File: T varies smoothly row-to-row → BDF handles without restart.
+        _t_no_restart = _t_type in ('SAPHIR File', 'Fixed Constant')
+        _p_no_restart = _p_type in ('SAPHIR File', 'Fixed Constant')
         _RESTART_KEYS = {
             k for k in self.ctx_data
-            if (k.upper() in {'T', 'TEMP'} and not _t_from_enz)
-            or (k.upper() in {'P', 'PRESS'} and not _p_from_enz)
+            if (k.upper() in {'T', 'TEMP'} and not _t_no_restart)
+            or (k.upper() in {'P', 'PRESS'} and not _p_no_restart)
             or any(_fnm.fnmatch(k.upper(), p.upper()) for p in _step_pats)
         }
         # ENZ breakpoints are shifted +1e-9 s in load_saphir_environment so that
@@ -1748,6 +1756,7 @@ class ScenarioRunner:
         _rh_offset = 1e-4   # right-hand query offset (same reasoning)
         raw_sct = getattr(self, '_step_change_times', [])
         filtered_sct = []
+        _sct_triggers = []   # which key triggered each boundary (for diagnostic print)
         for _t in raw_sct:
             for _k in _RESTART_KEYS:
                 _vfn = self.ctx_data.get(_k)
@@ -1759,6 +1768,7 @@ class ScenarioRunner:
                     _scale    = max(abs(_v_before), abs(_v_after), 1e-30)
                     if abs(_v_after - _v_before) / _scale > 1e-8:
                         filtered_sct.append(_t)
+                        _sct_triggers.append(_k)
                         break
                 except Exception:
                     pass
@@ -1767,6 +1777,14 @@ class ScenarioRunner:
                   f"-> {len(filtered_sct)} effective "
                   f"({len(raw_sct)-len(filtered_sct)} spurious ENZ boundaries removed "
                   f"by CONST overrides)")
+        if filtered_sct and not _perstep_snap:
+            import datetime as _dt
+            _epoch = _dt.datetime(2000, 1, 1)
+            _show = min(len(filtered_sct), 50)
+            print(f"  [SOLVER] Restart boundaries ({len(filtered_sct)}, showing first {_show}):")
+            for _t, _k in zip(filtered_sct[:_show], _sct_triggers[:_show]):
+                _ts = (_epoch + _dt.timedelta(seconds=_t)).strftime("%Y-%m-%d %H:%M")
+                print(f"           {_ts}  trigger={_k}")
         self._step_change_times = filtered_sct
 
         # --- SEGMENT BOUNDARIES FOR BDF RESTARTS ---
@@ -1782,7 +1800,7 @@ class ScenarioRunner:
         if event_times:
             summary = ', '.join(f'{k}:{v}' for k, v in sorted(n_events_by_col.items()))
             print(f">>> [SOLVER] {len(event_times)} discontinuity event(s) detected "
-                  f"({summary}) — splitting integration for clean BDF restarts.")
+                  f"({summary}) — splitting integration at step changes.")
         else:
             print(f">>> [SOLVER] No discontinuity events detected.")
 
@@ -1792,8 +1810,10 @@ class ScenarioRunner:
         boundaries = [boundaries[0]] + [b for i, b in enumerate(boundaries[1:], 1)
                                          if b - boundaries[i - 1] > 1.0]
 
-        print(f">>> [DEBUG] Solving {len(self.mechanism.species)} species with {solver_method} "
-              f"in {len(boundaries)-1} segment(s) (max_step={step_limit}s)...")
+        _method_label = solver_method if _perstep_snap else solver_method_cont
+        print(f">>> [DEBUG] Solving {len(self.mechanism.species)} species with {_method_label} "
+              f"in {len(boundaries)-1 if not _perstep_snap else len(self.t_span)-1} segment(s) "
+              f"(max_step={step_limit}s)...")
 
         # ── Integration loop ──────────────────────────────────────────────────────
         seg_t_list = [np.array([self.t_span[0]])]
@@ -1804,7 +1824,10 @@ class ScenarioRunner:
         _fs_val = float(_solver_toml.get('first_step', 0.0))
         _fs_kw  = {'first_step': _fs_val} if _fs_val > 0 else {}
         if _fs_kw:
-            print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML)")
+            if _perstep_snap:
+                print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML, applied per restart)")
+            else:
+                print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML, ignored in continuous mode)")
 
         if _perstep_snap:
             # ── Per-ENZ-row mode: one solve_ivp per output step ──────────────────
@@ -1818,7 +1841,8 @@ class ScenarioRunner:
                 seg_sol = solve_ivp(
                     system_ode, [t0 - _t_offset, t1 - _t_offset], y_seg,
                     method=solver_method, t_eval=[t0-_t_offset, t1-_t_offset],
-                    max_step=step_limit, rtol=_rtol, atol=_atol_vec, jac=analytical_jac,
+                    max_step=step_limit, rtol=_rtol, atol=_atol_vec,
+                    jac=analytical_jac if _jac_mode == 'analytic' else None,
                     **_fs_kw)
                 if not seg_sol.success:
                     print(f"\n[WARNING] Step {step_idx+1}/{n_out_steps} "
@@ -1848,15 +1872,13 @@ class ScenarioRunner:
             for seg_idx in range(n_segs):
                 t_seg0 = boundaries[seg_idx]
                 t_seg1 = boundaries[seg_idx + 1]
-                # Hybrid: no snap needed for ODE — live evaluation only.
-                # Store M at segment start for thermal expansion check.
+                # Snapshot at segment start so analytical_jac has valid k-values.
+                # The ODE itself evaluates settings live; the snap is only used by
+                # analytical_jac as an approximation (correct at t_seg0, slightly
+                # stale within the segment — still far better than an empty snap).
+                if _jac_mode == 'analytic':
+                    _make_snap(y_seg, t_seg0)
                 _M_seg_start = self.get_M(t_seg0)
-                # Collect all output times within this segment.
-                # The segment ends at t_seg1 = t_ENZ_row - 1µs (placed 1µs before the
-                # step-change boundary).  ENZ row times in t_span are at t_ENZ_row, so
-                # the <= comparison misses the endpoint by 1µs for short segments
-                # (e.g. piecewise mode with 60 s ENZ intervals).  Always ensure at least
-                # [t_seg0, t_seg1] so every segment contributes at least one output point.
                 t_eval_seg = self.t_span[(self.t_span >= t_seg0) & (self.t_span <= t_seg1)]
                 if len(t_eval_seg) < 2 or t_eval_seg[-1] < t_seg1 - 0.5:
                     t_eval_seg = np.union1d(t_eval_seg, [t_seg1])
@@ -1864,10 +1886,10 @@ class ScenarioRunner:
                 seg_sol = solve_ivp(
                     system_ode,
                     [t_seg0 - _t_offset, t_seg1 - _t_offset], y_seg,
-                    method=solver_method,
+                    method=solver_method_cont,
                     t_eval=t_eval_seg - _t_offset,
                     max_step=step_limit, rtol=_rtol, atol=_atol_vec,
-                    jac=None)  # Hybrid: no snap-based Jacobian; BDF uses finite diff
+                    jac=analytical_jac if _jac_mode == 'analytic' else None)
                 if not seg_sol.success:
                     print(f"\n[WARNING] Segment {seg_idx+1}/{n_segs} "
                           f"({t_seg0:.0f}-{t_seg1:.0f}s): {seg_sol.message}")
