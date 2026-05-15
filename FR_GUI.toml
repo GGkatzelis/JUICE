@@ -2,7 +2,7 @@
 easy_root = "E:\\Python Code\\JUICE archive\\EASY"
 include_dir = "E:\\Python Code\\JUICE archive\\EASY\\include files"
 output_root = "E:\\Python Code\\JUICE archive\\JUICE"
-last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_05"
+last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_04"
 
 [comparison]
 favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO', 'kOH', 'HV', 'T', 'k(NO2+HV-->NO+O3)']"
@@ -12,3 +12,5 @@ rtol_choices = "[0.01, 1e-06]"
 hmax = "60.0"
 atol = "10000.0"
 step_column_patterns_extra = "[]"
+ode_backend = "numba"
+first_step = "1e-09"

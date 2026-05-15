@@ -16,6 +16,41 @@ try:
 except ImportError:
     JUICE_VERSION = "unknown"
 
+# ── Numba @njit stoichiometry kernel ────────────────────────────────────────
+# Defined at module level so Numba's cache=True persists across _solve() calls.
+# Replaces the per-reaction Python loop in system_ode: computes reaction
+# velocities from k_buf + y + env_vals, then scatters dydt contributions.
+try:
+    import numba as _numba
+
+    @_numba.njit(cache=True)
+    def _stoich_eval_numba(k_buf, y, env_vals,
+                           ode_r_rxn, ode_r_sp, ode_r_coeff,
+                           env_r_rxn, env_r_name_idx, env_r_coeff,
+                           stoich_rxn, stoich_sp, stoich_sc):
+        n_sp = len(y)
+        v_buf = k_buf.copy()
+        for j in range(len(ode_r_rxn)):
+            i = ode_r_rxn[j]
+            if v_buf[i] != 0.0:
+                v_buf[i] *= y[ode_r_sp[j]] ** ode_r_coeff[j]
+        for j in range(len(env_r_rxn)):
+            i = env_r_rxn[j]
+            if v_buf[i] != 0.0:
+                ev = env_vals[env_r_name_idx[j]]
+                v_buf[i] *= ev ** env_r_coeff[j]
+        dydt = np.zeros(n_sp)
+        for j in range(len(stoich_rxn)):
+            dydt[stoich_sp[j]] += v_buf[stoich_rxn[j]] * stoich_sc[j]
+        return dydt
+
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    _NUMBA_AVAILABLE = False
+
+    def _stoich_eval_numba(*_a, **_kw):  # noqa: F811
+        raise RuntimeError("numba not installed")
+
 _FAC_AMP = "&" * 44   # separator line before data (≥8 & required)
 _FAC_TIME_COL = "TIME / SEC SINCE 1.1.2000 00:00:00"
 
@@ -72,10 +107,11 @@ def _write_csv(path: str, df: pd.DataFrame, comment: str = "",
             fh.write(row + '\n')
 
 
-def _juice_header(scenario_stem: str) -> str:
+def _juice_header(scenario_stem: str, backend: str = "python") -> str:
     """Return the standard JUICE file header comment."""
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (f"Calculated by JUICE v{JUICE_VERSION}  "
+            f"Backend: {backend}  "
             f"Scenario: {scenario_stem}  "
             f"Date: {ts}")
 
@@ -730,6 +766,7 @@ class ScenarioRunner:
             self._o1d_loss_rxns = []   # reactions that consume O1D
             print("  [PSS] O1D removed from ODE — PSS computed dynamically from mechanism reactions")
 
+
         # --- O atom: kept in ODE (not PSS) ---
         # FACSIMILE also integrates O in the ODE.  Both models share the same
         # numerical treatment (O << atol=1e4, so both are inaccurate by the same
@@ -1157,9 +1194,6 @@ class ScenarioRunner:
             print(f"  [PSS] O1D: {len(self._o1d_prod_rxns)} production, "
                   f"{len(self._o1d_loss_rxns)} loss reactions")
 
-        # O1D production/loss reactions are identified after reactants_parsed/env
-        # are built in _solve() — see the block after vectorised stoichiometry setup.
-
         # ── Dynamic PSS helper ─────────────────────────────────────────────────
         # Store index→name map on self so _pss_o1d (bound method) can use it.
         self._sp_by_idx = {idx: sp for sp, idx in self.solver.species_to_idx.items()}
@@ -1351,6 +1385,21 @@ class ScenarioRunner:
         # everything else (settings: T, HV, KMT*, J-values, …) stays frozen from snap.
         _species_set_upper = {s.upper() for s in _species_names}
 
+        # ODE backend — read from scenario JSON (set by GUI dropdown).
+        _ode_backend = self.cfg.get('ode_backend', 'python')
+        _use_numba   = ('numba' in _ode_backend) and _NUMBA_AVAILABLE
+        _numba_missing = ('numba' in _ode_backend) and not _NUMBA_AVAILABLE
+        self._ode_backend = _ode_backend if not _numba_missing else \
+                            _ode_backend.replace('numba', 'python')
+        if _numba_missing:
+            print(">>> [ODE] WARNING: numba not installed — kernel falls back to python")
+        _backend_label = _ode_backend + (" (python kernel)" if _numba_missing else "")
+        print(f">>> [ODE] Backend: {_backend_label}")
+
+        # Pre-allocated buffer for env-variable extraction inside system_ode.
+        # Avoids a new array allocation on every ODE call.
+        _env_vals_buf = np.zeros(len(_env_r_unique_names), dtype=np.float64)
+
         def system_ode(t, y):
             y = np.maximum(y, 0.0)
             t_abs = t + _t_offset
@@ -1424,7 +1473,6 @@ class ScenarioRunner:
             if 'O1D' in _pss_species_set:
                 ctx['O1D'] = float(_pss_o1d(ctx))
 
-
             try:
                 _compute_rates(ctx, _k_buf)
             except Exception:
@@ -1434,14 +1482,24 @@ class ScenarioRunner:
                     except: _k_buf[i] = 0.0
             np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
 
-            for i, rxn in enumerate(self.mechanism.reactions):
-                k = float(_k_buf[i])
-                if k != 0.0:
-                    v = k
-                    for r in rxn.reactants_parsed: v *= (y[r['idx']] ** r['coeff'])
-                    for r in rxn.reactants_env: v *= (ctx.get(r['name'], 0.0) ** r['coeff'])
-                    for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
-                    for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
+            if _use_numba:
+                for _ni, _nn in enumerate(_env_r_unique_names):
+                    _env_vals_buf[_ni] = ctx[_nn]
+                dydt += _stoich_eval_numba(
+                    _k_buf, y, _env_vals_buf,
+                    _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
+                    _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                    _stoich_rxn, _stoich_sp, _stoich_sc,
+                )
+            else:
+                for i, rxn in enumerate(self.mechanism.reactions):
+                    k = float(_k_buf[i])
+                    if k != 0.0:
+                        v = k
+                        for r in rxn.reactants_parsed: v *= (y[r['idx']] ** r['coeff'])
+                        for r in rxn.reactants_env: v *= (ctx.get(r['name'], 0.0) ** r['coeff'])
+                        for r in rxn.reactants_parsed: dydt[r['idx']] -= (v * r['coeff'])
+                        for p in rxn.products_parsed: dydt[p['idx']] += (v * p['coeff'])
 
             # Analytical dilution: applied only when explicit +DIL reactions are
             # NOT already handling it. We detect this at setup via _has_explicit_dil.
@@ -1742,6 +1800,12 @@ class ScenarioRunner:
         seg_y_list = [y0[:, np.newaxis]]
         y_seg = y0.copy()
 
+        # first_step from TOML: > 0 → passed to solve_ivp; 0 or negative → automatic.
+        _fs_val = float(_solver_toml.get('first_step', 0.0))
+        _fs_kw  = {'first_step': _fs_val} if _fs_val > 0 else {}
+        if _fs_kw:
+            print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML)")
+
         if _perstep_snap:
             # ── Per-ENZ-row mode: one solve_ivp per output step ──────────────────
             # Settings frozen from snap at each step start.
@@ -1754,7 +1818,8 @@ class ScenarioRunner:
                 seg_sol = solve_ivp(
                     system_ode, [t0 - _t_offset, t1 - _t_offset], y_seg,
                     method=solver_method, t_eval=[t0-_t_offset, t1-_t_offset],
-                    max_step=step_limit, rtol=_rtol, atol=_atol_vec, jac=analytical_jac)
+                    max_step=step_limit, rtol=_rtol, atol=_atol_vec, jac=analytical_jac,
+                    **_fs_kw)
                 if not seg_sol.success:
                     print(f"\n[WARNING] Step {step_idx+1}/{n_out_steps} "
                           f"({t0:.0f}-{t1:.0f}s): {seg_sol.message}")
@@ -2056,7 +2121,7 @@ class ScenarioRunner:
                 pass
 
         out_path = os.path.join(self.root, f"{self._stem}.cs")
-        _write_csv(out_path, df, _juice_header(self._stem), file_type='cs')
+        _write_csv(out_path, df, _juice_header(self._stem, getattr(self, '_ode_backend', 'python')), file_type='cs')
         print(f"  ... Saved to {out_path}")
 
         # Export kv/pd only when requested via checkbox in FR_GUI
@@ -2296,7 +2361,7 @@ class ScenarioRunner:
         man_path = os.path.join(self.root, f"{self._stem}_reactions.csv")
         man_df = pd.DataFrame(rows_manifest)
         with open(man_path, 'w', newline='', encoding='utf-8') as _mfh:
-            _mfh.write(f"# {_juice_header(self._stem)}\n")
+            _mfh.write(f"# {_juice_header(self._stem, getattr(self, '_ode_backend', 'python'))}\n")
             man_df.to_csv(_mfh, index=False)
         print(f"  ... Reaction manifest saved to {man_path}")
 
@@ -2311,7 +2376,7 @@ class ScenarioRunner:
             kv_cols[f"v_{hdr}"] = v_arr[:, i]
         kv_path = os.path.join(self.root, f"{self._stem}.kv")
         _write_csv(kv_path, pd.DataFrame(kv_cols).set_index('TIME_s'),
-                   _juice_header(self._stem), file_type='kv')
+                   _juice_header(self._stem, getattr(self, '_ode_backend', 'python')), file_type='kv')
         print(f"  ... kv saved to {kv_path}")
 
         # ── PD: production and destruction rates per species ──────────────────────
@@ -2369,7 +2434,7 @@ class ScenarioRunner:
             pd_cols['kOH'] = _kOH_arr  # Σ k_i × [X_i] s⁻¹, ohne [OH]
         pd_path = os.path.join(self.root, f"{self._stem}.pd")
         _write_csv(pd_path, pd.DataFrame(pd_cols).set_index('TIME_s'),
-                   _juice_header(self._stem), file_type='pd')
+                   _juice_header(self._stem, getattr(self, '_ode_backend', 'python')), file_type='pd')
         print(f"  ... pd saved to {pd_path}")
 
     def _show_results(self, out_path):
