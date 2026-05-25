@@ -18,6 +18,3 @@ solver_method = "BDF"
 # jac_mode: analytic (fastest), none (FD, 56 extra ODE calls/update), sparse (future)
 jac_mode = "analytic"
 first_step = "0"
-#first_step = "0"
-#first_step = "0"
-#first_step = "0"
