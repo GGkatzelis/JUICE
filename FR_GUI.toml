@@ -17,7 +17,7 @@ ode_backend = "numba"
 solver_method = "BDF"
 # jac_mode: analytic (fastest), none (FD, 56 extra ODE calls/update), sparse (future)
 jac_mode = "analytic"
-first_step = "1e-6"
+first_step = "1e-9"
 # Bottom-bar defaults restored on every startup
 interpolation = "piecewise"
 rtol_default = "1e-06"
