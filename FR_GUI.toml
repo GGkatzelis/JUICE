@@ -1,8 +1,8 @@
 [paths]
-easy_root = "E:\\Python Code\\JUICE archive\\EASY"
-include_dir = "E:\\Python Code\\JUICE archive\\EASY\\include files"
-output_root = "E:\\Python Code\\JUICE archive\\JUICE"
-last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_05"
+easy_root     = "E:\\Python Code\\JUICE archive\\EASY"
+include_dir   = "E:\\Python Code\\JUICE archive\\EASY\\include files"
+output_root   = "E:\\Python Code\\JUICE archive\\JUICE"
+last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_06"
 
 [comparison]
 favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO', 'kOH', 'HV', 'T', 'k(NO2+HV-->NO+O3)']"
@@ -17,4 +17,9 @@ ode_backend = "numba"
 solver_method = "BDF"
 # jac_mode: analytic (fastest), none (FD, 56 extra ODE calls/update), sparse (future)
 jac_mode = "analytic"
-first_step = "0"
+first_step = "1e-6"
+# Bottom-bar defaults restored on every startup
+interpolation = "piecewise"
+rtol_default = "1e-06"
+kv_pd = "true"
+perstep_snap = "true"

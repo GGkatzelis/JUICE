@@ -3121,11 +3121,14 @@ class ResultsViewer(QMainWindow):
             'DIL', 'DILUTE', 'FLOW', 'RH', 'N2', 'O2', 'JSCALE',
         }
         _sp_is_absolute = sp.upper() in _ABSOLUTE_QUANTITIES or sp.upper().startswith('KMT')
+        # Rate coefficients (s⁻¹): kOH and named reaction rates k(...)
+        _sp_is_rate = sp.upper() == 'KOH' or sp.upper().startswith('K(')
 
-        unit_lbl = ("ppb" if use_ppb and not _sp_is_absolute else "molec/cm³")
+        unit_lbl = ("s⁻¹" if _sp_is_rate else
+                    "ppb" if use_ppb and not _sp_is_absolute else "molec/cm³")
 
         def _to_unit(arr, t_arr_ref):
-            if not use_ppb or _sp_is_absolute or 'M' not in self.df.columns:
+            if not use_ppb or _sp_is_absolute or _sp_is_rate or 'M' not in self.df.columns:
                 return arr
             M_interp = np.interp(t_arr_ref,
                                  self.df.index.values.astype(float),
