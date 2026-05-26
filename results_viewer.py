@@ -825,9 +825,10 @@ class ResultsViewer(QMainWindow):
         "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
     ]
 
-    def __init__(self, df, csv_path=None):
+    def __init__(self, df, csv_path=None, toml_path=None):
         super().__init__()
         self.df = df.copy()
+        self._toml_path = toml_path
         self._color_index = 0
         self.active_lines = {}
         self.csv_path = csv_path
@@ -4763,25 +4764,35 @@ class ResultsViewer(QMainWindow):
 
     # ── Default plots on startup ──────────────────────────────────────────────
     def _plot_defaults(self):
-        _voc_candidates = ['C2H5OH', 'TOLUENE', 'ISOPRENE', 'ALPHA_PINENE', 'BENZENE',
-                           'PROPANE', 'BUTANE', 'PENTANE', 'HEXANE']
-        for _voc in _voc_candidates:
-            if _voc in self.df.columns:
-                self.plot_variable(_voc, "Left Axis (Offset)", "Convert to ppb")
-                break
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+        _tp = self._toml_path or os.path.join(_script_dir, "FR_GUI.toml")
+        _ql = ['NO', 'NO2', 'O3']
+        _qr = ['OH', 'HO2']
+        try:
+            import tomllib as _tl
+            import ast as _ast
+            with open(_tp, 'rb') as _fh:
+                _vt = _tl.load(_fh).get('viewer', {})
+            _ql_raw = _vt.get('quick_plot_left', None)
+            _qr_raw = _vt.get('quick_plot_right', None)
+            if _ql_raw:
+                _ql = _ast.literal_eval(_ql_raw) if isinstance(_ql_raw, str) else list(_ql_raw)
+            if _qr_raw:
+                _qr = _ast.literal_eval(_qr_raw) if isinstance(_qr_raw, str) else list(_qr_raw)
+        except Exception:
+            pass
 
-        for _sp in ['NO', 'NO2', 'O3']:
+        for _sp in _ql:
             if _sp in self.df.columns:
                 self.plot_variable(_sp, "Left Axis (Main)", "Convert to ppb")
-        for _sp in ['SAPHIR_NO', 'SAPHIR_NO2', 'SAPHIR_O3']:
-            if _sp in self.df.columns:
+        for _sp in self.df.columns:
+            if _sp.upper() in {'SAPHIR_NO', 'SAPHIR_NO2', 'SAPHIR_O3'}:
                 self.plot_variable(_sp, "Left Axis (Main)", "Native (molec/cm³ or SAPHIR unit)")
-
-        for _sp in ['OH', 'HO2']:
+        for _sp in _qr:
             if _sp in self.df.columns:
                 self.plot_variable(_sp, "Right Axis (Main)", "Native (molec/cm³ or SAPHIR unit)")
 
-        if any(sp in self.df.columns for sp in ['OH', 'HO2']):
+        if any(sp in self.df.columns for sp in _qr):
             self.ax2.set_yscale('log')
             self.ax2.set_ylim(bottom=1e4)
 
@@ -4809,14 +4820,14 @@ class ResultsViewer(QMainWindow):
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry points
 # ─────────────────────────────────────────────────────────────────────────────
-def show_results(out_path):
+def show_results(out_path, toml_path=None):
     if HAS_PYQT:
         print(">>> [VISUALIZATION] Launching Interactive PyQt Viewer...")
         df = load_column_file(out_path)
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
-        viewer = ResultsViewer(df, csv_path=out_path)
+        viewer = ResultsViewer(df, csv_path=out_path, toml_path=toml_path)
         viewer.show()
         app.exec()
         return
@@ -4862,6 +4873,8 @@ def main():
         description="Interactive viewer for SAPHIR-MCM simulation results.")
     parser.add_argument("results_csv_path", nargs='?', default=None,
                         help="Path to the simulation_results.csv file to view.")
+    parser.add_argument("--toml", default=None,
+                        help="Path to active TOML config (sets quick_plot defaults).")
     args = parser.parse_args()
 
     csv_path = args.results_csv_path
@@ -4885,7 +4898,7 @@ def main():
 
     if csv_path and os.path.exists(csv_path):
         print(f">>> [VIEWER] Loading results from: {csv_path}")
-        show_results(csv_path)
+        show_results(csv_path, toml_path=args.toml)
     else:
         print("\nUsage: python results_viewer.py <path_to_simulation_results.csv>")
         print(">>> [VIEWER] No path provided. Exiting.")

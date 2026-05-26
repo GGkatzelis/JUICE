@@ -23,3 +23,7 @@ interpolation = "piecewise"
 rtol_default = "1e-06"
 kv_pd = "true"
 perstep_snap = "true"
+
+[viewer]
+quick_plot_left  = "['NO', 'NO2', 'O3']"
+quick_plot_right = "['OH', 'HO2']"

@@ -1783,7 +1783,8 @@ class ScenarioRunner:
         _hmax_easy = self.cfg.get('hmax', None)
         try:
             import tomllib as _tl
-            _tp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
+            _tp = getattr(self, '_toml_path', None) or \
+                  os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
             with open(_tp, 'rb') as _fh:
                 _solver_toml = _tl.load(_fh).get('solver', {})
         except Exception:
@@ -2031,8 +2032,12 @@ class ScenarioRunner:
         seg_y_list = [y0[:, np.newaxis]]
         y_seg = y0.copy()
 
-        # first_step from TOML: > 0 → passed to solve_ivp; 0 or negative → automatic.
-        _fs_val = float(_solver_toml.get('first_step', 0.0))
+        # first_step: JSON (GUI combo) takes precedence over TOML default.
+        _fs_json = self.cfg.get('first_step', None)
+        if _fs_json is not None:
+            _fs_val = float(_fs_json)
+        else:
+            _fs_val = float(_solver_toml.get('first_step', 0.0))
         _fs_kw  = {'first_step': _fs_val} if _fs_val > 0 else {}
         if _fs_kw:
             if _perstep_snap:
@@ -2690,7 +2695,8 @@ class ScenarioRunner:
         import subprocess
         viewer = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "results_viewer.py")
-        subprocess.Popen([sys.executable, viewer, out_path])
+        _toml_args = ["--toml", self._toml_path] if getattr(self, '_toml_path', '') else []
+        subprocess.Popen([sys.executable, viewer, out_path] + _toml_args)
 
 if __name__ == "__main__":
     import argparse as _ap
@@ -2698,8 +2704,11 @@ if __name__ == "__main__":
     _parser.add_argument("config", help="Path to scenario_config.json")
     _parser.add_argument("--gui", action="store_true",
                          help="Show the results viewer after simulation (used by FR_GUI)")
+    _parser.add_argument("--toml", default="",
+                         help="Path to active TOML config (threads to viewer and solver)")
     _args = _parser.parse_args()
 
     runner = ScenarioRunner(_args.config)
     runner._show_viewer = _args.gui
+    runner._toml_path   = _args.toml
     runner.run()
