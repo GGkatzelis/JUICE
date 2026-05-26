@@ -468,6 +468,12 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             if mapping:
                 env_key, canonical = mapping
                 env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
+                # If the variable name differs from the canonical key (e.g. H2O_in vs H2O),
+                # also register the alias so expressions that reference it remain resolvable.
+                # Example: H2O_in = INPUT(H2O) → env_map["H2O_IN"] lets the validator
+                # accept H2O = CONST(1e-2*M*H2O_IN) without flagging H2O_IN as unknown.
+                if var_up != env_key.upper():
+                    env_map[var_up] = {"type": "SAPHIR File", "value": canonical}
             else:
                 injection_switches[var_up] = enz_col
             # Variable is ENZ-sourced — remove any prior CONST value from idl_parameters
