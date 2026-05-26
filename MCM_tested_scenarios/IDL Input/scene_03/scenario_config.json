@@ -1,6 +1,6 @@
 {
-    "folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_03",
-    "chemistry_folder": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_03\\chemistry",
+    "folder": "",
+    "chemistry_folder": "",
     "chamber_vol": 276.0,
     "mechanism_files": [
         "anorg.mcm331.dark.rate",

@@ -174,7 +174,7 @@ class ScenarioRunner:
         with open(config_path, 'r') as f:
             self.cfg = json.load(f)
             
-        self.root = self.cfg['folder']
+        self.root = self.cfg.get('folder', '') or os.path.dirname(os.path.abspath(config_path))
         # Derive output file stem from the JSON filename (e.g. scene_03.json → "scene_03")
         self._stem = os.path.splitext(os.path.basename(config_path))[0]
         self.mechanism = None
@@ -257,6 +257,8 @@ class ScenarioRunner:
         # Prefer an absolute enz_path stored in the config (written by FR_GUI),
         # then fall back to scanning the scenario folder for any *.enz file.
         cfg_enz = self.cfg.get('enz_path', '')
+        if cfg_enz and not os.path.isabs(cfg_enz):
+            cfg_enz = os.path.join(self.root, cfg_enz)
         if cfg_enz and os.path.isfile(cfg_enz):
             enz_path = cfg_enz
         else:
@@ -382,6 +384,8 @@ class ScenarioRunner:
         # single authoritative flat input — no separate mechanism files needed.
         # This matches FACSIMILE's preprocessor: everything inline, last wins.
         elog_path = self.cfg.get('elog_path', '')
+        if elog_path and not os.path.isabs(elog_path):
+            elog_path = os.path.join(self.root, elog_path)
         if elog_path and os.path.isfile(elog_path):
             print(f"  [MECHANISM] Using JUICE elog: {os.path.basename(elog_path)}")
             parser = EasyParser(base_path=os.path.dirname(elog_path))

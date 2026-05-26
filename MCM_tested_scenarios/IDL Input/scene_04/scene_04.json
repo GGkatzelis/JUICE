@@ -1,0 +1,84 @@
+{
+    "folder": "",
+    "chamber_vol": 276.0,
+    "env_map": {
+        "TEMP": {
+            "type": "Fixed Constant",
+            "value": "300.0"
+        },
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1006.5"
+        },
+        "JNO2": {
+            "type": "SAPHIR File",
+            "value": "jNO2"
+        },
+        "JO1D": {
+            "type": "SAPHIR File",
+            "value": "jO1D"
+        },
+        "FLOW": {
+            "type": "SAPHIR File",
+            "value": "dilute"
+        },
+        "H2O": {
+            "type": "SAPHIR File",
+            "value": "H2O"
+        },
+        "HV": {
+            "type": "SAPHIR File",
+            "value": "hv"
+        },
+        "SZ": {
+            "type": "SAPHIR File",
+            "value": "sz"
+        }
+    },
+    "continuous_sources": [],
+    "burst_injections": [],
+    "excluded_reactions": [
+        {
+            "reactants": "CH3CHO+HV",
+            "products": "CH3O2+CO+HO2",
+            "action": "Modify Rate",
+            "rate": "((((7.344e-6))* (((((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))**((1.202)))*EXP(((0.417))/(((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01)))))))))))))))))))))* ((((((((((AMIN(((((((((((((JNO2)) / (((1.165e-2))*(((((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))**((0.244))) * exp(((0.267))/(((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))) )))))))))),(((((((((1.)))))))))))))))))))))"
+        },
+        {
+            "reactants": "NO3CH2CHO+HV",
+            "products": "NO2+HCOCH2O",
+            "action": "Modify Rate",
+            "rate": "((((1.87695e-4))* (((((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))**((4.6827)))*EXP(((1.3889))/(((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01)))))))))))))))))))))* ((((((((((AMIN(((((((((((((JNO2)) / (((1.165e-2))*(((((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))**((0.244))) * exp(((0.267))/(((((((((AMAX(((((((((((COS(SZ*0.0174533))))))))))),(((((((((0.01))))))))))))))))))))) )))))))))),(((((((((1.)))))))))))))))))))))"
+        }
+    ],
+    "blocked_parameters": [],
+    "h2o_injection_impurities": [],
+    "hmax": 30.0,
+    "enz_path": "scene_04.enz",
+    "elog_path": "scene_04_juice.canonical.elog",
+    "interpolation": "piecewise",
+    "rtol": 1e-06,
+    "export_kv_pd": true,
+    "perstep_snap": true,
+    "ode_backend": "numba",
+    "mechanism_files": [],
+    "j_scalings": {},
+    "artifacts": {
+        "active": true,
+        "scale": "1.0",
+        "hono_active": false,
+        "hono_eqn": "",
+        "hcho_active": false,
+        "hcho_eqn": "",
+        "no2_active": false,
+        "no2_eqn": "",
+        "y_active": true,
+        "y_eqn": "230",
+        "wall_active": false,
+        "dark_hono": ""
+    },
+    "initials": {},
+    "custom_reactions": [],
+    "chamber_source_reactions": [],
+    "injection_reactions": []
+}

@@ -2,7 +2,6 @@
 easy_root     = "E:\\Python Code\\JUICE archive\\EASY"
 include_dir   = "E:\\Python Code\\JUICE archive\\EASY\\include files"
 output_root   = "E:\\Python Code\\JUICE archive\\JUICE"
-last_easy_dir = "E:/Python Code/JUICE archive/EASY/scene_06"
 
 [comparison]
 favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO', 'kOH', 'HV', 'T', 'k(NO2+HV-->NO+O3)']"

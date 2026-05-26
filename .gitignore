@@ -24,6 +24,7 @@ desktop.ini
 
 # Claude Code local settings (personal, not shared)
 .claude/
+!.claude/log_prompt.py
 
 # Jupyter
 .ipynb_checkpoints/
@@ -71,6 +72,14 @@ MCM_database/MCM_3.3.1/Limonene/
 **/*.html
 **/*.hd
 **/*.elog
+# Allow canonical elogs committed under MCM_tested_scenarios for benchmark reproducibility
+!MCM_tested_scenarios/**/*.elog
+
+# Machine-local TOML overrides (last_easy_dir, etc.) — never committed
+*.local.toml
+
+# JUICE simulation output directory when output_root is inside the repo (Georgios layout)
+MCM_tested_scenarios/JUICE archive/
 
 # Local logs / scratch
 *.log
