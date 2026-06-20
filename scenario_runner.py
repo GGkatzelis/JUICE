@@ -458,6 +458,7 @@ class ScenarioRunner:
             base_path=chem_path,
             include_dir=toml_include if (toml_include and os.path.isdir(toml_include)) else None)
         self.mechanism = Mechanism()
+        self._mechanism_s_names = set()   # s_entry names from mechanism_files (for cs export)
 
         mech_files = list(self.cfg['mechanism_files'])
 
@@ -474,6 +475,9 @@ class ScenarioRunner:
             m_part = parser.parse(f_path)
             self.mechanism.species.extend(m_part.species)
             self.mechanism.reactions.extend(m_part.reactions)
+            for _e in m_part.s_entries:
+                if not getattr(_e, 'is_synthetic', False):
+                    self._mechanism_s_names.add(_e.name.upper())
 
             # Only use uncommented parameters — the parser already filters invalid names
             for p_name, p_expr in m_part.parameters.items():
@@ -2212,9 +2216,12 @@ class ScenarioRunner:
         # Extra ENZ columns (TEMP, PRESS, Q_* switches) are NOT in the EASY script
         # and should not appear in the cs output — keep the output clean and
         # consistent with what FACSIMILE outputs.
+        # _mechanism_s_names: s_entry names collected from mechanism_files parsing
+        # (in elog mode these are already in self.mechanism.s_entries).
         _easy_names_upper = ({e.name.upper() for e in self.mechanism.s_entries
                                if not getattr(e, 'is_synthetic', False)}
-                             | {s.upper() for s in self.solver.species})
+                             | {s.upper() for s in self.solver.species}
+                             | getattr(self, '_mechanism_s_names', set()))
 
         # Add ctx_data (ENZ inputs) under their EASY names (T, HV, JNO2, etc.)
         # Evaluated at _s_eval_t (shifted) so reported values match the step-start snap.

@@ -842,7 +842,7 @@ class ResultsViewer(QMainWindow):
         self._midnight_unix = self._t0_unix - (self._t0_unix % 86400)
         self._last_nc_dir = None
 
-        # Load s_entries from the EASY elog so we can classify columns structurally.
+        # Load s_entries from the mechanism files to classify columns structurally.
         # s_entries = anything defined with a function call in the EASY script.
         self._easy_s_names = set()   # lowercase names of s_entries
         self._easy_c_names = set()   # lowercase names of ODE species
@@ -853,13 +853,23 @@ class ResultsViewer(QMainWindow):
                 import json as _json
                 with open(_jui_json) as _fh:
                     _jcfg = _json.load(_fh)
+                from easy_parser import EasyParser as _EP
+                _ep = _EP()
+                _s_entries, _species = [], []
                 _elog = _jcfg.get('elog_path', '')
                 if _elog and os.path.isfile(_elog):
-                    from easy_parser import EasyParser as _EP
-                    _mech = _EP().parse(_elog)
-                    self._easy_s_names = {e.name.lower() for e in _mech.s_entries
-                                          if not getattr(e, 'is_synthetic', False)}
-                    self._easy_c_names = {sp.lower() for sp in _mech.species}
+                    _m = _ep.parse(_elog)
+                    _s_entries.extend(_m.s_entries)
+                    _species.extend(_m.species)
+                else:
+                    for _f in _jcfg.get('mechanism_files', []):
+                        if os.path.isfile(_f):
+                            _m = _ep.parse(_f)
+                            _s_entries.extend(_m.s_entries)
+                            _species.extend(_m.species)
+                self._easy_s_names = {e.name.lower() for e in _s_entries
+                                      if not getattr(e, 'is_synthetic', False)}
+                self._easy_c_names = {sp.lower() for sp in _species}
         except Exception:
             pass
 
@@ -1114,34 +1124,13 @@ class ResultsViewer(QMainWindow):
         return df
 
     # ── Tree building ─────────────────────────────────────────────────────────
-    # Known setting (s) column prefixes and exact names
-    _SETTING_PREFIXES = ('KMT', 'KRO', 'KAP', 'KBP', 'KFP', 'KCH', 'KNO', 'KDE', 'KROP',
-                         'KNO3', 'KFPAN', 'KBPAN', 'KDEC', 'KAPHO', 'KAPNO', 'KCH3')
-    _SETTING_NAMES = {'T', 'TEMP', 'P', 'PRESS', 'M', 'HV', 'COSX', 'LNO2', 'MNO2', 'NNO2',
-                      'SZ', 'SZA', 'RH', 'FLOW', 'DILUTE', 'JSCALE', 'DIL', 'DILUTE',
-                      'JSCALE', 'COSX', 'N2', 'O2'}
 
     def _is_setting_col(self, col):
         """True if col is a setting (s-value) from the EASY script.
-
-        Uses structural classification from s_entries when available
-        (anything defined by a function call in the EASY script).
-        Falls back to name-based heuristic if no elog was loaded.
+        Classification is based exclusively on s_entries parsed from the mechanism
+        files at load time (_easy_s_names). A JSON file is always present.
         """
-        cl = col.lower()
-        if self._easy_s_names:
-            return cl in self._easy_s_names
-        # Fallback: name-based heuristic
-        cu = col.upper()
-        if cu in self._SETTING_NAMES:
-            return True
-        if any(cu.startswith(p) for p in self._SETTING_PREFIXES):
-            return True
-        if cu.startswith('J') and len(cu) > 1 and (cu[1].isdigit() or '_CS' in cu):
-            return True
-        if cu.startswith('SAPHIR_'):
-            return True
-        return False
+        return col.lower() in self._easy_s_names
 
     def _populate_tree(self):
         """Fill Species (c) and Settings (s) folders from self.df columns."""
@@ -2673,32 +2662,13 @@ class ResultsViewer(QMainWindow):
             self._cmp_only_juice = []
             self._cmp_only_ref   = []
         elif _mode == 1:
-            # c-Species: ODE concentrations (reactants/products in reaction equations)
-            def _is_c_species(name):
-                n = name.upper()
-                if n.startswith('SAPHIR_'): return False
-                if n.startswith('KMT') or n.startswith('KRO') or n.startswith('KAP'): return False
-                if n.startswith('KBP') or n.startswith('KFP') or n.startswith('KNO'): return False
-                if n.startswith('KCH') or n.startswith('KDE') or n.startswith('KRO'): return False
-                if len(n) > 1 and n[0] == 'J' and n[1:].replace('_CS','').replace('_','').isdigit(): return False
-                if n in {'M','T','P','RH','SZ','SZA','HV','COSX','DIL','DILUTE',
-                         'FLOW','LNO2','MNO2','NNO2','KDEC','KMT05','KRO2NO3',
-                         'N2','O2','H2O','TEMP','PRESS'}: return False
-                return True
-            common = sorted(c for c in mcm_cols & ref_cols if _is_c_species(c))
+            # c-Species: ODE concentrations — everything that is not a setting
+            common = sorted(c for c in mcm_cols & ref_cols if not self._is_setting_col(c))
             self._cmp_only_juice = []
             self._cmp_only_ref   = []
         elif _mode == 2:
-            # s-Species: physical settings (T, P, HV, SZ, RH, DILUTE, M, …)
-            _S_NAMES = {'T','TEMP','P','PRESS','M','HV','SZ','SZA','RH','COSX',
-                        'DIL','DILUTE','FLOW','N2','O2','H2O','DV','DVO3','WALLDEP',
-                        'LNO2','MNO2','NNO2','SHONO','SHCHO','RO2'}
-            def _is_s_species(name):
-                n = name.upper()
-                if n in _S_NAMES: return True
-                if n.startswith('SAPHIR_'): return True
-                return False
-            common = sorted(c for c in mcm_cols & ref_cols if _is_s_species(c))
+            # s-Species: use elog-aware _is_setting_col (falls back to heuristic when no elog)
+            common = sorted(c for c in mcm_cols & ref_cols if self._is_setting_col(c))
             self._cmp_only_juice = []
             self._cmp_only_ref   = []
         elif _mode == 3:
