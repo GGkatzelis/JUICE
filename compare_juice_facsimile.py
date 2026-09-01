@@ -22,7 +22,7 @@ Stops and reports the first column whose max relative deviation exceeds --tol.
 
 import sys
 import io
-if sys.platform == "win32":
+if sys.platform == "win32" and sys.stdout is not None:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 import os
 import re
