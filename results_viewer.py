@@ -286,6 +286,27 @@ class BudgetEngine:
                 except Exception:
                     pass
 
+        # Elog-mode JSONs: parse the canonical elog (a single flat-expanded file).
+        # Mirrors scenario_runner's elog_path handling; reactions/params merge in.
+        elog_path = self.cfg.get('elog_path', '')
+        if elog_path:
+            if not os.path.isabs(elog_path):
+                elog_path = os.path.join(self.root, elog_path)
+            if os.path.exists(elog_path):
+                m_part = parser.parse(elog_path)
+                self.mechanism.species.extend(m_part.species)
+                self.mechanism.reactions.extend(m_part.reactions)
+                for p_name, p_expr in m_part.parameters.items():
+                    p_clean = p_expr.replace('@', '**')
+                    p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+                    p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
+                    try:
+                        self.var_assignments.append(
+                            (p_name.upper(), compile(p_clean.strip(), '<string>', 'eval'))
+                        )
+                    except Exception:
+                        pass
+
         # Blocked parameters
         blocked = {p.upper() for p in self.cfg.get('blocked_parameters', [])}
         if blocked:
@@ -1581,12 +1602,22 @@ class ResultsViewer(QMainWindow):
     def _auto_load_config(self, csv_path):
         if not csv_path or not HAS_BUDGET:
             return
+        csv_path = os.path.abspath(csv_path)
+        csv_dir  = os.path.dirname(csv_path)
+        csv_stem = os.path.splitext(os.path.basename(csv_path))[0]
+        # Strip "_juice" suffix so scene_05_juice.cs matches scene_05.json
+        if csv_stem.endswith('_juice'):
+            csv_stem = csv_stem[:-len('_juice')]
         candidates = []
-        d = os.path.dirname(os.path.abspath(csv_path))
-        for root in [d, os.path.dirname(d)]:
-            for fname in os.listdir(root):
-                if fname == 'scenario_config.json':
-                    candidates.append(os.path.join(root, fname))
+        for root in [csv_dir, os.path.dirname(csv_dir)]:
+            if not root or not os.path.isdir(root):
+                continue
+            stem_match = os.path.join(root, f"{csv_stem}.json")
+            if os.path.isfile(stem_match):
+                candidates.append(stem_match)
+            legacy = os.path.join(root, 'scenario_config.json')
+            if os.path.isfile(legacy):
+                candidates.append(legacy)
         if candidates:
             self._load_config(candidates[0], silent=True)
 

@@ -1,6 +1,7 @@
 ;TITLE=scene_03 , simple CO chemistry, lights on and off
   
 ; INCLUDES: 
+#include default_minimum.incl     ; simple functions
 #include anorg.mcm331.dark.rate   ; dark anorganic reactions
 #include anorg.mcm331.dark.mech   ; rate constants of dark reactions
 #include anorg.mcm331.phot.rate   ; anorganic photolysis reactions
@@ -51,12 +52,13 @@ RH = WVC2RH(H2O)
 #include anorg.fac.dil.mech
 #include anorg.fac.dil.rate
 
-FLOW   = CONST(6.)  ; Experimetal flow in m^3/h
 DILUTE = CONST((FLOW+0.010*60)/(276.*3600.))
-DIL    = CONST(1.) ; Switch for dilution
+FLOW   = CONST(6.)  ; Experimetal flow in m^3/h
+;DIL    = CONST(0)   ; Switch for dilution
+DIL    = input(DIL)
  
 ; Water as a variable 
-;INITIAL[H2O] = CONST(1.4e-2*M)
+;INITIAL[H2O] = CONST(M*0.01)
  
 *********************************************************************
  
@@ -74,21 +76,19 @@ SZA  = CONST(30)      ; solar zenith angle
 SZ   = CONST(30)      ; solar zenith angle
 HV   = INPUT(hv)      ; switch for light
 FLOW = CONST(10)      ; flow into the chamber in m^3/h
-H2O  = CONST(1e-2*M*0.02)
 *********************************************************************
- ; FUNCTIONS
-CONST  =FUNCTION[%1]
-DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]  ; P/(T*1.379E-19)
-M      =DENSITY(P,T)
-
 ; FILES: 
 FILES[ENZ]   = scene_03.enz
  
 ; FACSIMILE PARAMETERS
-FACS[HMAX]   = 1
+FACS[HMAX]   = 10
 FACS[OUTSTEP]= 10
  
 ; INITIALS:
-INITIAL[*]   = CONST(1.)
+INITIAL[*]   = CONST(0)
 INITIAL[NO2] = CONST(M*1e-9*10)
 INITIAL[CO]  = CONST(M*1e-9*2500)
+INITIAL[H2O] = CONST(M*1e-2*1)
+
+NO+O3-/->NO2
+O3+NO-->NO2
