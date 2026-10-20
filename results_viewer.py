@@ -37,7 +37,12 @@ except ImportError:
     HAS_NC4 = False
 
 try:
-    from mcm_species_db import MCM_DB, KNOWN_ZERO_CARBON
+    # single source of truth for formula/MW/RO2/SMILES: species_db (SpeciesDB is a drop-in for the old
+    # MCM_DB -- .get(name) returns a Species with .formula/.n_C/.n_H/.n_O/.n_N/.mass/.is_peroxy, and
+    # `name in MCM_DB` works). KNOWN_ZERO_CARBON stays as the inorganic-constant set.
+    from species_db import load_species_db
+    from mcm_species_db import KNOWN_ZERO_CARBON
+    MCM_DB = load_species_db()
 except ImportError:
     MCM_DB = {}
     KNOWN_ZERO_CARBON = frozenset()
