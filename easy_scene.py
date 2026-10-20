@@ -188,12 +188,15 @@ def active_statements(path_or_doc) -> List[str]:
     return [normalise(l.code) for l in doc.statements if not _is_noise(l)]
 
 
-def statements_equivalent(a, b) -> Tuple[bool, List[str]]:
+def statements_equivalent(a, b, ignore_duplicate_reactions: bool = False) -> Tuple[bool, List[str]]:
     """Compare two EASY files/documents at the active-statement level.
 
     Returns (equivalent, list_of_differences).  Equivalent means: identical
     multiset of normalised statements and identical last definition for every
-    repeated definition key.
+    repeated definition key.  With ignore_duplicate_reactions=True an identical
+    reaction line written twice (e.g. a copy-pasted tracer block) counts once —
+    easy_parser deduplicates reactions by canonical key, so JUICE sees no
+    difference either way.
     """
     da = a if isinstance(a, EasyDocument) else parse_document(a)
     db = b if isinstance(b, EasyDocument) else parse_document(b)
@@ -209,6 +212,8 @@ def statements_equivalent(a, b) -> Tuple[bool, List[str]]:
                 continue
             if _definition_key(l):
                 defs.add(normalise(l.code))
+            elif ignore_duplicate_reactions and l.kind == "reaction":
+                rest[normalise(l.code)] = 1
             else:
                 rest[normalise(l.code)] += 1
         return defs, rest

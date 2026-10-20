@@ -107,6 +107,7 @@ class EasyForm:
     header_comments: List[str] = field(default_factory=list)
     # includes
     mech_stem: str = ""                 # e.g. ethanol.fac
+    mech_incl_suffix: str = ".saphir.incl"   # ".incl" for converter precursor (init) output
     use_anorg: bool = True
     use_j_clear_sky: bool = True
     includes_pre: List[str] = field(default_factory=list)
@@ -251,7 +252,8 @@ def spec_from_form(f: EasyForm) -> SceneSpec:
         s.anorg_includes = [Stmt(f"#include {n}", c) for n, c in ANORG_INCLUDES]
     if f.mech_stem:
         s.mech_stem = f.mech_stem
-        s.mech_includes = [Stmt(f"#include {f.mech_stem}{suf}", c) for suf, c in MECH_SUFFIXES]
+        _sufs = [(f.mech_incl_suffix or ".saphir.incl", MECH_SUFFIXES[0][1])] + MECH_SUFFIXES[1:]
+        s.mech_includes = [Stmt(f"#include {f.mech_stem}{suf}", c) for suf, c in _sufs]
     if f.use_j_clear_sky:
         s.j_clear_sky = Stmt("#include j_clear_sky.incl")
     s.includes_other = [Stmt(f"#include {n}") for n in f.includes_other]
@@ -385,10 +387,13 @@ def form_from_spec(s: SceneSpec) -> EasyForm:
         if st.code.split(None, 1)[1] not in std_anorg:
             extra.append(st.code)
     if s.mech_stem:
-        std_mech = {f"{s.mech_stem}{suf}".lower() for suf, _ in MECH_SUFFIXES}
-        for st in s.mech_includes:
-            if st.code.split(None, 1)[1].lower() not in std_mech:
-                extra.append(st.code)
+        _names = [st.code.split(None, 1)[1] for st in s.mech_includes]
+        if any(n.lower() == f"{s.mech_stem}.incl".lower() for n in _names):
+            f.mech_incl_suffix = ".incl"
+        std_mech = {f"{s.mech_stem}{suf}".lower() for suf, _ in MECH_SUFFIXES} | {f"{s.mech_stem}{f.mech_incl_suffix}".lower()}
+        for n in _names:
+            if n.lower() not in std_mech:
+                extra.append("#include " + n)
 
     f.walldep = s.walldep is not None or s.walldep_include is not None
     if s.walldep:
