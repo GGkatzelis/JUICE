@@ -1,0 +1,203 @@
+;TITLE=09.07.2024:!C!Cinjection into SAPHIR : ethanol ; FAC 12s Juice 36s T=CONST first_step 1e-09
+  
+; This is a temporary EASY-Input File written by mcm331cv.pro
+; with input file ethanol.fac
+;   
+; To make this file a working EASY-Input File, the following
+; steps have to be done at least: 
+;   1) Fill in the INITIAL values (and water concentration)
+;   2) Make sure that EASY will find the included files
+;   3) Save the new file with a DOS compatible name
+   
+; INCLUDES: 
+#include anorg.mcm331.dark.rate   ; dark anorganic reactions
+#include anorg.mcm331.dark.mech   ; rate constants of dark reactions
+#include anorg.mcm331.phot.rate   ; anorganic photolysis reactions
+#include anorg.mcm331.phot.mech   ; anorganic photolysis frequencies
+#include ethanol.fac.saphir.incl ; MCM3-spezific constants and functions 
+#include ethanol.fac.ro2.incl ; RO2 species
+#include ethanol.fac.mech ; reaction mechanism for given VOC
+#include ethanol.fac.rate ; rate constants for given VOC reactions
+#include j_clear_sky.incl
+ 
+*********************************************************************
+ 
+;/WALLDEP, Wall deposition in SAPHIR chamber
+#include saphir.walldep.incl
+WALLDEP   = CONST(1.) ; Switch fuer die Wandverluste 
+ 
+*********************************************************************
+ 
+;/SOURCE, HONO and HCHO source of SAPHIR chamber
+
+; Funktion die die Wasserkonzentration in die relative
+; Feuchtigkeit umrechnet
+WVC2RH     =FUNCTION[%1*100./(exp(21.36469-5339.66/T)/P*M)]
+
+; Relative Feuchtigkeit
+RH = WVC2RH(H2O)
+
+; HONO Quelle aus Paper Rohrer et al.
+SHONO --> HONO
+k[SHONO --> HONO]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )
+SHONO = CONST(HV_in*2.6*1.1*0.7)
+
+; HCHO Quelle (licht abh�ngig, photochemie unabh�ngig)
+SHCHO --> HCHO
+k[SHCHO --> HCHO] = CONST(2.8e6)
+SHCHO = CONST(HV_in*1)
+ 
+*********************************************************************
+ 
+;/BGREAC, Background reactivity (see saphir.bgreac.incl) 
+Y + OH --> HO2
+k[Y + OH --> HO2]=CONST(2.4e-13)
+;Y + OH --> CH3O2
+;k[Y + OH --> CH3O2]=CONST(2.4e-13)
+Y=CONST(230e-9*M) ; Y in CO �quivalenten
+ 
+*********************************************************************
+ 
+; DILUTION, /DIL
+#include ethanol.fac.dil.mech ;dilution mechanism
+#include ethanol.fac.dil.rate ;dilution rate
+;FLOW   = CONST(6.)  ; Experimetal flow in m^3/h
+DILUTE = CONST((FLOW+0.010*60)/(276.*3600.))
+DIL    = CONST(1.) ; Switch for dilution
+ 
+; Water as a variable 
+;INITIAL[H2O] = CONST(1.4e-2*M)
+ 
+*********************************************************************
+ 
+;/MEASURED, use measured photolysis frequencies (given in ENZ-file)
+;           and other measured parameters]
+#include saphir.jmeasured_02.incl ; definitions for further use of jno2
+                              ; and jo1d as scaling factors of other 
+                              ; photolysis frequencies
+jno2 = INPUT(jno2)
+k[NO2 + HV --> O3 + NO]      = CONST( jno2 )
+jo1d = INPUT(jo1d)
+k[O3 + HV --> O1D ]          = CONST( jo1d )
+jhcho_m                      = INPUT(jhcho_m)
+k[HCHO + HV --> H2 + CO ]    = CONST(jhcho_m)
+jhcho_r                      = INPUT(jhcho_r)
+k[HCHO + HV --> 2*HO2 + CO ] = CONST(jhcho_r)
+jh2o2                        = INPUT(jh2o2)
+k[H2O2 + HV --> 2*HO]        = CONST(jh2o2)
+jhono                        = INPUT(jhono)
+k[HONO + HV --> OH + NO]     = CONST(jhono)
+
+T_in = INPUT(t)
+;T    = CONST(T_in)    ; temperature in K
+T    = CONST(300)     ; temperature in K
+P    = CONST(1006.5)  ; pressure in hPa
+SZA  = INPUT(sz)      ; solar zenith angle
+SZ   = INPUT(sz)      ; solar zenith angle
+HV_in= INPUT(hv)      ; switch for light
+HV   = CONST(HV_in)
+FLOW = INPUT(dilute)  ; flow into the chamber in m^3/h
+H2O_in = INPUT(H2O)   ; mixing ratio of water
+H2O = CONST(1e-2*M*H2O_in)
+*********************************************************************
+ 
+; FILES: 
+FILES[ENZ]   = scene_05.enz
+ 
+; FACSIMILE PARAMETERS
+FACS[HMAX]   = 30
+FACS[OUTSTEP]= 100000
+ 
+; INITIALS:
+INITIAL[*] = CONST(1) 
+;INITIAL[CO] = CONST(M*1e-9*0) 
+;INITIAL[CO2]= CONST(M*1e-6*0) 
+
+;qCO2-->CO2
+;qCO2=input(QCO2)
+;qCO2=CONST(1)
+;k[qCO2-->CO2]=CONST(M*1e-6/3600*0.01)
+
+;qCO2-->CO
+;qCO2=input(QCO2)
+;k[qCO2-->CO]=CONST(M*1e-9/60*60)
+
+qNO-->NO
+qNO=input(QNO)
+k[qNO-->NO]=CONST(M*1e-9/60*8.1)
+
+qNO-->NO2
+k[qNO-->NO2]=CONST(M*1e-9/60*0.7)
+
+;qNO-->HONO
+;k[qNO-->HONO]=CONST(M*1e-9/60*0.0)
+
+;qH2O-->H2O
+;qH2O=input(QH2O)
+;k[qH2O-->H2O]=CONST(M*1e-2/60*9)
+
+qH2O=input(QH2O)
+qH2O-->HONO
+k[qH2O-->HONO]=CONST(M*1e-9/60*0.)
+qH2O-->CO
+k[qH2O-->CO]=CONST(M*1e-9/60*0.5)
+
+qH2O-->NO2
+k[qH2O-->NO2]=CONST(M*1e-9/60*0.12)
+qH2O-->NO
+k[qH2O-->NO]=CONST(M*1e-9/60*0.0)
+
+H2O-->HONO
+k[H2O-->HONO]=CONST(1e-012)
+
+qO3-->O3
+qO3=input(QO3)
+k[qO3-->O3]=CONST(M*1e-9/60*113*0)
+
+;O3=CONST(M*50e-9)
+;C5H8=CONST(M*1e-9)
+
+SNO2 --> NO2
+;k[SNO2 --> NO2]  = CONST(jno2/5e-3*1e-9*M/3600*HV_in*0.55)
+;SNO2=CONST(1)
+k[SNO2 --> NO2]  = CONST(jno2/5e-3/3600*HV_in/1.6*0.55)
+INITIAL[SNO2] = CONST(M*1e-9*3.5*0)
+
+;SNO --> NO
+;k[SNO --> NO]  = CONST(jno2/5e-3*1e-9*M/3600*20)
+;SNO=CONST(HV_in)
+
+;SOH --> OH
+;k[SOH --> OH]  = CONST(jno2/5e-3*1e-9*M/3600)
+;k[SOH --> OH]  = CONST(M*1e-9/3600*4)
+;SOH=CONST(HV_in)
+
+;SHO2 --> HO2
+;k[SHO2 --> HO2]  = CONST(M*1e-9/3600*3)
+;SHO2=CONST(HV_in)
+
+;hv --> NO
+;k[hv --> NO]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )
+
+;hv --> OH
+;k[hv --> OH]  = CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2)
+
+;NO2_in=input(NO2)
+;NO2=CONST(NO2_in*1e-9*M)
+;NO2=CONST(1e-9*M*30)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+qVOC=input(qVCP2)
+
+qVOC-->0.9*VOCin1+0.1*VOCin2
+k[qVOC-->0.9*VOCin1+0.1*VOCin2]=CONST(M*1e-9/60*575*180/175)    ; for ethanol
+
+VOCin1-->VOCin_all
+k[VOCin1-->VOCin_all]=CONST(1./60)
+VOCin2-->VOCin_all
+k[VOCin2-->VOCin_all]=CONST(1./1800)
+
+VOCin_all-->C2H5OH
+k[VOCin_all-->C2H5OH]=CONST(1./60)
+
+;TROE=FUNCTION[ M*(%1)*(T/300.)@((-1.)*(%2))/(1.+M*(%1)*(T/300.)@((-1.)*(%2))/((%3)*(T/300.)@((-1.)*(%4))))*0.6@(1./(1.+(log10(M*(%1)*(T/300.)@((-1.)*(%2))/((%3)*(T/300.)@((-1.)*(%4)))))**2)) ]

@@ -1,0 +1,254 @@
+;#include default_minimum.incl ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]
+T =CONST(273.2)
+P =CONST(1013.)
+M =DENSITY(P,T)
+O2=CONST(0.20946*M)
+N2=CONST(0.78084*M)
+ALIAS[HV] = hv
+ALIAS[OH] = HO
+ALIAS[HCHO] = H2CO CH2O
+ALIAS[O] = O3P
+ALIAS[CH3OOH] = CH3O2H MOOH
+ALIAS[HONO] = HNO2
+ALIAS[HNO3] = HONO2
+ALIAS[HNO4] = HO2NO2
+HV=CONST(1.)
+SZA=CONST(45.)
+PHTFKT = FUNCTION[( (%1)*((COS(AMIN(SZA,89.9)*0.0174533))@(%2))*EXP((%3)*1./COS(AMIN(SZA,89.9)*0.0174533)))]
+KFPAN = COMPRC( 3.28D-28*M*(T/300)@(-6.87), 1.125D-11*(T/300)@(-1.105), 0.3)
+KBPAN = COMPRC( 1.10D-05*M*EXP(-10100/T), 1.90D+17*EXP(-14100/T), 0.3 )
+KMT13 = COMPRC( 2.50D-30*M*(T/300)@(-5.5), 1.80D-11, 0.36 )
+KMT14 = COMPRC( 9.00D-05*M*EXP(-9690/T), 1.10D+16*EXP(-10560/T), 0.36)
+KRO2NO3 = CONST( 2.30D-12 )
+KRO2NO = CONST(2.70D-12*EXP(360/T) )
+KRO2HO2 = CONST(2.91D-13*EXP(1300/T) )
+KAPHO2 = CONST(5.20D-13*EXP(980/T))
+KAPNO = CONST(7.50D-12*EXP(290/T))
+KNO3AL = CONST(1.40D-12*EXP(-1860/T))
+KDEC = CONST(1.00D+06)
+KROPRIM = CONST(2.50D-14*EXP(-300/T) )
+KCH3O2 = CONST(1.03D-13*EXP(365/T))
+J1 = PHTFKT(6.073D-05,1.743,-0.474)
+J3 = PHTFKT(1.041D-05,0.723,-0.279)
+J4 = PHTFKT(1.165D-02,0.244,-0.267)
+J5 = PHTFKT(2.485D-02,0.168,-0.108)
+J11 = PHTFKT(4.642D-05,0.762,-0.353)
+J12 = PHTFKT(6.853D-05,0.477,-0.323)
+J13 = PHTFKT(7.344D-06,1.202,-0.417)
+J15 = PHTFKT(2.792D-05,0.805,-0.338)
+J31 = PHTFKT(6.845D-05,0.130,-0.201)
+J32 = PHTFKT(1.032D-05,0.130,-0.201)
+J33 = PHTFKT(3.802D-05,0.644,-0.312)
+J34 = PHTFKT(1.537D-04,0.170,-0.208)
+J41 = PHTFKT(7.649D-06,0.682,-0.279)
+J51 = PHTFKT(1.588D-06,1.154,-0.318)
+;#include default_minimum.incl
+;#include anorg.mcm331.dark.rate ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+COMPRC = FUNCTION[(%1)*(%2)/((%1)+(%2))*(%3)@(1/(1+(LOG10((%1)/(%2))/((0.75-1.27*LOG10(%3))))@2))]
+KMT01 = COMPRC( 1.00D-31*M*(T/300)@(-1.6), 5.00D-11*(T/300)@(-0.3), 0.85 )
+KMT02 = COMPRC( 1.30D-31*M*(T/300)@(-1.5), 2.30D-11*(T/300)@0.24, 0.6 )
+KMT03 = COMPRC( 3.60D-30*M*(T/300)@(-4.1), 1.90D-12*(T/300)@0.2, 0.35 )
+KMT04 = COMPRC( 1.30D-03*M*(T/300)@(-3.5)*EXP(-11000/T), 9.70D+14*(T/300)@0.1*EXP(-11080/T), 0.35 )
+KMT05 = CONST( 1.44D-13*(1+(M/4.2D+19)) )
+KMT06 = CONST( 1+(1.40D-21*EXP(2200/T)*H2O) )
+KMT07 = COMPRC( 7.40D-31*M*(T/300)@(-2.4), 3.30D-11*(T/300)@(-0.3), 0.81 )
+KMT08 = COMPRC( 3.20D-30*M*(T/300)@(-4.5), 3.0D-11, 0.41 )
+KMT09 = COMPRC( 1.40D-31*M*(T/300)@(-3.1), 4.00D-12, 0.4 )
+KMT10 = COMPRC( 4.10D-05*M*EXP(-10650/T), 6.00D+15*EXP(-11170/T), 0.4 )
+KMT11 = CONST( 2.40D-14*EXP(460/T) + (6.50D-34*EXP(1335/T)*M)/ (1+(6.50D-34*EXP(1335/T)*M/ (2.70D-17*EXP(2199/T)))))
+KMT12 = COMPRC( 2.5D-31*M*(T/300)@(-2.6), 2.0D-12, 0.53 )
+k[O-->O3]=CONST(5.60D-34*O2*N2*(((T)/300)@-2.6) + 6.00D-34*O2*O2*(((T)/300)@-2.6))
+k[O+O3-->]=CONST(8.00D-12*EXP(-2060/(T)))
+k[O+NO-->NO2]=CONST( KMT01 )
+k[O+NO2-->NO]=CONST(5.50D-12*EXP(188/(T)))
+k[O+NO2-->NO3]=CONST( KMT02 )
+k[O1D-->O]{SUM}=CONST(2.0D-11*N2*EXP(130/(T)) + 3.20D-11*O2*EXP(67/(T)))
+k[NO+O3-->NO2]=CONST(1.40D-12*EXP(-1310/(T)))
+k[NO2+O3-->NO3]=CONST(1.40D-13*EXP(-2470/(T)))
+k[NO+NO-->NO2+NO2]=CONST(3.30D-39*EXP(530/(T))*O2)
+k[NO+NO3-->NO2+NO2]=CONST(1.80D-11*EXP(110/(T)))
+k[NO2+NO3-->NO+NO2]=CONST(4.50D-14*EXP(-1260/(T)))
+k[NO2+NO3-->N2O5]=CONST( KMT03 )
+k[N2O5-->NO2+NO3]=CONST( KMT04 )
+k[O1D-->OH+OH]=CONST(2.14D-10*H2O)
+k[OH+O3-->HO2]=CONST(1.70D-12*EXP(-940/(T)))
+k[OH+H2-->HO2]=CONST(7.70D-12*EXP(-2100/(T)))
+k[OH+CO-->HO2+CO2]{APPEND_CO2}=CONST(KMT05)
+k[OH+H2O2-->HO2]=CONST(2.90D-12*EXP(-160/(T)))
+k[HO2+O3-->OH]=CONST(2.03D-16*(((T)/300)@4.57*EXP(693/(T))))
+k[OH+HO2-->]=CONST(4.80D-11*EXP(250/(T)))
+k[HO2+HO2-->H2O2]=CONST(2.20D-13*KMT06*EXP(600/(T)) + 1.90D-33*M*KMT06*EXP(980/(T)))
+k[OH+NO-->HONO]=CONST( KMT07 )
+k[OH+NO2-->HNO3]=CONST( KMT08 )
+k[OH+NO3-->HO2+NO2]=CONST(2.00D-11)
+k[HO2+NO-->OH+NO2]=CONST(3.45D-12*EXP(270/(T)))
+k[HO2+NO2-->HO2NO2]=CONST( KMT09 )
+k[HO2NO2-->HO2+NO2]=CONST( KMT10 )
+k[OH+HO2NO2-->NO2]=CONST(3.2D-13*EXP(690/(T))*1.0)
+k[HO2+NO3-->OH+NO2]=CONST(4.00D-12)
+k[OH+HONO-->NO2]=CONST(2.50D-12*EXP(260/(T)))
+k[OH+HNO3-->NO3]=CONST( KMT11 )
+k[O+SO2-->SO3]=CONST(4.00D-32*EXP(-1000/(T))*M)
+k[OH+SO2-->HSO3]=CONST( KMT12 )
+k[HSO3-->HO2+SO3]=CONST(1.30D-12*EXP(-330/(T))*O2)
+k[HNO3 --> NA] = CONST(6.00D-06)
+k[N2O5 --> NA + NA] = CONST(4.00D-04)
+k[SO3 --> SA]=CONST(1.20D-15*H2O)
+;#include anorg.mcm331.dark.rate
+;#include anorg.mcm331.dark.mech ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+O --> O3
+O + O3 -->
+O + NO --> NO2
+O + NO2 --> NO
+O + NO2 --> NO3
+O1D --> O
+NO + O3 --> NO2
+NO2 + O3 --> NO3
+NO + NO --> NO2 + NO2
+NO + NO3 --> NO2 + NO2
+NO2 + NO3 --> NO + NO2
+NO2 + NO3 --> N2O5
+N2O5 --> NO2 + NO3
+O1D --> OH + OH
+OH + O3 --> HO2
+OH + H2 --> HO2
+OH + CO --> HO2 + CO2
+OH + H2O2 --> HO2
+HO2 + O3 --> OH
+OH + HO2 -->
+HO2 + HO2 --> H2O2
+OH + NO --> HONO
+OH + NO2 --> HNO3
+OH + NO3 --> HO2 + NO2
+HO2 + NO --> OH + NO2
+HO2 + NO2 --> HO2NO2
+HO2NO2 --> HO2 + NO2
+OH + HO2NO2 --> NO2
+HO2 + NO3 --> OH + NO2
+OH + HONO --> NO2
+OH + HNO3 --> NO3
+O + SO2 --> SO3
+OH + SO2 --> HSO3
+HSO3 --> HO2 + SO3
+HNO3 --> NA
+N2O5 --> NA + NA
+SO3 --> SA
+;#include anorg.mcm331.dark.mech
+;#include anorg.mcm331.phot.rate ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+k[O3+hv-->O1D]{J<1>}=PHTFKT(6.073D-05,1.743,-0.474)
+k[O3+hv-->O]{J<2>}=PHTFKT(4.775D-04,0.298,-0.080)
+k[H2O2+hv-->OH+OH]{J<3>}=PHTFKT(1.041D-05,0.723,-0.279)
+k[NO2+hv-->NO+O]{J<4>}=PHTFKT(1.165D-02,0.244,-0.267)
+k[NO3+hv-->NO]{J<5>}=PHTFKT(2.485D-02,0.168,-0.108)
+k[NO3+hv-->NO2+O]{J<6>}=PHTFKT(1.747D-01,0.155,-0.125)
+k[HONO+hv-->OH+NO]{J<7>}=PHTFKT(2.644D-03,0.261,-0.288)
+k[HNO3+hv-->OH+NO2]{J<8>}=PHTFKT(9.312D-07,1.230,-0.307)
+;#include anorg.mcm331.phot.rate
+;#include anorg.mcm331.phot.mech ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+O3 + hv --> O1D
+O3 + hv --> O
+H2O2 + hv --> OH + OH
+NO2 + hv --> NO + O
+NO3 + hv --> NO
+NO3 + hv --> NO2 + O
+HONO + hv --> OH + NO
+HNO3 + hv --> OH + NO2
+;#include anorg.mcm331.phot.mech
+;#include j_clear_sky.incl ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+AMAX =FUNCTION[AMAX(%1,%2)]
+AMIN =FUNCTION[AMIN(%1,%2)]
+COSX=CONST(COS(SZ*0.0174533))
+LNO2=CONST(1.165D-02)
+MNO2=CONST(0.244)
+NNO2=CONST(-0.267)
+PHTFKT = FUNCTION[HV*( ((%1)* ((AMAX(COSX,0.01))@(%2))*EXP((%3)/AMAX(COSX,0.01)))* (AMIN((jno2 / (LNO2*((AMAX(COSX,0.01))@MNO2) * exp(NNO2/AMAX(COSX,0.01))) ),1.)) )]
+PHTFKT_CS= FUNCTION[(%1)*((AMAX(COSX,0.01))@(%2))*EXP((%3)/AMAX(COSX,0.01))]
+J1_cs = PHTFKT_CS(6.073D-05,1.743,-0.474)
+J4_cs = PHTFKT_CS(1.165D-02,0.244,-0.267)
+;#include j_clear_sky.incl
+WVC2RH =FUNCTION[%1*100./(exp(21.36469-5339.66/T)/P*M)]
+RH = WVC2RH(H2O)
+;#include anorg.fac.dil.mech ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+CO + DIL -->
+CO2 + DIL -->
+H2 + DIL -->
+H2O + DIL -->
+H2O2 + DIL -->
+HNO3 + DIL -->
+HO2 + DIL -->
+HO2NO2 + DIL -->
+HONO + DIL -->
+HSO3 + DIL -->
+N2O5 + DIL -->
+NO + DIL -->
+NO2 + DIL -->
+NO3 + DIL -->
+O + DIL -->
+O1D + DIL -->
+O3 + DIL -->
+OH + DIL -->
+SO2 + DIL -->
+SO3 + DIL -->
+;#include anorg.fac.dil.mech
+;#include anorg.fac.dil.rate ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+k[CO + DIL --> ] = CONST(DILUTE)
+k[CO2 + DIL --> ] = CONST(DILUTE)
+k[H2 + DIL --> ] = CONST(DILUTE)
+k[H2O + DIL --> ] = CONST(DILUTE)
+k[H2O2 + DIL --> ] = CONST(DILUTE)
+k[HNO3 + DIL --> ] = CONST(DILUTE)
+k[HO2 + DIL --> ] = CONST(DILUTE)
+k[HO2NO2 + DIL --> ] = CONST(DILUTE)
+k[HONO + DIL --> ] = CONST(DILUTE)
+k[HSO3 + DIL --> ] = CONST(DILUTE)
+k[N2O5 + DIL --> ] = CONST(DILUTE)
+k[NO + DIL --> ] = CONST(DILUTE)
+k[NO2 + DIL --> ] = CONST(DILUTE)
+k[NO3 + DIL --> ] = CONST(DILUTE)
+k[O + DIL --> ] = CONST(DILUTE)
+k[O1D + DIL --> ] = CONST(DILUTE)
+k[O3 + DIL --> ] = CONST(DILUTE)
+k[OH + DIL --> ] = CONST(DILUTE)
+k[SO2 + DIL --> ] = CONST(DILUTE)
+k[SO3 + DIL --> ] = CONST(DILUTE)
+;#include anorg.fac.dil.rate
+DILUTE = CONST((FLOW+0.010*60)/(276.*3600.))
+FLOW = CONST(6.)
+DIL = input(DIL)
+;#include saphir.jmeasured_02.incl ! E:/Python Code/JUICE archive/EASY/include files/anorg/
+AMAX =FUNCTION[AMAX(%1,%2)]
+AMIN =FUNCTION[AMIN(%1,%2)]
+ARRH=FUNCTION[(%1)*exp((%2)/T)]
+PHOTMMSC= FUNCTION[((%1)* ((AMAX(COSX,0.01))@(%2))*EXP((%3)/AMAX(COSX,0.01)))* (AMIN(((%7) / ((%4)*((AMAX(COSX,0.01))@(%5)) * exp((%6)/AMAX(COSX,0.01))) ),1.))]
+PHTFKT = FUNCTION[((%1)* ((AMAX(COSX,0.01))@(%2))*EXP((%3)/AMAX(COSX,0.01)))* (AMIN((jno2 / (LNO2*((AMAX(COSX,0.01))@MNO2) * exp(NNO2/AMAX(COSX,0.01))) ),1.))]
+hv + NO2 -/-> O + NO
+NO2 + hv --> O3 + NO
+HV + O3 -/-> O
+NO3 + hv -/-> NO2 + O
+NO3 + hv--> NO2 + O3
+HNO3 + hv --> OH + NO2
+k[NO3+hv-->NO] = PHOTMMSC(2.485e-2,0.168,0.108,1.165e-2,0.244,0.267,jno2)
+k[NO3+hv-->NO2+O3] = PHOTMMSC(1.747e-1,0.155,0.125,1.165e-2,0.244,0.267,jno2)
+k[HNO3+hv-->OH+NO2] = PHOTMMSC(9.312e-7,1.230,0.307,1.165e-2,0.244,0.267,jno2)
+k[CH3CHO + hv --> CH3O2 + CO + HO2 ] = PHOTMMSC(7.344e-6,1.202,0.417,1.165e-2,0.244,0.267,jno2)
+k[NO3CH2CHO + hv --> NO2+HCOCH2O] = PHOTMMSC(1.87695e-4, 4.6827, 1.3889,1.165e-2,0.244,0.267,jno2)
+;#include saphir.jmeasured_02.incl
+k[NO2 + hv --> O3 + NO] = CONST( jno2 )
+jno2 = PHTFKT_CS(1.165D-02,0.244,-0.267)
+T = INPUT(t)
+P = CONST(1000)
+SZA = CONST(30)
+SZ = CONST(30)
+HV = INPUT(hv)
+FLOW = CONST(10)
+FILES[ENZ] = scene_03.enz
+FACS[HMAX] = 10
+FACS[OUTSTEP]= 10
+INITIAL[*] = CONST(0)
+INITIAL[NO2] = CONST(M*1e-9*10)
+INITIAL[CO] = CONST(M*1e-9*2500)
+INITIAL[H2O] = CONST(M*1e-2*1)
+NO+O3-/->NO2
+O3+NO-->NO2

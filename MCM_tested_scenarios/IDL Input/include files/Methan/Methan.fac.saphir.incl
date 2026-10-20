@@ -1,0 +1,39 @@
+  
+; This is a include file for a EASY-Input File written by mcm331cv.pro
+; with input file O:\2023\23-07-14\EASY\Mechanismen\Methan\Methan.fac at Tue Aug 08 16:48:47 2023
+; Comments and references can be found in mcmex331.incl
+
+; Funktionen:
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]
+T =CONST(273.2)
+P =CONST(1013.)
+M =DENSITY(P,T)
+O2=CONST(0.20946*M)
+N2=CONST(0.78084*M)
+
+; Aliasse:
+ALIAS[HV]     = hv
+ALIAS[OH]     = HO
+ALIAS[HCHO]   = H2CO CH2O
+ALIAS[O]      = O3P
+ALIAS[CH3OOH] = CH3O2H MOOH
+ALIAS[HONO]   = HNO2
+ALIAS[HNO3]   = HONO2
+ALIAS[HNO4]   = HO2NO2
+
+;Photolysis:
+HV=CONST(1.)
+SZA=CONST(45.) ; Sonnen Zenit Winkel
+PHTFKT  = FUNCTION[( (%1)*((COS(AMIN(SZA,89.9)*0.0174533))@(%2))*EXP((%3)*1./COS(AMIN(SZA,89.9)*0.0174533)))]
+
+KMT13   = COMPRC( 2.50D-30*M*(T/300)@(-5.5), 1.80D-11, 0.36 )
+KMT14   = COMPRC( 9.00D-05*M*EXP(-9690/T), 1.10D+16*EXP(-10560/T), 0.36)
+KCH3O2 = CONST(1.03D-13*EXP(365/T))
+J1 = PHTFKT(6.073D-05,1.743,-0.474)
+J4 = PHTFKT(1.165D-02,0.244,-0.267)
+J5 = PHTFKT(2.485D-02,0.168,-0.108)
+J11 = PHTFKT(4.642D-05,0.762,-0.353)
+J12 = PHTFKT(6.853D-05,0.477,-0.323)
+J41 = PHTFKT(7.649D-06,0.682,-0.279)
+J51 = PHTFKT(1.588D-06,1.154,-0.318)

@@ -84,3 +84,24 @@ MCM_tested_scenarios/JUICE archive/
 # Local logs / scratch
 *.log
 /tmp/
+
+# Personal/lecture work — never committed, local-only scratch
+lecture/
+
+# Test-scenario folders: keep inputs (.easy/.enz/.fac/.elog/.json/include files) and
+# the FACSIMILE .cs references; large derived outputs stay local (GitHub 100 MB limit)
+MCM_tested_scenarios/IDL Input/**/*.kv
+MCM_tested_scenarios/IDL Input/**/*.pd
+MCM_tested_scenarios/IDL Input/**/*.ps
+MCM_tested_scenarios/IDL Input/**/*.sav
+MCM_tested_scenarios/IDL Input/**/*.hd
+MCM_tested_scenarios/IDL Input/**/*.html
+MCM_tested_scenarios/IDL Input/**/*.out
+MCM_tested_scenarios/IDL Input/**/*.npz
+MCM_tested_scenarios/IDL Input/**/*.png
+MCM_tested_scenarios/IDL Input/**/*.svg
+MCM_tested_scenarios/IDL Input/**/*.log
+MCM_tested_scenarios/IDL Input/**/*_juice.*
+MCM_tested_scenarios/IDL Input/**/*_reactions.csv
+MCM_tested_scenarios/IDL Input/**/flowchart*
+MCM_tested_scenarios/IDL Input/**/* - Kopie.*

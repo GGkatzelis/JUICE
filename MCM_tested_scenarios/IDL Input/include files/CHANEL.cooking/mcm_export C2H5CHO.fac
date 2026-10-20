@@ -1,0 +1,207 @@
+***************************************************************************** ;
+*       Citation
+*       
+*       A citation to
+*  the MCM website and the relevant mechanism construction
+*  protocols should be given in any publication using
+*  information obtained from this source, using the following
+*  or comparable wording:
+*       
+* The chemical mechanistic
+*  information was taken from the Master Chemical Mechanism,
+*  MCM v3.3.1 (reference), via  website:
+*  http://mcm.york.ac.uk/
+* 
+* The reference should be: 
+* 
+* 
+*  For non-aromatic schemes:
+*    
+*       Jenkin et al.,
+*  Atmos. Environ., 31, 81, 1997
+*  [doi:10.1016/S1352-2310(96)00105-7]
+*       Saunders et
+*  al., Atmos. Chem. Phys., 3, 161, 2003
+*  [doi:10.5194/acp-3-161-2003]
+*    
+*    For aromatic
+*  schemes:
+*    
+*       Jenkin et al., Atmos. Chem. Phys.,
+*  3, 181, 2003 [doi:10.5194/acp-3-181-2003]
+*       Bloss et
+*  al., Atmos. Chem. Phys., 5, 641, 2005
+*  [doi:10.5194/acp-5-641-2005]
+*    
+*    For the
+*  β-caryophyllene scheme:
+*    
+*       Jenkin et al.,
+*  Atmos. Chem. Phys.,  12, 5275, 2012
+*  [doi:10.5194/acp-12-5275-2012]
+*    
+*    For the isoprene
+*  scheme:
+*    
+*       Jenkin et al., Atmos. Chem. Phys.,
+*  15, 11433-11459, 2015 [doi:10.5194/acp-15-11433-2015]
+***************************************************************************** ;
+***************************************************************************** ;
+* C2H5CHO ;
+*;
+* Variable definitions. All species are listed here.;
+*;
+VARIABLE
+ CH3O CH3O2 NO NO2 CH3NO3 HCHO HO2 CH3O2NO2 NO3 CH3OOH CH3OH OH
+C2H5O C2H5O2 C2H5NO3 CH3CHO C2H5OOH C2H5OH HOCH2CH2O HOCH2CH2O2
+ETHOHNO3 HOCH2CHO HYETHO2H ETHGLY HOCH2CO3 GLYOX CO HNO3 PHAN
+HOCH2CO3H HOCH2CO2H O3 HCOCH2O2 H2 HCOCO HCOCO3 HCOCO3H HCOCO2H
+CH3CO3 PAN CH3CO3H CH3CO2H C2H5CHO C2H5CO3 PPN PERPROACID PROPACID
+HCOCH2O HCOCH2OOH;
+***************************************************************************** ;
+***************************************************************************** ;
+* Peroxy radicals. ;
+*;
+***************************************************************************** ;
+*;
+RO2 = CH3O2 + C2H5O2 + HOCH2CH2O2 + HOCH2CO3 + HCOCH2O2 + HCOCO3 +
+      CH3CO3 + C2H5CO3;
+*;
+* Reaction definitions. ;
+*;
+% 2.3D-12*EXP(360/TEMP)*0.999 : CH3O2 + NO = CH3O + NO2 ;
+% 2.3D-12*EXP(360/TEMP)*0.001 : CH3O2 + NO = CH3NO3 ;
+% 7.2D-14*EXP(-1080/TEMP)*O2 : CH3O = HCHO + HO2 ;
+% KMT13 : CH3O2 + NO2 = CH3O2NO2 ;
+% KMT14 : CH3O2NO2 = CH3O2 + NO2 ;
+% 1.2D-12 : CH3O2 + NO3 = CH3O + NO2 ;
+% 3.8D-13*EXP(780/TEMP)*(1-1/(1+498*EXP(-1160/TEMP))) : CH3O2 + HO2 = CH3OOH ;
+% 2*KCH3O2*RO2*7.18*EXP(-885/TEMP) : CH3O2 = CH3O ;
+% 2*KCH3O2*RO2*0.5*(1-7.18*EXP(-885/TEMP)) : CH3O2 = HCHO ;
+% 2*KCH3O2*RO2*0.5*(1-7.18*EXP(-885/TEMP)) : CH3O2 = CH3OH ;
+% 4.0D-13*EXP(-845/TEMP) : CH3NO3 + OH = HCHO + NO2 ;
+% J<51> : CH3NO3 = CH3O + NO2 ;
+% 5.3D-12*EXP(190/TEMP)*0.6 : CH3OOH + OH = CH3O2 ;
+% 5.3D-12*EXP(190/TEMP)*0.4 : CH3OOH + OH = HCHO + OH ;
+% J<41> : CH3OOH = CH3O + OH ;
+% 2.55D-12*EXP(380/TEMP)*0.991 : C2H5O2 + NO = C2H5O + NO2 ;
+% 2.55D-12*EXP(380/TEMP)*0.009 : C2H5O2 + NO = C2H5NO3 ;
+% 2.4D-14*EXP(-325/TEMP)*O2 : C2H5O = CH3CHO + HO2 ;
+% KRO2NO3 : C2H5O2 + NO3 = C2H5O + NO2 ;
+% 4.3D-13*EXP(870/TEMP) : C2H5O2 + HO2 = C2H5OOH ;
+% 2*(KCH3O2*6.4D-14)@(0.5)*RO2*0.6 : C2H5O2 = C2H5O ;
+% 2*(KCH3O2*6.4D-14)@(0.5)*RO2*0.2 : C2H5O2 = CH3CHO ;
+% 2*(KCH3O2*6.4D-14)@(0.5)*RO2*0.2 : C2H5O2 = C2H5OH ;
+% 6.7D-13*EXP(-395/TEMP) : C2H5NO3 + OH = CH3CHO + NO2 ;
+% J<52> : C2H5NO3 = C2H5O + NO2 ;
+% 1.90D-12*EXP(190/TEMP) : C2H5OOH + OH = C2H5O2 ;
+% 8.01D-12 : C2H5OOH + OH = CH3CHO + OH ;
+% J<41> : C2H5OOH = C2H5O + OH ;
+% KRO2NO*0.995 : HOCH2CH2O2 + NO = HOCH2CH2O + NO2 ;
+% KRO2NO*0.005 : HOCH2CH2O2 + NO = ETHOHNO3 ;
+% 9.50D+13*EXP(-5988/TEMP) : HOCH2CH2O = HCHO + HCHO + HO2 ;
+% KROPRIM*O2 : HOCH2CH2O = HO2 + HOCH2CHO ;
+% KRO2NO3 : HOCH2CH2O2 + NO3 = HOCH2CH2O + NO2 ;
+% 1.53D-13*EXP(1300/TEMP) : HO2 + HOCH2CH2O2 = HYETHO2H ;
+% 2*(KCH3O2*7.8D-14*EXP(1000/TEMP))@(0.5)*RO2*0.6 : HOCH2CH2O2 = HOCH2CH2O ;
+% 2*(KCH3O2*7.8D-14*EXP(1000/TEMP))@(0.5)*RO2*0.2 : HOCH2CH2O2 = ETHGLY ;
+% 2*(KCH3O2*7.8D-14*EXP(1000/TEMP))@(0.5)*RO2*0.2 : HOCH2CH2O2 = HOCH2CHO ;
+% 8.40D-13 : ETHOHNO3 + OH = HOCH2CHO + NO2 ;
+% J<41> : HYETHO2H = HOCH2CH2O + OH ;
+% 1.90D-12*EXP(190/TEMP) : HYETHO2H + OH = HOCH2CH2O2 ;
+% 1.38D-11 : HYETHO2H + OH = HOCH2CHO + OH ;
+% 1.00D-11*0.800 : HOCH2CHO + OH = HOCH2CO3 ;
+% 1.00D-11*0.200 : HOCH2CHO + OH = GLYOX + HO2 ;
+% J<15> : HOCH2CHO = CO + HCHO + HO2 + HO2 ;
+% KNO3AL : HOCH2CHO + NO3 = HNO3 + HOCH2CO3 ;
+% KFPAN : HOCH2CO3 + NO2 = PHAN ;
+% KBPAN : PHAN = HOCH2CO3 + NO2 ;
+% KAPNO : HOCH2CO3 + NO = HCHO + HO2 + NO2 ;
+% KRO2NO3*1.74 : HOCH2CO3 + NO3 = HCHO + HO2 + NO2 ;
+% KAPHO2*0.41 : HO2 + HOCH2CO3 = HOCH2CO3H ;
+% KAPHO2*0.15 : HO2 + HOCH2CO3 = HOCH2CO2H + O3 ;
+% 1.00D-11*0.7*RO2 : HOCH2CO3 = HCHO + HO2 ;
+% 1.00D-11*0.3*RO2 : HOCH2CO3 = HOCH2CO2H ;
+% 2.73D-12 : HOCH2CO2H + OH = HCHO + HO2 ;
+% J<41> : HOCH2CO3H = HCHO + HO2 + OH ;
+% 6.19D-12 : HOCH2CO3H + OH = HOCH2CO3 ;
+% 3.8D-13*EXP(780/TEMP)*(1/(1+498*EXP(-1160/TEMP))) : CH3O2 + HO2 = HCHO ;
+% 4.7D-12*EXP(345/TEMP)*0.05 : CH3CHO + OH = HCOCH2O2 ;
+% 3.0D-12*EXP(20/TEMP)*0.05 : C2H5OH + OH = C2H5O ;
+% J<31> : GLYOX = CO + CO + H2 ;
+% J<32> : GLYOX = CO + HCHO ;
+% J<33> : GLYOX = CO + CO + HO2 + HO2 ;
+% 3.1D-12*EXP(340/TEMP) : GLYOX + OH = HCOCO ;
+% KNO3AL : GLYOX + NO3 = HCOCO + HNO3 ;
+% KAPNO : HCOCO3 + NO = CO + HO2 + NO2 ;
+% KFPAN : HCOCO3 + NO2 = CO + HO2 + NO3 ;
+% KRO2NO3*1.74 : HCOCO3 + NO3 = CO + HO2 + NO2 ;
+% KAPHO2*0.41 : HCOCO3 + HO2 = HCOCO3H ;
+% KAPHO2*0.15 : HCOCO3 + HO2 = HCOCO2H + O3 ;
+% 1.00D-11*0.7*RO2 : HCOCO3 = CO + HO2 ;
+% 1.00D-11*0.3*RO2 : HCOCO3 = HCOCO2H ;
+% 1.58D-11 : HCOCO3H + OH = HCOCO3 ;
+% J<41> : HCOCO3H = CO + HO2 + OH ;
+% J<15> : HCOCO3H = CO + HO2 + OH ;
+% 1.23D-11 : HCOCO2H + OH = CO + HO2 ;
+% 5.4D-12*EXP(135/TEMP) : HCHO + OH = CO + HO2 ;
+% J<11> : HCHO = CO + HO2 + HO2 ;
+% J<12> : HCHO = CO + H2 ;
+% 5.5D-16 : HCHO + NO3 = CO + HNO3 + HO2 ;
+% 4.7D-12*EXP(345/TEMP)*0.95 : CH3CHO + OH = CH3CO3 ;
+% 1.4D-12*EXP(-1860/TEMP) : CH3CHO + NO3 = CH3CO3 + HNO3 ;
+% 7.5D-12*EXP(290/TEMP) : CH3CO3 + NO = CH3O2 + NO2 ;
+% KFPAN : CH3CO3 + NO2 = PAN ;
+% KBPAN : PAN = CH3CO3 + NO2 ;
+% 4.0D-12 : CH3CO3 + NO3 = CH3O2 + NO2 ;
+% KAPHO2*0.41 : CH3CO3 + HO2 = CH3CO3H ;
+% KAPHO2*0.15 : CH3CO3 + HO2 = CH3CO2H + O3 ;
+% 1.00D-11*0.7*RO2 : CH3CO3 = CH3O2 ;
+% 1.00D-11*0.3*RO2 : CH3CO3 = CH3CO2H ;
+% 3D-14 : OH + PAN = CO + HCHO + NO2 ;
+% J<41> : CH3CO3H = CH3O2 + OH ;
+% 3.70D-12 : CH3CO3H + OH = CH3CO3 ;
+% J<13> : CH3CHO = CH3O2 + CO + HO2 ;
+% 4.9D-12*EXP(405/TEMP) : C2H5CHO + OH = C2H5CO3 ;
+% 3.24D-12*EXP(-1860/TEMP) : C2H5CHO + NO3 = C2H5CO3 + HNO3 ;
+% 6.7D-12*EXP(340/TEMP) : C2H5CO3 + NO = C2H5O2 + NO2 ;
+% KFPAN : C2H5CO3 + NO2 = PPN ;
+% KBPPN : PPN = C2H5CO3 + NO2 ;
+% KRO2NO3*1.74 : C2H5CO3 + NO3 = C2H5O2 + NO2 ;
+% KAPHO2*0.41 : C2H5CO3 + HO2 = PERPROACID ;
+% KAPHO2*0.15 : C2H5CO3 + HO2 = O3 + PROPACID ;
+% 1.00D-11*0.7*RO2 : C2H5CO3 = C2H5O2 ;
+% 1.00D-11*0.3*RO2 : C2H5CO3 = PROPACID ;
+% 1.27D-12 : OH + PPN = CH3CHO + CO + NO2 ;
+% J<41> : PERPROACID = C2H5O2 + OH ;
+% 4.42D-12 : OH + PERPROACID = C2H5CO3 ;
+% J<14> : C2H5CHO = C2H5O2 + CO + HO2 ;
+% KRO2NO : HCOCH2O2 + NO = HCOCH2O + NO2 ;
+% KDEC : HCOCH2O = CO + HCHO + HO2 ;
+% KRO2NO3 : HCOCH2O2 + NO3 = HCOCH2O + NO2 ;
+% KRO2HO2*0.387 : HCOCH2O2 + HO2 = HCOCH2OOH ;
+% 2.00D-12*0.6*RO2 : HCOCH2O2 = HCOCH2O ;
+% 2.00D-12*0.2*RO2 : HCOCH2O2 = GLYOX ;
+% 2.00D-12*0.2*RO2 : HCOCH2O2 = HOCH2CHO ;
+% J<41> : HCOCH2OOH = HCOCH2O + OH ;
+% J<15> : HCOCH2OOH = CO + HCHO + HO2 + OH ;
+% 1.90D-12*EXP(190/TEMP) : HCOCH2OOH + OH = HCOCH2O2 ;
+% 2.91D-11 : HCOCH2OOH + OH = GLYOX + OH ;
+% 2.85D-12*EXP(-345/TEMP) : CH3OH + OH = HCHO + HO2 ;
+% 3.0D-12*EXP(20/TEMP)*0.9 : C2H5OH + OH = CH3CHO + HO2 ;
+% 3.0D-12*EXP(20/TEMP)*0.05 : C2H5OH + OH = HOCH2CH2O2 ;
+% 1.45D-11 : ETHGLY + OH = HO2 + HOCH2CHO ;
+% 8.00D-13 : CH3CO2H + OH = CH3O2 ;
+% 1.2D-12 : OH + PROPACID = C2H5O2 ;
+% J<34> : HCOCO2H = CO + HO2 + HO2 ;
+% 1.12D-12 : OH + PHAN = CO + HCHO + NO2 ;
+% KAPHO2*0.44 : C2H5CO3 + HO2 = C2H5O2 + OH ;
+% KAPHO2*0.44 : CH3CO3 + HO2 = CH3O2 + OH ;
+% KAPHO2*0.44 : HCOCO3 + HO2 = CO + HO2 + OH ;
+% KAPHO2*0.44 : HO2 + HOCH2CO3 = HCHO + HO2 + OH ;
+% 7.00D11*EXP(-3160/TEMP) : HCOCO = CO + CO + HO2 ;
+% 5.00D-12*O2 : HCOCO = CO + CO + HO2 ;
+% 5.00D-12*O2*3.2*EXP(-550/TEMP) : HCOCO = HCOCO3 ;
+% 5.00D-12*O2*3.2*(1-EXP(-550/TEMP)) : HCOCO = CO + OH ;
+*;
+* End of Subset. No. of Species = 49, No. of Reactions = 134 ;

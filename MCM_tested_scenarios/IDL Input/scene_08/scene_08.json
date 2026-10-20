@@ -1,0 +1,75 @@
+{
+    "folder": "C:/Users/g.gkatzelis/Desktop/My Folders/My Coding/Python/GitHub/MCM_SAPHIR_Tool/MCM_tested_scenarios/IDL Input/scene_08",
+    "chamber_vol": 276.0,
+    "env_map": {
+        "TEMP": {
+            "type": "SAPHIR File",
+            "value": "t"
+        },
+        "PRESS": {
+            "type": "Fixed Constant",
+            "value": "1006.5"
+        },
+        "JNO2": {
+            "type": "SAPHIR File",
+            "value": "jNO2"
+        },
+        "JO1D": {
+            "type": "SAPHIR File",
+            "value": "jO1D"
+        },
+        "FLOW": {
+            "type": "SAPHIR File",
+            "value": "dilute"
+        },
+        "H2O": {
+            "type": "SAPHIR File",
+            "value": "H2O"
+        },
+        "HV": {
+            "type": "SAPHIR File",
+            "value": "hv"
+        },
+        "SZ": {
+            "type": "SAPHIR File",
+            "value": "sz"
+        }
+    },
+    "continuous_sources": [],
+    "burst_injections": [],
+    "excluded_reactions": [],
+    "blocked_parameters": [],
+    "h2o_injection_impurities": [],
+    "outstep": 100000.0,
+    "hmax": 30.0,
+    "enz_path": "C:\\Users\\g.gkatzelis\\Desktop\\My Folders\\My Coding\\Python\\GitHub\\MCM_SAPHIR_Tool\\MCM_tested_scenarios\\IDL Input\\scene_08\\scene_08.enz",
+    "elog_path": "C:/Users/g.gkatzelis/Desktop/My Folders/My Coding/Python/GitHub/MCM_SAPHIR_Tool/MCM_tested_scenarios/IDL Input/scene_08\\scene_08_juice.canonical.elog",
+    "interpolation": "piecewise",
+    "rtol": 1e-06,
+    "export_kv_pd": true,
+    "perstep_snap": true,
+    "ode_backend": "numba",
+    "solver_method": "Radau",
+    "jac_mode": "sparse",
+    "first_step": 1e-06,
+    "mechanism_files": [],
+    "j_scalings": {},
+    "artifacts": {
+        "active": true,
+        "scale": "1.0",
+        "hono_active": false,
+        "hono_eqn": "",
+        "hcho_active": false,
+        "hcho_eqn": "",
+        "no2_active": false,
+        "no2_eqn": "",
+        "y_active": true,
+        "y_eqn": "50",
+        "wall_active": false,
+        "dark_hono": ""
+    },
+    "initials": {},
+    "custom_reactions": [],
+    "chamber_source_reactions": [],
+    "injection_reactions": []
+}
