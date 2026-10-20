@@ -1,0 +1,22 @@
+{
+ "title": "Blank SAPHIR experiment",
+ "description": "All SAPHIR chamber effects with the standard defaults, no injections, roof closed. Start here for anything unusual.",
+ "spec": {
+  "conditions": {
+   "j_source": "clear_sky",
+   "roof_open": []
+  },
+  "chamber": {
+   "walldep": true,
+   "hono": true,
+   "hono_const": "2.6*0.7",
+   "hcho": true,
+   "bgreac": true,
+   "y_ppb": "250",
+   "dilution": true,
+   "dark_hono": true,
+   "light_source": false
+  },
+  "injections": []
+ }
+}

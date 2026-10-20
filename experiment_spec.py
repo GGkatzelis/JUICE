@@ -399,6 +399,132 @@ def write_experiment(spec: ExperimentSpec, out_dir: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Serialisation, templates, validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def spec_to_dict(spec: ExperimentSpec) -> dict:
+    return asdict(spec)
+
+
+def spec_from_dict(d: dict) -> ExperimentSpec:
+    d = dict(d)
+    cond = Conditions(**{k: v for k, v in d.pop("conditions", {}).items() if k in Conditions.__dataclass_fields__})
+    cond.roof_open = [tuple(x) for x in cond.roof_open]
+    ch = ChamberEffects(**{k: v for k, v in d.pop("chamber", {}).items() if k in ChamberEffects.__dataclass_fields__})
+    inj = []
+    for e in d.pop("injections", []):
+        e = {k: v for k, v in e.items() if k in InjectionEvent.__dataclass_fields__}
+        e["extra_channels"] = [tuple(x) for x in e.get("extra_channels", [])]
+        e["chain"] = [tuple(x) for x in e.get("chain", [])]
+        inj.append(InjectionEvent(**e))
+    spec = ExperimentSpec(**{k: v for k, v in d.items() if k in ExperimentSpec.__dataclass_fields__})
+    spec.conditions, spec.chamber, spec.injections = cond, ch, inj
+    spec.initials = [tuple(x) for x in spec.initials]
+    return spec
+
+
+def save_spec(spec: ExperimentSpec, path: str) -> str:
+    import json
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(spec_to_dict(spec), fh, indent=1, ensure_ascii=False)
+    return path
+
+
+def load_spec(path: str) -> ExperimentSpec:
+    import json
+    with open(path, encoding="utf-8") as fh:
+        return spec_from_dict(json.load(fh))
+
+
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+
+
+def list_templates() -> Dict[str, str]:
+    """name → path of the experiment templates (templates/*.experiment.json)."""
+    out = {}
+    if os.path.isdir(TEMPLATE_DIR):
+        for f in sorted(os.listdir(TEMPLATE_DIR)):
+            if f.endswith(".experiment.json"):
+                out[f[:-len(".experiment.json")]] = os.path.join(TEMPLATE_DIR, f)
+    return out
+
+
+def load_template(path: str) -> Tuple[str, str, ExperimentSpec]:
+    """Return (title, description, spec) of a templates/*.experiment.json file.
+    The template holds a partial spec; missing fields take the dataclass defaults."""
+    import json
+    with open(path, encoding="utf-8") as fh:
+        d = json.load(fh)
+    spec = spec_from_dict(d.get("spec", {}))
+    spec.template = os.path.basename(path)[:-len(".experiment.json")]
+    return d.get("title", spec.template), d.get("description", ""), spec
+
+
+def mechanism_species(include_dir: str, stem: str) -> set:
+    """Species names appearing in the mechanism files of <stem> (its .mech and
+    .dil.mech) plus the inorganic anorg*.mech files and the standard chamber
+    species; uppercase.  Used for validation warnings only."""
+    names = {"XNOY", "NA", "SHONO", "SHCHO", "QSHCHO", "Y", "QY", "SNO2", "H2O", "HV", "DIL", "O2", "N2", "M"}
+    if not include_dir or not stem:
+        return names
+    wanted = {f"{stem}.mech".lower(), f"{stem}.dil.mech".lower()}
+    for root, _d, files in os.walk(include_dir):
+        for f in files:
+            fl = f.lower()
+            if fl in wanted or (fl.startswith("anorg") and fl.endswith(".mech")):
+                for line in open(os.path.join(root, f), encoding="latin-1"):
+                    code = line.split(";", 1)[0]
+                    if "-->" in code:
+                        for tok in re.findall(r"[A-Za-z][A-Za-z0-9_]*", code.replace("-->", "+")):
+                            names.add(tok.upper())
+    return names
+
+
+def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[Tuple[str, str]]:
+    """Return (level, message) items; level is 'error' or 'warning'."""
+    msgs: List[Tuple[str, str]] = []
+    c = spec.conditions
+    try:
+        grid = time_grid(c)
+        if len(grid) < 2:
+            msgs.append(("error", "Time window is empty — check start and end time."))
+    except Exception as e:
+        msgs.append(("error", f"Date or time is not valid: {e}"))
+    if not spec.mechanism_stem and not spec.precursors:
+        msgs.append(("error", "No chemistry: choose compounds or an existing mechanism."))
+    if c.j_source == "measured" and c.source != "archive":
+        msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
+                                "(no photolysis). Use 'clear sky' or provide archive data."))
+    if not c.roof_open:
+        msgs.append(("warning", "Roof never opens (HV = 0 all day): dark experiment."))
+    seen_cols = set()
+    for inj in spec.injections:
+        col = inj.enz_column()
+        if inj.start:
+            try:
+                _hhmm_s(inj.start)
+            except Exception:
+                msgs.append(("error", f"Injection '{inj.name}': start time '{inj.start}' is not HH:MM."))
+        if inj.products:
+            try:
+                float(eval(str(inj.total_ppb), {"__builtins__": {}}, {}))
+            except Exception:
+                msgs.append(("warning", f"Injection '{inj.name}': amount '{inj.total_ppb}' is an expression, "
+                                        "it will be written verbatim."))
+            if known_species:
+                for term in inj.products.replace(" ", "").split("+"):
+                    sp = re.sub(r"^[0-9.eE+\-]*\*", "", term).upper()
+                    if sp and sp not in known_species:
+                        msgs.append(("warning", f"Injection '{inj.name}': product '{sp}' is not a species of the mechanism."))
+        elif not inj.start:
+            msgs.append(("warning", f"Injection '{inj.name}': neither modelled nor timed — it has no effect."))
+        seen_cols.add(col)
+    if not spec.injections:
+        msgs.append(("warning", "No injections defined."))
+    return msgs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Golden specs: scene_05 (ethanol) and scene_09 (CHANEL)
 # ─────────────────────────────────────────────────────────────────────────────
 

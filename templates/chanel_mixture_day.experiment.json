@@ -1,0 +1,98 @@
+{
+ "title": "CHANEL mixture day (VCP / gasoline / cooking / biogenic)",
+ "description": "Emission mixtures as used in the CHANEL campaign (2024), compositions as mole fractions of MCM surrogates. Amounts are the totals per injection in ppb.",
+ "spec": {
+  "conditions": {
+   "j_source": "measured",
+   "roof_open": [
+    [
+     "09:33",
+     "18:37"
+    ]
+   ]
+  },
+  "chamber": {
+   "walldep": true,
+   "hono": true,
+   "hono_const": "2.6*0.7",
+   "hcho": true,
+   "bgreac": true,
+   "y_ppb": "250",
+   "dilution": true,
+   "dark_hono": true,
+   "light_source": true
+  },
+  "injections": [
+   {
+    "name": "H2O",
+    "products": "HONO+XNOy",
+    "total_ppb": "0.002",
+    "start": "05:26",
+    "duration_min": 45,
+    "extra_channels": [
+     [
+      "CO",
+      "0.5"
+     ],
+     [
+      "NO2+XNOy",
+      "0.00"
+     ],
+     [
+      "NO+XNOy",
+      "0.000"
+     ]
+    ]
+   },
+   {
+    "name": "VCP2",
+    "column": "qVCP2",
+    "switch": "qVCP2",
+    "start": "08:02",
+    "duration_min": 2,
+    "total_ppb": "117.813",
+    "products": "0.016042*LIMONENE+0.107333*PROPGLY+0.002273*APINENE+0.002273*BPINENE+0.469732*C2H5OH+0.027435*ETHGLY+0.067800*NC12H26+0.209843*IPROPOL+0.026511*TOLUENE+0.035807*MXYL+0.003172*BOX2PROL+0.008793*DIIPRETHER+0.004353*BUOX2ETOH"
+   },
+   {
+    "name": "gasoline",
+    "column": "qGASOLINE",
+    "switch": "Q_gasoline",
+    "start": "07:55",
+    "duration_min": 2,
+    "total_ppb": "14.5878",
+    "products": "0.092669*CH3CHO+0.060555*BENZENE+0.242439*C2H5OH+0.146659*NC12H26+0.089599*TOLUENE+0.044085*PXYL+0.032659*OXYL+0.067681*MXYL+0.021637*TM124B+0.009209*CPENT2ENE+0.192807*IC5H12"
+   },
+   {
+    "name": "biogenic",
+    "column": "qBIOGENIC",
+    "switch": "Q_biogenic",
+    "start": "07:56",
+    "duration_min": 2,
+    "total_ppb": "24.2329",
+    "products": "0.201060*C5H8+0.205849*APINENE+0.065903*BPINENE+0.125067*LIMONENE+0.125067*X_limonene"
+   },
+   {
+    "name": "cooking",
+    "column": "qCOOKING",
+    "switch": "Q_cooking",
+    "start": "07:59",
+    "duration_min": 2,
+    "total_ppb": "31.9793",
+    "products": "0.268706*CH3CHO+0.338202*C2H5CHO+0.122994*C4H9CHO+0.257877*C4ALDB+0.012220*LIMONENE+0.012220*X_limonene"
+   },
+   {
+    "name": "O3",
+    "products": "O3",
+    "total_ppb": "52",
+    "start": "09:36",
+    "duration_min": 20
+   }
+  ],
+  "initials": [
+   [
+    "CO",
+    "M*1e-9*14.0"
+   ]
+  ]
+ }
+}

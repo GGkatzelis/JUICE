@@ -1,0 +1,59 @@
+{
+ "title": "Dark ozonolysis",
+ "description": "Roof stays closed; ozone first, then the VOC. Photolytic wall sources are switched off, dark HONO stays on.",
+ "spec": {
+  "conditions": {
+   "j_source": "clear_sky",
+   "roof_open": []
+  },
+  "chamber": {
+   "walldep": true,
+   "hono": false,
+   "hono_const": "2.6*0.7",
+   "hcho": false,
+   "bgreac": true,
+   "y_ppb": "250",
+   "dilution": true,
+   "dark_hono": true,
+   "light_source": false
+  },
+  "injections": [
+   {
+    "name": "H2O",
+    "products": "HONO+XNOy",
+    "total_ppb": "0.002",
+    "start": "05:30",
+    "duration_min": 45,
+    "extra_channels": [
+     [
+      "CO",
+      "0.5"
+     ],
+     [
+      "NO2+XNOy",
+      "0.00"
+     ],
+     [
+      "NO+XNOy",
+      "0.000"
+     ]
+    ]
+   },
+   {
+    "name": "O3",
+    "products": "O3",
+    "total_ppb": "100",
+    "start": "08:00",
+    "duration_min": 20
+   },
+   {
+    "name": "VOC",
+    "products": "",
+    "total_ppb": "20",
+    "start": "09:00",
+    "duration_min": 2,
+    "comment": "set the product to the injected compound (MCM name)"
+   }
+  ]
+ }
+}

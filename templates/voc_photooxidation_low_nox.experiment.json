@@ -1,0 +1,66 @@
+{
+ "title": "VOC photo-oxidation at low NOx",
+ "description": "Humidified chamber, one VOC injected before the roof opens, ozone added at roof opening. The classic SAPHIR daytime oxidation experiment (e.g. scene_06..09).",
+ "spec": {
+  "conditions": {
+   "j_source": "measured",
+   "roof_open": [
+    [
+     "09:30",
+     "18:30"
+    ]
+   ],
+   "h2o_percent": 1.0
+  },
+  "chamber": {
+   "walldep": true,
+   "hono": true,
+   "hono_const": "2.6*0.7",
+   "hcho": true,
+   "bgreac": true,
+   "y_ppb": "250",
+   "dilution": true,
+   "dark_hono": true,
+   "light_source": false
+  },
+  "injections": [
+   {
+    "name": "H2O",
+    "products": "HONO+XNOy",
+    "total_ppb": "0.002",
+    "start": "05:30",
+    "duration_min": 45,
+    "extra_channels": [
+     [
+      "CO",
+      "0.5"
+     ],
+     [
+      "NO2+XNOy",
+      "0.00"
+     ],
+     [
+      "NO+XNOy",
+      "0.000"
+     ]
+    ],
+    "comment": "humidification: impurities carried with the water (SAPHIR defaults)"
+   },
+   {
+    "name": "VOC",
+    "products": "",
+    "total_ppb": "10",
+    "start": "08:00",
+    "duration_min": 2,
+    "comment": "set the product to the injected compound (MCM name) and the total ppb"
+   },
+   {
+    "name": "O3",
+    "products": "O3",
+    "total_ppb": "50",
+    "start": "09:36",
+    "duration_min": 20
+   }
+  ]
+ }
+}
