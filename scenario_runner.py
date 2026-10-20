@@ -98,14 +98,41 @@ def _write_csv(path: str, df: pd.DataFrame, comment: str = "",
             fh.write(f"COLUMN {i}={_col_to_fac_header(col, i, file_type)}\n")
         fh.write(f"NUMBER OF COLUMNS={len(all_cols)}\n")
         fh.write(_FAC_AMP + "\n")
-        for t_i in range(len(idx_vals)):
-            # Time column with full float64 precision (.15E = 16 sig figs) so that
-            # BDF boundary times like 773812899.9999847 are never rounded to the same
-            # value as the exact boundary 773812900.0 (relative diff ~2e-14 needs ≥14 sig figs)
-            row = f'{idx_vals[t_i]:.15E}'
-            for arr in col_arrs:
-                row += f' {arr[t_i]:.6E}'
-            fh.write(row + '\n')
+        # Time column with full float64 precision (.15E = 16 sig figs) so that
+        # BDF boundary times like 773812899.9999847 are never rounded to the same
+        # value as the exact boundary 773812900.0 (relative diff ~2e-14 needs >=14 sig figs).
+        # Formatting is pure Python (no C fast path exists for '%.6E'); large files
+        # (kv: 27 M cells) are formatted in parallel row chunks, byte-identical.
+        data = np.column_stack(col_arrs) if col_arrs else np.empty((len(idx_vals), 0))
+        n_cells = data.size
+        n_workers = max(1, min(8, (os.cpu_count() or 2) - 1))
+        if n_cells >= 3_000_000 and n_workers > 1:
+            from concurrent.futures import ProcessPoolExecutor
+            n_chunks = n_workers * 2
+            bounds = np.linspace(0, len(idx_vals), n_chunks + 1).astype(int)
+            jobs = [(idx_vals[a:b], data[a:b]) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+            try:
+                with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                    chunks = list(ex.map(_format_rows, jobs))
+            except Exception as _e:          # e.g. BrokenProcessPool (frozen/odd main)
+                print(f"  [EXPORT] parallel formatting unavailable ({type(_e).__name__}); serial")
+                chunks = [_format_rows(j) for j in jobs]
+            for chunk in chunks:
+                fh.write(chunk)
+        else:
+            fh.write(_format_rows((idx_vals, data)))
+
+
+def _format_rows(job):
+    """Format (times, 2-D data) into FACSIMILE data lines: time .15E, values .6E."""
+    idx_vals, data = job
+    out = []
+    for t_i in range(len(idx_vals)):
+        row = f'{idx_vals[t_i]:.15E}'
+        for v in data[t_i]:
+            row += f' {v:.6E}'
+        out.append(row)
+    return '\n'.join(out) + ('\n' if out else '')
 
 
 def _juice_header(scenario_stem: str, backend: str = "python") -> str:
@@ -1501,10 +1528,20 @@ class ScenarioRunner:
             _s_snap.update(ctx_s)
             _snap_active.clear()
             _snap_active.update(active_s)
+            if _k_row_cacheable:
+                # ctx_s holds the frozen settings + species at row start; since no
+                # rate expression references a species, the result is row-constant.
+                try:
+                    _compute_rates(ctx_s, _k_row_buf)
+                    np.nan_to_num(_k_row_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                    _k_row_valid[0] = True
+                except Exception:
+                    _k_row_valid[0] = False
 
         # Set of actual ODE species (c-values) — these update from y during ODE;
         # everything else (settings: T, HV, KMT*, J-values, …) stays frozen from snap.
         _species_set_upper = {s.upper() for s in _species_names}
+
 
         # ODE backend — read from scenario JSON (set by GUI dropdown).
         _ode_backend = self.cfg.get('ode_backend', 'python')
@@ -1683,13 +1720,16 @@ class ScenarioRunner:
                 ctx['O1D'] = float(_pss_o1d(ctx))
 
             _t1 = time.perf_counter()
-            try:
-                _compute_rates(ctx, _k_buf)
-            except Exception:
-                for i, rxn in enumerate(self.mechanism.reactions):
-                    try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx)
-                    except: _k_buf[i] = 0.0
-            np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            if _k_row_cacheable and _k_row_valid[0]:
+                np.copyto(_k_buf, _k_row_buf)
+            else:
+                try:
+                    _compute_rates(ctx, _k_buf)
+                except Exception:
+                    for i, rxn in enumerate(self.mechanism.reactions):
+                        try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx)
+                        except: _k_buf[i] = 0.0
+                np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
             _prof['rates'] += time.perf_counter() - _t1
 
             _t1 = time.perf_counter()
@@ -1818,10 +1858,59 @@ class ScenarioRunner:
         #                       10-s output step (2520 restarts). Not what FACSIMILE does.
         _perstep_snap = bool(self.cfg.get('perstep_snap',
                              _solver_toml.get('perstep_snap', False)))
-        print(f"  [SOLVER] mode={'per-ENZ-row' if _perstep_snap else 'continuous'}  "
+        # perstep_warm: True → per-ENZ-row WITHOUT cold restarts.  One scipy BDF
+        #               instance is driven row by row (t_bound moved to the next
+        #               ENZ boundary); the step-size/order history is kept across
+        #               boundaries exactly like GEAR in FACSIMILE.  Settings are
+        #               still frozen per row via _make_snap; the Jacobian is
+        #               refreshed once at every boundary.  Avoids the ~13 LU
+        #               refactorisations per row caused by ramping h from
+        #               first_step on every cold restart.
+        def _tobool(v, default=False):
+            if isinstance(v, bool): return v
+            if v is None: return default
+            return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+        _perstep_warm = _tobool(self.cfg.get('perstep_warm',
+                                _solver_toml.get('perstep_warm', False)))
+        _mode_lbl = ('per-ENZ-row (warm)' if (_perstep_snap and _perstep_warm)
+                     else 'per-ENZ-row' if _perstep_snap else 'continuous')
+        print(f"  [SOLVER] mode={_mode_lbl}  "
               f"solver={solver_method}  jac={_jac_mode}")
 
+        # ── Per-row rate-constant cache (per-ENZ-row modes only) ─────────────────
+        # Inside a row every setting is frozen by the snapshot, so k depends on y
+        # only if a rate expression references an ODE species by name (or a PSS
+        # species such as O1D).  If none does, k is evaluated ONCE per row in
+        # _make_snap and copied into _k_buf on every RHS / Jacobian call.
+        _k_row_dep = (set(_rate_co_names) & _species_set_upper) |                      (set(_rate_co_names) & {s.upper() for s in getattr(self, '_pss_species', set())})
+        _k_row_cacheable = (bool(_perstep_snap) and not _k_row_dep
+                            and _tobool(self.cfg.get('k_row_cache', True), True))
+        _k_row_buf   = np.zeros(len(self.mechanism.reactions))
+        _k_row_valid = [False]
+        if _perstep_snap:
+            print(f"  [SOLVER] per-row k cache: {'ON' if _k_row_cacheable else 'OFF'}"
+                  + (f" (rate expressions depend on {sorted(_k_row_dep)[:6]})" if _k_row_dep else ""))
+
         _atol = float(_solver_toml.get('atol', 1e4))
+        # Newton iteration control for the per-row modes.  scipy's defaults
+        # (newton_tol = max(10*eps/rtol, min(0.03, sqrt(rtol))), 4 iterations)
+        # judge convergence by an RMS norm over all species, which lets trace
+        # species near atol through under-converged once the Jacobian is exact
+        # (verified on scene_05: HCOCO3H 200x off, OH -0.2 %).  1e-6 / 10
+        # reproduces a fully converged reference to <1e-4 at no runtime cost.
+        _newton_tol   = float(_solver_toml.get('newton_tol', 1e-6))
+        _newton_maxit = int(float(_solver_toml.get('newton_maxiter', 10)))
+        import scipy.integrate._ivp.bdf as _bdf_mod
+        from scipy.integrate import BDF as _BDFBase
+        _bdf_mod.NEWTON_MAXITER = _newton_maxit      # module constant in scipy
+
+        class _BDFNewton(_BDFBase):
+            """scipy BDF with a configurable Newton tolerance."""
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                self.newton_tol = _newton_tol
+        if _perstep_snap:
+            print(f"  [SOLVER] Newton: tol={_newton_tol:g}  max_iter={_newton_maxit}")
         # Absolute tolerance floor for species-specific atol (option 2).
         # Per step: atol_i = max(_atol_floor, rtol * y_i).
         # This gives O(rtol) relative accuracy for every species regardless of
@@ -1896,23 +1985,39 @@ class ScenarioRunner:
 
             # 9c. O atom is kept in the ODE state (not PSS) — see note in _build_mechanism.
 
-            # 10. Rate constants via precompiled batch function
-            try:
-                _compute_rates(ctx_j, _k_buf)
-            except Exception:
-                for i, rxn in enumerate(self.mechanism.reactions):
-                    try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx_j)
-                    except: _k_buf[i] = 0.0
-            np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            # 10. Rate constants: per-row cache when available, else batch function
+            if _k_row_cacheable and _k_row_valid[0]:
+                np.copyto(_k_buf, _k_row_buf)
+            else:
+                try:
+                    _compute_rates(ctx_j, _k_buf)
+                except Exception:
+                    for i, rxn in enumerate(self.mechanism.reactions):
+                        try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx_j)
+                        except: _k_buf[i] = 0.0
+                np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
             # 11. Reaction velocities: v[i] = k[i] * prod(y_ode^c) * prod(env^c)
-            np.copyto(_v_buf, _k_buf)
-            for i, rxn in enumerate(self.mechanism.reactions):
-                if _v_buf[i] == 0.0: continue
-                for r in rxn.reactants_parsed:
-                    _v_buf[i] *= y[r['idx']] ** r['coeff']
-                for r in rxn.reactants_env:
-                    env_v = float(ctx_j.get(r['name'], 0.0))
-                    _v_buf[i] *= env_v ** r['coeff']
+            if _use_numba:
+                # Same kernel as the RHS; dydt scratch output is discarded.
+                for _ni, _nn in enumerate(_env_r_unique_names):
+                    _env_vals_buf[_ni] = ctx_j[_nn]
+                _dydt_stoich_buf[:] = 0.0
+                _stoich_eval_numba(
+                    _k_buf, y, _env_vals_buf,
+                    _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
+                    _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                    _stoich_rxn, _stoich_sp, _stoich_sc,
+                    _v_buf, _dydt_stoich_buf,
+                )
+            else:
+                np.copyto(_v_buf, _k_buf)
+                for i, rxn in enumerate(self.mechanism.reactions):
+                    if _v_buf[i] == 0.0: continue
+                    for r in rxn.reactants_parsed:
+                        _v_buf[i] *= y[r['idx']] ** r['coeff']
+                    for r in rxn.reactants_env:
+                        env_v = float(ctx_j.get(r['name'], 0.0))
+                        _v_buf[i] *= env_v ** r['coeff']
             # 12. Assemble sparse Jacobian
             # J[ai, rj] += factor * v[rxn] / y[rj]
             # where factor = sign_affected * coeff_reactant_rj (precomputed)
@@ -2053,7 +2158,106 @@ class ScenarioRunner:
             else:
                 print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML, ignored in continuous mode)")
 
-        if _perstep_snap:
+        if _perstep_snap and _perstep_warm:
+            # ── Per-ENZ-row mode, warm continuation (GEAR-like) ─────────────────
+            # One BDF instance for the whole run.  At every ENZ row boundary:
+            #   1. output y(t1)                     (pre-expansion, FACSIMILE convention)
+            #   2. thermal expansion y *= M_new/M_old, also applied to the BDF
+            #      difference array D (pure rescaling keeps the history consistent)
+            #   3. new settings snapshot (_make_snap) at t1
+            #   4. Jacobian refreshed, LU invalidated, t_bound moved to the next row
+            # Step size and BDF order are NOT reset → no order-1 ramp, no LU churn.
+            _BDFSolver = _BDFNewton
+            n_out_steps = len(self.t_span) - 1
+            _wsolver = None
+            _n_warm_fallback = 0
+            _n_soft_restart  = 0
+            # Real discontinuities (HV / Q* / overridden T,P changes, as filtered
+            # above): at these rows the RHS jumps and the BDF history is invalid,
+            # so a cold restart (first_step, order 1) is done IN PLACE — exactly
+            # what the cold mode does at every row, but only here (~7 times).
+            _sct_arr = np.array(sorted(self._step_change_times), dtype=float)
+            def _is_discontinuity(t_abs):
+                if _sct_arr.size == 0: return False
+                _i = np.searchsorted(_sct_arr, t_abs)
+                for _j in (_i - 1, _i):
+                    if 0 <= _j < _sct_arr.size and abs(_sct_arr[_j] - t_abs) < 0.5:
+                        return True
+                return False
+            for step_idx in range(n_out_steps):
+                t0 = self.t_span[step_idx]
+                t1 = self.t_span[step_idx + 1]
+                _make_snap(y_seg, t0)
+                _atol_vec = np.maximum(_atol_floor, _rtol * np.maximum(y_seg, 0.0))
+                if _wsolver is not None and _is_discontinuity(t0):
+                    # Soft (in-place) cold restart: same state as a fresh BDF().
+                    _h0 = _fs_val if _fs_val > 0 else min(_wsolver.h_abs, 1e-3)
+                    _f0 = system_ode(_wsolver.t, _wsolver.y)
+                    _wsolver.D[:] = 0.0
+                    _wsolver.D[0] = _wsolver.y
+                    _wsolver.D[1] = _f0 * _h0 * _wsolver.direction
+                    _wsolver.h_abs = _h0
+                    _wsolver.order = 1
+                    _wsolver.n_equal_steps = 0
+                    _n_soft_restart += 1
+                if _wsolver is None:
+                    _wsolver = _BDFSolver(
+                        system_ode, t0 - _t_offset, y_seg,
+                        t_bound=t1 - _t_offset, max_step=step_limit,
+                        rtol=_rtol, atol=_atol_vec,
+                        jac=analytical_jac if _jac_mode == 'analytic' else None,
+                        **_fs_kw)
+                else:
+                    _wsolver.t_bound = t1 - _t_offset
+                    _wsolver.status  = 'running'
+                    _wsolver.atol    = _atol_vec
+                    # Settings changed at the boundary → Jacobian/LU are stale.
+                    _wsolver.J  = _wsolver.jac(_wsolver.t, _wsolver.y)
+                    _wsolver.LU = None
+                while _wsolver.status == 'running':
+                    _msg = _wsolver.step()
+                if _wsolver.status == 'failed':
+                    # Fallback: finish this row with a cold solve_ivp, then
+                    # re-create the warm solver at t1 on the next iteration.
+                    _n_warm_fallback += 1
+                    print(f"\n[WARNING] Warm step {step_idx+1}/{n_out_steps} "
+                          f"({t0:.0f}-{t1:.0f}s) failed: {_msg} — cold fallback")
+                    _fb = solve_ivp(
+                        system_ode, [_wsolver.t, t1 - _t_offset], _wsolver.y,
+                        method=solver_method, t_eval=[t1 - _t_offset],
+                        max_step=step_limit, rtol=_rtol, atol=_atol_vec,
+                        jac=analytical_jac if _jac_mode == 'analytic' else None,
+                        **_fs_kw)
+                    y_seg = _fb.y[:, -1] if _fb.y.shape[1] > 0 else _wsolver.y.copy()
+                    _wsolver = None
+                else:
+                    y_seg = _wsolver.y.copy()
+                if not np.all(np.isfinite(y_seg)):
+                    y_seg = np.where(np.isfinite(y_seg), y_seg, 0.0)
+                    if _wsolver is not None:
+                        _wsolver.y = y_seg.copy()
+                        _wsolver.D[0] = y_seg
+                seg_t_list.append(np.array([t1]))
+                seg_y_list.append(y_seg[:, np.newaxis])
+                M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
+                M_end = self.get_M(t1)
+                if M_snap_step > 0 and abs(M_end / M_snap_step - 1.0) > 1e-10:
+                    _xf = M_end / M_snap_step
+                    y_seg = y_seg * _xf
+                    if _wsolver is not None:
+                        _wsolver.y = y_seg.copy()
+                        _wsolver.D *= _xf          # D[0] == y, higher rows scale alike
+                if step_idx % 200 == 0 or step_idx == n_out_steps - 1:
+                    pct = (step_idx + 1) / n_out_steps * 100
+                    elapsed = time.time() - self.real_start_time
+                    print(f"  ... {pct:.0f}% ({step_idx+1}/{n_out_steps} steps, "
+                          f"{elapsed:.1f}s elapsed)", end='\r')
+            if _wsolver is not None:
+                print(f"\n  [SOLVER] warm mode: {_wsolver.nfev} RHS evals, "
+                      f"{_wsolver.njev} Jacobians, {_wsolver.nlu} LU factorisations, "
+                      f"{_n_soft_restart} soft restarts at discontinuities, "
+                      f"{_n_warm_fallback} cold fallbacks")
+        elif _perstep_snap:
             # ── Per-ENZ-row mode: one solve_ivp per output step ──────────────────
             # Settings frozen from snap at each step start.
             n_out_steps = len(self.t_span) - 1
@@ -2064,7 +2268,8 @@ class ScenarioRunner:
                 _atol_vec = np.maximum(_atol_floor, _rtol * np.maximum(y_seg, 0.0))
                 seg_sol = solve_ivp(
                     system_ode, [t0 - _t_offset, t1 - _t_offset], y_seg,
-                    method=solver_method, t_eval=[t0-_t_offset, t1-_t_offset],
+                    method=_BDFNewton if solver_method == 'BDF' else solver_method,
+                    t_eval=[t0-_t_offset, t1-_t_offset],
                     max_step=step_limit, rtol=_rtol, atol=_atol_vec,
                     jac=analytical_jac if _jac_mode == 'analytic' else None,
                     **_fs_kw)
