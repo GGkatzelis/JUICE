@@ -306,13 +306,18 @@ class ChemistryPage(QWizardPage):
 
         # first-generation products of the chosen compounds (from the full MCM .fac): one block per
         # compound, one column per reaction partner, products listed downwards, rate on hover
-        tb = QGroupBox("First-generation chemistry of the chosen compounds"); tl = QVBoxLayout(tb)
-        self.tree_area = QWidget(); self.tree_lay = QVBoxLayout(self.tree_area); self.tree_lay.setContentsMargins(0, 0, 0, 0)
-        tl.addWidget(self.tree_area)
-        hb3 = QHBoxLayout(); b = QPushButton("Show / update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
-        hb3.addWidget(_info("Each compound with its reaction partners side by side and the products below each. "
+        tb = QGroupBox("First-generation chemistry of the chosen compounds (show)"); tb.setCheckable(True); tb.setChecked(False)
+        tl = QVBoxLayout(tb)
+        self.tree_tabs = QTabWidget(); self.tree_tabs.setDocumentMode(True); self.tree_tabs.setMaximumHeight(230)
+        tl.addWidget(self.tree_tabs)
+        hb3 = QHBoxLayout(); b = QPushButton("Update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
+        hb3.addWidget(_info("One tab per compound: reaction partners side by side, products below each. "
                             "Hover a product set for the MCM rate; double-click it to adjust the rate below."), stretch=1)
-        tl.addLayout(hb3); lay.addWidget(tb)
+        tl.addLayout(hb3)
+        self._tree_widgets = [self.tree_tabs] + [hb3.itemAt(i).widget() for i in range(hb3.count()) if hb3.itemAt(i).widget()]
+        tb.toggled.connect(self._toggle_tree)
+        self._toggle_tree(False)
+        lay.addWidget(tb)
 
         # reaction adjustments = EASY k[...] overrides
         ab = QGroupBox("Reaction adjustments (written exactly as EASY does it)"); al = QVBoxLayout(ab)
@@ -337,34 +342,38 @@ class ChemistryPage(QWizardPage):
         from experiment_spec import FULL_MCM_FAC
         return FULL_MCM_FAC
 
+    def _toggle_tree(self, on: bool):
+        for w in self._tree_widgets:
+            w.setVisible(on)
+        if on and self.tree_tabs.count() == 0:
+            self.update_tree()
+
     def update_tree(self):
-        while self.tree_lay.count():
-            w = self.tree_lay.takeAt(0).widget()
-            if w is not None:
-                w.deleteLater()
+        self.tree_tabs.clear()
         names = [self.chosen.item(i).text() for i in range(self.chosen.count())]
         for n in names:
             try:
                 rxns = reactions_of(n, self._fac())
             except Exception as e:
-                self.tree_lay.addWidget(_info(f"{n}: cannot read the MCM file: {e}")); continue
+                self.tree_tabs.addTab(_info(f"cannot read the MCM file: {e}"), n); continue
             if not rxns:
-                self.tree_lay.addWidget(_info(f"{n}: no reactions found (not an MCM species?)")); continue
+                self.tree_tabs.addTab(_info("no reactions found (not an MCM species?)"), n); continue
             order = ["OH", "O3", "NO3", "hv", ""]
             partners = sorted({r["partner"] for r in rxns}, key=lambda p: (order.index(p) if p in order else 9, p))
             cols = {p: [r for r in rxns if r["partner"] == p] for p in partners}
             t = QTableWidget(max(len(v) for v in cols.values()), len(partners))
-            t.setHorizontalHeaderLabels([f"{n} + {p}" if p else f"{n} alone" for p in partners])
+            t.setHorizontalHeaderLabels([f"+ {p}  ({len(cols[p])})" if p else f"alone ({len(cols[p])})" for p in partners])
             t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); t.verticalHeader().setVisible(False)
+            t.verticalHeader().setDefaultSectionSize(19); t.setStyleSheet("font-size: 10px;")
             t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers); t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             for c, p in enumerate(partners):
                 for r_, rx in enumerate(cols[p]):
-                    it = QTableWidgetItem("→ " + " + ".join(rx["products"]))
-                    it.setToolTip(f"{rx['easy']}\nk = {rx['easy_rate']}")
+                    prods = " + ".join(rx["products"])
+                    it = QTableWidgetItem("→ " + (prods if len(prods) <= 34 else prods[:31] + "…"))
+                    it.setToolTip(rx["easy"] + "\nk = " + rx["easy_rate"])
                     it.setData(Qt.ItemDataRole.UserRole, (rx["easy"], rx["easy_rate"])); t.setItem(r_, c, it)
             t.itemDoubleClicked.connect(self._adjust_from_tree)
-            t.setFixedHeight(min(260, 30 + 24 * t.rowCount()))
-            self.tree_lay.addWidget(t)
+            self.tree_tabs.addTab(t, f"{n} ({len(rxns)})")
 
     def _adjust_from_tree(self, item, _col=None):
         data = item.data(Qt.ItemDataRole.UserRole)
@@ -419,10 +428,7 @@ class ChemistryPage(QWizardPage):
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         (self.mode_existing if spec.mechanism_stem else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
-        while self.tree_lay.count():
-            w = self.tree_lay.takeAt(0).widget()
-            if w is not None:
-                w.deleteLater()
+        self.tree_tabs.clear()
 
     def apply(self, spec: ExperimentSpec):
         if self.mode_existing.isChecked():
