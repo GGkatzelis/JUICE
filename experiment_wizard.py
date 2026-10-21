@@ -19,18 +19,20 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
-                             QAbstractItemView)
+                             QAbstractItemView, QDialog, QDialogButtonBox)
 
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
                              mechanism_species, render_easy, easy_form, write_experiment,
-                             H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS)
+                             H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS, ACTIONS, ACTION_ORDER)
 from easy_builder import scan_mechanisms, EasyBuilderDialog
+import saphir_wiki
+import injection_calc as ic
 
 try:
     from mcm_species_db import MCM_DB
@@ -117,7 +119,12 @@ class StartPage(QWizardPage):
                             "(.experiment.json) that you can reopen here later."))
         hb = QHBoxLayout()
         ob = QPushButton("Open a saved experiment (.experiment.json) …"); ob.clicked.connect(self._open_saved)
-        hb.addWidget(ob); hb.addStretch(); lay.addLayout(hb)
+        hb.addWidget(ob)
+        wb = QPushButton("Import a SAPHIR experiment from the wiki …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self))
+        hb.addWidget(wb); hb.addStretch(); lay.addLayout(hb)
+        lay.addWidget(_info("Wiki import reads the action log of saphirwiki/YYYY-MM-DD (roof, humidification, "
+                            "injections) and switches to the Z: archive for the measured conditions when the day folder exists. "
+                            "Everything imported stays editable on the following pages."))
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Project folder", self.out_edit.text() or self.wiz.easy_root)
@@ -185,6 +192,10 @@ class ConditionsPage(QWizardPage):
         g.addWidget(QLabel("Photolysis frequencies"), r, 4)
         self.jsrc = QComboBox(); self.jsrc.addItems(["measured (archive J values)", "clear sky from solar zenith angle"])
         g.addWidget(self.jsrc, r, 5, 1, 3); r += 1
+        g.addWidget(QLabel("Chamber"), r, 0)
+        self.chamber = QComboBox(); self.chamber.addItems(list(ic.CHAMBERS)); g.addWidget(self.chamber, r, 1)
+        self.chamber_info = _info(""); g.addWidget(self.chamber_info, r, 2, 1, 6)
+        self.chamber.currentTextChanged.connect(self._chamber_changed); self._chamber_changed(self.chamber.currentText()); r += 1
         g.addWidget(QLabel("Roof open / close (HH:MM)"), r, 0)
         self.roof = _table(["open", "close"]); self.roof.setMaximumHeight(110); g.addWidget(self.roof, r, 1, 1, 5)
         bb = QVBoxLayout(); a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.roof, ["09:30", "18:30"])); d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.roof)); bb.addWidget(a); bb.addWidget(d); g.addLayout(bb, r, 6); r += 1
@@ -193,7 +204,12 @@ class ConditionsPage(QWizardPage):
         g.addWidget(self.constrain, r, 1, 1, 7); r += 1
         g.addWidget(_info("Without archive access choose 'clear sky' photolysis; measured J values need the archive."), r, 0, 1, 8)
 
+    def _chamber_changed(self, name: str):
+        ch = ic.chamber(name)
+        self.chamber_info.setText(f"{ch.volume_m3:g} m³ — used for injected amount → ppb (syringe, bottle, MFC). {ch.note}")
+
     def set_from(self, c: Conditions):
+        self.chamber.setCurrentText(c.chamber_name if c.chamber_name in ic.CHAMBERS else ic.DEFAULT_CHAMBER)
         self.date.setText(c.date); self.start.setText(c.start); self.end.setText(c.end); self.step.setValue(int(c.step_s))
         (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
         self.archive.setText(c.archive_root); self.temp.setText(f"{c.temperature_K:g}")
@@ -213,6 +229,7 @@ class ConditionsPage(QWizardPage):
         c.j_source = "measured" if self.jsrc.currentIndex() == 0 else "clear_sky"
         c.roof_open = [(o, cl) for o, cl in _rows(self.roof)]
         c.constrain_species = [x.strip() for x in self.constrain.text().split(",") if x.strip()]
+        c.chamber_name = self.chamber.currentText()
         return c
 
 
@@ -292,8 +309,35 @@ class ChemistryPage(QWizardPage):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-INJ_HEADERS = ["Name", "Product(s) — empty = recorded only", "Total [ppb]", "Start HH:MM", "Duration [min]",
+INJ_HEADERS = ["Action", "Name", "Product(s) — empty = recorded only", "Total [ppb]", "Start HH:MM", "Duration [min]",
                "ENZ column", "Switch", "Comment"]
+_ACTION_LABELS = [ACTIONS[k]["label"] for k in ACTION_ORDER]
+
+
+def _action_combo(key: str) -> QComboBox:
+    cb = QComboBox(); cb.addItems(_ACTION_LABELS)
+    cb.setCurrentIndex(ACTION_ORDER.index(key) if key in ACTION_ORDER else ACTION_ORDER.index("other"))
+    return cb
+
+
+def _inj_add_row(t: QTableWidget, action: str, vals: List[str]):
+    """Append an injection row: combo box in the Action column, text in the others."""
+    r = t.rowCount(); t.insertRow(r)
+    t.setCellWidget(r, 0, _action_combo(action))
+    for c, v in enumerate(vals, start=1):
+        t.setItem(r, c, QTableWidgetItem(str(v)))
+
+
+def _inj_rows(t: QTableWidget) -> List[List[str]]:
+    """[action_key, name, products, ppb, start, dur, column, switch, comment] per non-empty row."""
+    out = []
+    for r in range(t.rowCount()):
+        cb = t.cellWidget(r, 0)
+        key = ACTION_ORDER[cb.currentIndex()] if isinstance(cb, QComboBox) else "other"
+        vals = [(t.item(r, c).text().strip() if t.item(r, c) else "") for c in range(1, t.columnCount())]
+        if any(vals):
+            out.append([key] + vals)
+    return out
 
 
 class InjectionsPage(QWizardPage):
@@ -304,18 +348,27 @@ class InjectionsPage(QWizardPage):
         self.setSubTitle("What was injected, how much in total, when and over how long. One row per product channel; "
                          "rows with the same name belong to the same injection (e.g. impurities of a humidification).")
         lay = QVBoxLayout(self)
+        self._delivery: Dict[str, Dict[str, str]] = {}      # name → how the amount was derived (kept with the spec)
         self.table = _table(INJ_HEADERS); lay.addWidget(self.table)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hb = QHBoxLayout()
-        for label, fn in [("+ compounds from Chemistry", self._add_compounds), ("+ humidification", self._add_h2o),
-                          ("+ O3", lambda: self._add_simple("O3", "O3", "50")), ("+ NO", lambda: self._add_simple("NO", "NO", "5")),
-                          ("+ NO2", lambda: self._add_simple("NO2", "NO2", "5")), ("+ CO2 tracer", lambda: self._add_simple("CO2", "CO2", "0")),
-                          ("+ seed (recorded only)", lambda: _add_row(self.table, ["seed", "", "", "", "10", "Q_seed", "", "recorded only"])),
-                          ("+ row", lambda: _add_row(self.table)), ("− row", lambda: _del_row(self.table))]:
+        hb.addWidget(QLabel("Add action:"))
+        self.action_pick = QComboBox(); self.action_pick.addItems(_ACTION_LABELS); hb.addWidget(self.action_pick)
+        for label, fn in [("+ add", self._add_action), ("+ compounds from Chemistry", self._add_compounds),
+                          ("+ mixture …", self._mixture_dialog), ("Amount calculator …", self._amount_dialog),
+                          ("Import from wiki …", lambda: self.wiz.import_from_wiki(self)),
+                          ("− row", lambda: _del_row(self.table))]:
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); lay.addLayout(hb)
         lay.addWidget(_info("Amount = total injected in ppb (the backend spreads it over the duration). "
                             "Product(s) may be an MCM species or mole fractions of several (0.9*A+0.1*B). "
-                            "Leave the column and switch empty for the standard names (QNO, QO3, QH2O, Q_<name>)."))
+                            "Leave the column and switch empty for the standard names (QNO, QO3, QH2O, Q_<name>). "
+                            "Rows with the same name and an empty start are extra product channels of that injection: "
+                            "the humidification rows are the trace impurities the water carries into SAPHIR "
+                            "(HONO 0.002 ppb, CO 0.5 ppb; NO2/NO 0 = placeholders, fill in if measured). "
+                            "XNOy is the NOy bookkeeping tracer, not a chemical species. "
+                            "'Amount calculator' turns µl by syringe, ml of bottle gas or MFC flow × time into ppb for the selected row "
+                            "and keeps the derivation; '+ mixture' expands a multi-compound solution into MCM species with mole fractions."))
         lay.addWidget(QLabel("Follow-up reactions (advanced; e.g. TwoReaction chain: VOCin1 → VOCin_all, rate 1./60)"))
         self.chain = _table(["Reactants", "Products", "Rate expression"]); self.chain.setMaximumHeight(110); lay.addWidget(self.chain)
         hb2 = QHBoxLayout(); a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.chain)); d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.chain)); hb2.addWidget(a); hb2.addWidget(d); hb2.addStretch(); lay.addLayout(hb2)
@@ -326,35 +379,89 @@ class InjectionsPage(QWizardPage):
         if not names and page.mech_combo.currentText().strip():
             QMessageBox.information(self, "Compounds", "Add rows by hand: the compounds are defined by the existing mechanism."); return
         for n in names:
-            _add_row(self.table, [n, n, "10", "08:00", "2", "", "", ""])
+            _inj_add_row(self.table, "voc", [n, n, "10", "08:00", "2", "", "", ""])
 
-    def _add_h2o(self):
-        _add_row(self.table, ["H2O", H2O_IMPURITY_DEFAULTS[0][0], H2O_IMPURITY_DEFAULTS[0][1], "05:30", "45", "QH2O", "qH2O",
-                              "humidification: HONO impurity (SAPHIR default)"])
-        for prod, ppb in H2O_IMPURITY_DEFAULTS[1:]:
-            _add_row(self.table, ["H2O", prod, ppb, "", "", "QH2O", "qH2O", "impurity carried with the water"])
+    def _add_action(self):
+        """Append the rows of the chosen action with its SAPHIR defaults (start time left for the user)."""
+        key = ACTION_ORDER[self.action_pick.currentIndex()]
+        d = ACTIONS[key]
+        existing = {r[1] for r in _inj_rows(self.table)}
+        name, k = d["name"], 1
+        while name and name in existing:               # second NO injection -> NO_2 with its own column/switch
+            k += 1; name = f"{d['name']}_{k}"
+        suffix = f"_{k}" if k > 1 else ""
+        col = d["column"] + suffix if d["column"] else ""
+        sw = d["switch"] + suffix if d["switch"] else ""
+        _inj_add_row(self.table, key, [name, d["products"], d["total_ppb"], "", f"{d['duration_min']:g}", col, sw, d["comment"]])
+        for prod, ppb in d.get("extra_channels", []):
+            _inj_add_row(self.table, key, [name, prod, ppb, "", "", col, sw, f"↳ extra channel of '{name}'"])
+        self.table.scrollToBottom()
 
-    def _add_simple(self, name, prod, ppb):
-        _add_row(self.table, [name, prod, ppb, "09:30", "20" if name == "O3" else "5", "", "", ""])
+    def _selected_name(self) -> str:
+        r = self.table.currentRow()
+        it = self.table.item(r, 1) if r >= 0 else None
+        return it.text().strip() if it else ""
+
+    def _amount_dialog(self):
+        r = self.table.currentRow()
+        if r < 0 or not self._selected_name():
+            QMessageBox.information(self, "Amount calculator", "Select the injection row first."); return
+        name = self._selected_name()
+        prod = self.table.item(r, 2).text().strip() if self.table.item(r, 2) else ""
+        cond = self.wiz.page_cond.get()
+        dlg = AmountDialog(self, compound=prod or name, delivery=self._delivery.get(name, {}), cond=cond)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_ppb is None:
+            return
+        self.table.setItem(r, 3, QTableWidgetItem(f"{dlg.result_ppb:.4g}"))
+        old = self.table.item(r, 8).text() if self.table.item(r, 8) else ""
+        old = re.sub(r"\s*\|\s*calc:.*$", "", old)
+        self.table.setItem(r, 8, QTableWidgetItem((old + " | " if old else "") + "calc: " + dlg.result_expl))
+        self._delivery[name] = dlg.result_delivery
+
+    def _mixture_dialog(self):
+        cond = self.wiz.page_cond.get()
+        dlg = MixtureDialog(self, cond=cond)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_event is None:
+            return
+        ev, precursors = dlg.result_event, dlg.result_precursors
+        existing = {r_[1] for r_ in _inj_rows(self.table)}
+        if ev.name in existing:
+            k = 2
+            while f"{ev.name}_{k}" in existing:
+                k += 1
+            ev.name, ev.column = f"{ev.name}_{k}", f"{ev.column}_{k}"
+        _inj_add_row(self.table, "mixture", [ev.name, ev.products, ev.total_ppb, ev.start, f"{ev.duration_min:g}",
+                                              ev.column, ev.switch, ev.comment])
+        self._delivery[ev.name] = ev.delivery
+        chem = self.wiz.page_chem
+        chem.mode_compounds.setChecked(True)
+        have = {chem.chosen.item(i).text() for i in range(chem.chosen.count())}
+        for sp in precursors:
+            if sp not in have:
+                chem.chosen.addItem(sp)
+        self.table.scrollToBottom()
 
     def set_from(self, spec: ExperimentSpec):
-        rows = []
+        self.table.setRowCount(0)
+        self._delivery = {inj.name: dict(inj.delivery) for inj in spec.injections}
         for inj in spec.injections:
-            rows.append([inj.name, inj.products, inj.total_ppb, inj.start, f"{inj.duration_min:g}", inj.column, inj.switch, inj.comment])
+            key = inj.action_key()
+            _inj_add_row(self.table, key, [inj.name, inj.products, inj.total_ppb, inj.start, f"{inj.duration_min:g}",
+                                           inj.column, inj.switch, inj.comment])
             for prod, ppb in inj.extra_channels:
-                rows.append([inj.name, prod, ppb, "", "", inj.column, inj.switch, ""])
-        _set_rows(self.table, rows)
+                _inj_add_row(self.table, key, [inj.name, prod, ppb, "", "", inj.column, inj.switch, f"↳ extra channel of '{inj.name}'"])
         _set_rows(self.chain, [[a, b, c] for inj in spec.injections for a, b, c in inj.chain])
 
     def get(self) -> List[InjectionEvent]:
         events: Dict[str, InjectionEvent] = {}
         order: List[str] = []
-        for name, prod, ppb, start, dur, col, sw, comment in _rows(self.table):
+        for action, name, prod, ppb, start, dur, col, sw, comment in _inj_rows(self.table):
             if not name:
                 continue
             ev = events.get(name)
             if ev is None:
-                ev = InjectionEvent(name, prod, ppb or "0", start, float(dur or 1), col, sw, comment=comment)
+                ev = InjectionEvent(name, prod, ppb or "0", start, float(dur or 1), col, sw, comment=comment, action=action,
+                                    delivery=dict(self._delivery.get(name, {})))
                 events[name] = ev; order.append(name)
             else:
                 if not ev.start and start:
@@ -480,7 +587,9 @@ class ReviewPage(QWizardPage):
         self.setTitle("Review")
         self.setSubTitle("Check the summary and the generated EASY file. Finish writes all files and opens the scenario.")
         lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Summary"))
         self.summary = QPlainTextEdit(); self.summary.setReadOnly(True); self.summary.setMaximumHeight(170); lay.addWidget(self.summary)
+        lay.addWidget(QLabel("Validation — ✖ must be fixed before Finish, ⚠ is a hint, ✔ all good"))
         self.checks = QListWidget(); self.checks.setMaximumHeight(110); lay.addWidget(self.checks)
         hb = QHBoxLayout(); hb.addWidget(QLabel("Generated EASY file (read-only preview)")); hb.addStretch()
         eb = QPushButton("Open expert editor …"); eb.clicked.connect(self._expert); hb.addWidget(eb); lay.addLayout(hb)
@@ -543,6 +652,374 @@ class ReviewPage(QWizardPage):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+class AmountDialog(QDialog):
+    """Injected amount → ppb with the derivation shown.  Modes: stated ppb, liquid by
+    syringe (µl, molar mass, density), gas from a bottle by syringe (ml, bottle
+    concentration), MFC from a bottle (flow, time, bottle concentration)."""
+    MODES = [("ppb", "Mixing ratio stated (ppb)"), ("liquid", "Liquid by syringe (µl)"),
+             ("gas_syringe", "Gas from bottle by syringe (ml)"), ("mfc", "Gas from bottle via MFC (flow × time)")]
+
+    def __init__(self, parent=None, compound: str = "", delivery: Optional[Dict[str, str]] = None, cond: Optional[Conditions] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Amount calculator")
+        self.resize(760, 420)
+        self.cond = cond or Conditions()
+        self.ch = ic.chamber(self.cond.chamber_name)
+        self.result_ppb: Optional[float] = None
+        self.result_delivery: Dict[str, str] = {}
+        self.result_expl = ""
+        d = dict(delivery or {})
+        lay = QVBoxLayout(self)
+        g = QGridLayout(); r = 0
+        g.addWidget(QLabel("Compound"), r, 0); self.compound = QLineEdit(compound); g.addWidget(self.compound, r, 1, 1, 2)
+        lb = QPushButton("Look up molar mass / density"); lb.clicked.connect(self._lookup); g.addWidget(lb, r, 3); r += 1
+        g.addWidget(QLabel("Delivery"), r, 0); self.mode = QComboBox(); self.mode.addItems([m[1] for m in self.MODES]); g.addWidget(self.mode, r, 1, 1, 3); r += 1
+        self.fields: Dict[str, QLineEdit] = {}
+
+        def row(key, label, hint=""):
+            nonlocal r
+            g.addWidget(QLabel(label), r, 0); e = QLineEdit(d.get(key, "")); e.setPlaceholderText(hint); g.addWidget(e, r, 1)
+            self.fields[key] = e; e.textChanged.connect(self._update); r += 1
+        row("value", "Mixing ratio [ppb]")
+        row("vol_ul", "Volume [µl]")
+        row("mw", "Molar mass [g/mol]")
+        row("density", "Density [g/ml]")
+        row("vol_ml", "Gas volume [ml]")
+        row("flow_sccm", "MFC flow [sccm]", "slpm × 1000")
+        row("duration_s", "Duration [s]")
+        row("bottle_value", "Bottle concentration", "1 for pure gas")
+        g.addWidget(QLabel("Bottle unit"), r, 0); self.bottle_unit = QComboBox(); self.bottle_unit.addItems(["ppm", "ppb", "%", "pure"])
+        self.bottle_unit.setCurrentText(d.get("bottle_unit", "ppm")); self.bottle_unit.currentTextChanged.connect(self._update); g.addWidget(self.bottle_unit, r, 1); r += 1
+        lay.addLayout(g)
+        lay.addWidget(_info(f"Chamber {self.ch.name}: {self.ch.volume_m3:g} m³ at {self.cond.temperature_K:g} K, {self.cond.pressure_hPa:g} hPa "
+                            f"(from 'Where and when'); MFC standard {self.ch.mfc_std_T_K:g} K / {self.ch.mfc_std_P_hPa:g} hPa; "
+                            f"gas syringe at {self.ch.syringe_T_K:g} K."))
+        self.result = QPlainTextEdit(); self.result.setReadOnly(True); self.result.setMaximumHeight(90); lay.addWidget(self.result)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Use this ppb")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject); lay.addWidget(bb)
+        keys = [m[0] for m in self.MODES]
+        self.mode.setCurrentIndex(keys.index(d["mode"]) if d.get("mode") in keys else 0)
+        self.mode.currentIndexChanged.connect(self._update)
+        if compound and not (d.get("mw") and d.get("density")):
+            self._lookup(silent=True)
+        self._update()
+
+    def _lookup(self, silent: bool = False):
+        rc = ic.resolve_compound(self.compound.text())
+        if rc.mw:
+            self.fields["mw"].setText(f"{rc.mw:g}")
+        if rc.density:
+            self.fields["density"].setText(f"{rc.density:g}")
+        if not silent and not rc.mw:
+            QMessageBox.information(self, "Look up", rc.note)
+        self._update()
+
+    def _delivery(self) -> Dict[str, str]:
+        mode = self.MODES[self.mode.currentIndex()][0]
+        d = {"mode": mode}
+        for k, e in self.fields.items():
+            if e.text().strip():
+                d[k] = e.text().strip()
+        d["bottle_unit"] = self.bottle_unit.currentText()
+        return d
+
+    def _update(self):
+        mode = self.MODES[self.mode.currentIndex()][0]
+        need = {"ppb": ["value"], "liquid": ["vol_ul", "mw", "density"], "gas_syringe": ["vol_ml", "bottle_value"],
+                "mfc": ["flow_sccm", "duration_s", "bottle_value"]}[mode]
+        for k, e in self.fields.items():
+            e.setEnabled(k in need)
+        self.bottle_unit.setEnabled(mode in ("gas_syringe", "mfc"))
+        ppb, expl = ic.resolve_delivery(self._delivery(), self.cond.temperature_K, self.cond.pressure_hPa, self.ch)
+        self.result_ppb, self.result_expl = ppb, expl
+        self.result.setPlainText((f"= {ppb:.4g} ppb\n" if ppb is not None else "— \n") + expl)
+
+    def _accept(self):
+        if self.result_ppb is None:
+            QMessageBox.warning(self, "Amount calculator", self.result_expl); return
+        self.result_delivery = self._delivery()
+        self.accept()
+
+
+MIX_HEADERS = ["Component (as on the bottle)", "Amount", "Unit", "MCM species", "Surrogate (if no MCM)", "Molar mass", "Density", "Status"]
+
+
+class MixtureDialog(QDialog):
+    """A solution of several compounds injected as one pulse.  Recipe in, one injection
+    event out: products = mole fractions of the MCM species (IDL VCP2 convention),
+    total ppb = modelled sum.  Recipes are saved in mixtures/*.mixture.json."""
+
+    def __init__(self, parent=None, cond: Optional[Conditions] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Mixture injection")
+        self.resize(1150, 760)
+        self.cond = cond or Conditions()
+        self.ch = ic.chamber(self.cond.chamber_name)
+        self.result_event: Optional[InjectionEvent] = None
+        self.result_precursors: List[str] = []
+        lay = QVBoxLayout(self)
+        g = QGridLayout()
+        g.addWidget(QLabel("Mixture name"), 0, 0); self.name = QLineEdit("VCP"); g.addWidget(self.name, 0, 1)
+        g.addWidget(QLabel("Aliases (words in the wiki line)"), 0, 2); self.aliases = QLineEdit("VCP solution"); g.addWidget(self.aliases, 0, 3)
+        self.saved = QComboBox(); self.saved.addItem("— saved mixtures —")
+        self._saved = ic.load_mixtures()
+        for n in self._saved:
+            self.saved.addItem(n)
+        self.saved.currentTextChanged.connect(self._load_saved); g.addWidget(self.saved, 0, 4)
+        lb = QPushButton("Load file …"); lb.clicked.connect(self._load_file); g.addWidget(lb, 0, 5)
+        sb = QPushButton("Save recipe"); sb.clicked.connect(self._save); g.addWidget(sb, 0, 6)
+        lay.addLayout(g)
+        lay.addWidget(QLabel("Recipe — paste lines like '* Limonene 5.61 μl' or 'ethanol, 59.19, ul' (units: ul, ml, vol%, mg, g, wt%, mol%) and press Parse"))
+        self.paste = QPlainTextEdit(); self.paste.setMaximumHeight(90); lay.addWidget(self.paste)
+        hb = QHBoxLayout()
+        pb = QPushButton("Parse recipe"); pb.clicked.connect(self._parse); hb.addWidget(pb)
+        rb = QPushButton("Resolve in MCM"); rb.clicked.connect(self._resolve); hb.addWidget(rb)
+        ab = QPushButton("+ row"); ab.clicked.connect(lambda: _add_row(self.table, ["", "", "ul", "", "", "", "", ""])); hb.addWidget(ab)
+        db = QPushButton("− row"); db.clicked.connect(lambda: _del_row(self.table)); hb.addWidget(db)
+        hb.addStretch(); lay.addLayout(hb)
+        self.table = _table(MIX_HEADERS); lay.addWidget(self.table, stretch=2)
+        self.table.itemChanged.connect(lambda _it: self._preview())
+        g2 = QGridLayout()
+        g2.addWidget(QLabel("Injected volume [µl]"), 0, 0); self.injected = QLineEdit(""); self.injected.setPlaceholderText("empty = recipe amounts as is")
+        self.injected.textChanged.connect(self._preview); g2.addWidget(self.injected, 0, 1)
+        g2.addWidget(QLabel("Start HH:MM"), 0, 2); self.start = QLineEdit("08:00"); g2.addWidget(self.start, 0, 3)
+        g2.addWidget(QLabel("Duration [min]"), 0, 4); self.dur = QLineEdit("2"); g2.addWidget(self.dur, 0, 5)
+        lay.addLayout(g2)
+        lay.addWidget(QLabel("Result — alerts (⚠ needs a decision, ✖ blocks)"))
+        self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); lay.addWidget(self.preview, stretch=1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Add injection")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject); lay.addWidget(bb)
+
+    # ── recipe table ↔ Mixture ──
+    def _set_components(self, comps: List[ic.MixtureComponent]):
+        self.table.blockSignals(True)
+        _set_rows(self.table, [[c.name, f"{c.amount:g}", c.unit, c.mcm, c.surrogate,
+                                f"{c.mw:g}" if c.mw else "", f"{c.density:g}" if c.density else "", c.note] for c in comps])
+        self.table.blockSignals(False)
+        self._preview()
+
+    def _mixture(self) -> ic.Mixture:
+        comps = []
+        for name, amt, unit, mcm, sur, mw, dens, _note in _rows(self.table):
+            if not name:
+                continue
+            try:
+                comps.append(ic.MixtureComponent(name, float(amt or 0), (unit or "ul").lower(), mcm.upper(), sur.upper(),
+                                                 float(mw) if mw else None, float(dens) if dens else None))
+            except ValueError:
+                comps.append(ic.MixtureComponent(name, 0.0, unit or "ul", mcm.upper(), sur.upper(), None, None, "bad number"))
+        return ic.Mixture(self.name.text().strip() or "mixture", aliases=[a.strip() for a in self.aliases.text().split(",") if a.strip()],
+                          components=comps)
+
+    def _parse(self):
+        self._set_components(ic.parse_mixture_text(self.paste.toPlainText()))
+
+    def _resolve(self):
+        m = self._mixture(); ic.resolve_mixture(m); self._set_components(m.components)
+
+    def _load_saved(self, name: str):
+        m = self._saved.get(name)
+        if m:
+            self.name.setText(m.name); self.aliases.setText(", ".join(m.aliases)); self._set_components(m.components)
+
+    def _load_file(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Mixture file", ic.MIXTURE_DIR, "Mixture (*.mixture.json);;All files (*)")
+        if p:
+            try:
+                m = ic.load_mixture(p)
+            except Exception as e:
+                QMessageBox.critical(self, "Load failed", str(e)); return
+            self.name.setText(m.name); self.aliases.setText(", ".join(m.aliases)); self._set_components(m.components)
+
+    def _save(self):
+        m = self._mixture()
+        try:
+            path = ic.save_mixture(m)
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", str(e)); return
+        QMessageBox.information(self, "Mixture saved", f"{path}\nThe wiki import will now recognise '{m.name}' and its aliases.")
+
+    def _compute(self):
+        m = self._mixture()
+        inj = self.injected.text().strip()
+        ev, precs, alerts = ic.mixture_event(m, float(inj) if inj else None, self.start.text().strip(),
+                                             float(self.dur.text() or 1), self.cond.temperature_K, self.cond.pressure_hPa, self.ch)
+        return ev, precs, alerts
+
+    def _preview(self):
+        try:
+            ev, precs, alerts = self._compute()
+        except Exception as e:
+            self.preview.setPlainText(f"cannot compute: {e}"); return
+        lines = [ev.delivery.get("calc", ""), "", f"products: {ev.products or '(none)'}", f"total modelled: {ev.total_ppb} ppb",
+                 "precursors for the MCM subset: " + (", ".join(precs) or "none")]
+        for lvl, msg in alerts:
+            lines.append(("✖ " if lvl == "error" else "⚠ ") + msg)
+        self.preview.setPlainText("\n".join(lines))
+
+    def _accept(self):
+        try:
+            ev, precs, alerts = self._compute()
+        except Exception as e:
+            QMessageBox.critical(self, "Mixture", str(e)); return
+        if any(l == "error" for l, _ in alerts) or not ev.products:
+            QMessageBox.warning(self, "Mixture", "Fix the ✖ alerts first (molar mass/density, MCM names, surrogates)."); return
+        self.result_event, self.result_precursors = ev, precs
+        self.accept()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class _WikiFetchThread(QThread):
+    done = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, date: str, user: str, password: str):
+        super().__init__(); self.date, self.user, self.password = date, user, password
+
+    def run(self):
+        try:
+            self.done.emit(saphir_wiki.fetch_wiki_text(self.date, self.user, self.password))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class WikiImportDialog(QDialog):
+    """Fetch / load / paste a saphirwiki day page, show the parsed action log for confirmation,
+    and hand back a WikiImport (roof, injections with actions, precursors, checks)."""
+
+    def __init__(self, parent=None, date: str = "", archive_root: str = "", T_K: float = 298.0, P_hPa: float = 1013.0,
+                 chamber_name: str = "SAPHIR"):
+        super().__init__(parent)
+        self.T_K, self.P_hPa, self.chamber_name = T_K, P_hPa, chamber_name
+        self.setWindowTitle("Import a SAPHIR experiment from the wiki")
+        self.resize(1100, 720)
+        self.result_import: Optional[saphir_wiki.WikiImport] = None
+        self.archive_root = archive_root
+        self._events: List[saphir_wiki.WikiEvent] = []
+        lay = QVBoxLayout(self)
+        g = QGridLayout()
+        g.addWidget(QLabel("Date (YYYY-MM-DD)"), 0, 0); self.date = QLineEdit(date); g.addWidget(self.date, 0, 1)
+        env_user, env_pw = saphir_wiki.wiki_credentials()
+        g.addWidget(QLabel("Wiki user"), 0, 2); self.user = QLineEdit(); g.addWidget(self.user, 0, 3)
+        g.addWidget(QLabel("Password"), 0, 4); self.pw = QLineEdit(); self.pw.setEchoMode(QLineEdit.EchoMode.Password); g.addWidget(self.pw, 0, 5)
+        if env_user:
+            self.user.setPlaceholderText(f"{env_user} (from {saphir_wiki.ENV_USER})")
+            self.pw.setPlaceholderText("from " + saphir_wiki.ENV_PASS if env_pw else "not set: type it or set " + saphir_wiki.ENV_PASS)
+        else:
+            self.user.setPlaceholderText(f"or set {saphir_wiki.ENV_USER}")
+            self.pw.setPlaceholderText(f"or set {saphir_wiki.ENV_PASS}")
+        self.fetch_btn = QPushButton("Fetch from wiki"); self.fetch_btn.clicked.connect(self._fetch); g.addWidget(self.fetch_btn, 0, 6)
+        lb = QPushButton("Load saved page / text file …"); lb.clicked.connect(self._load_file); g.addWidget(lb, 1, 6)
+        g.addWidget(_info("Needs the FZJ network and a wiki login (the page answers 'not allowed to view' otherwise). "
+                          "Without a login: open the page in the browser, save it (or copy the action log) and load/paste it here."),
+                    1, 0, 1, 6)
+        lay.addLayout(g)
+        self.status = QLabel(""); lay.addWidget(self.status)
+        lay.addWidget(QLabel("Pasted action log (optional) — lines 'HH:MM <code> …'; press Parse"))
+        self.paste = QPlainTextEdit(); self.paste.setMaximumHeight(90)
+        self.paste.setPlaceholderText("07:30 H F.R. CHANGE: humidification start\n08:15 h F.R. CHANGE: humidification stop\n"
+                                      "08:40 X M.S. CHANGE: 20 µl isoprene injected\n09:30 R F.R. CHANGE: open roof")
+        lay.addWidget(self.paste)
+        pb = QPushButton("Parse pasted text"); pb.clicked.connect(self._parse_paste)
+        hb = QHBoxLayout(); hb.addWidget(pb); hb.addStretch(); lay.addLayout(hb)
+        lay.addWidget(QLabel("Action log — untick lines that should not be used"))
+        self.table = _table(["Use", "Time", "Code", "Action", "Wiki text"])
+        for c in (0, 1, 2):
+            self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.itemChanged.connect(lambda _it: self._preview())
+        lay.addWidget(self.table, stretch=2)
+        lay.addWidget(QLabel("What will be imported — ⚠ marks things the wiki did not say clearly"))
+        self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); lay.addWidget(self.preview, stretch=1)
+        self.replace_box = QCheckBox("Replace the current injection rows (untick to append)"); self.replace_box.setChecked(True)
+        lay.addWidget(self.replace_box)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Use in wizard")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject); lay.addWidget(bb)
+
+    # ── sources ──
+    def _fetch(self):
+        d = self.date.text().strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            QMessageBox.warning(self, "Date", "Enter the date as YYYY-MM-DD."); return
+        self.fetch_btn.setEnabled(False); self.status.setStyleSheet(""); self.status.setText("Fetching …")
+        self._thr = _WikiFetchThread(d, self.user.text().strip(), self.pw.text())
+        self._thr.done.connect(self._fetched); self._thr.failed.connect(self._fetch_failed); self._thr.start()
+
+    def _fetched(self, text: str):
+        self.fetch_btn.setEnabled(True)
+        self._set_events(saphir_wiki.parse_action_log(text), f"wiki {self.date.text().strip()}")
+
+    def _fetch_failed(self, msg: str):
+        self.fetch_btn.setEnabled(True); self.status.setText("Fetch failed: " + msg[:160])
+        self.status.setStyleSheet("color: #e05252;")
+
+    def _load_file(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Saved wiki page", "", "Wiki page (*.html *.htm *.txt *.md);;All files (*)")
+        if not p:
+            return
+        try:
+            text = saphir_wiki.load_wiki_file(p)
+        except Exception as e:
+            QMessageBox.critical(self, "Load failed", str(e)); return
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(p) + " " + text[:2000])
+        if m and not self.date.text().strip():
+            self.date.setText(m.group(1))
+        self._set_events(saphir_wiki.parse_action_log(text), os.path.basename(p))
+
+    def _parse_paste(self):
+        self._set_events(saphir_wiki.parse_action_log(self.paste.toPlainText()), "pasted text")
+
+    def _set_events(self, events, source: str):
+        self._events = events
+        self.status.setStyleSheet("color: #4caf50;" if events else "color: #e05252;")
+        self.status.setText(f"{len(events)} action-log lines from {source}" if events else f"No 'HH:MM <code>' lines found in {source}")
+        self.table.blockSignals(True); self.table.setRowCount(0)
+        for ev in events:
+            r = self.table.rowCount(); self.table.insertRow(r)
+            use = QTableWidgetItem(""); use.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            use.setCheckState(Qt.CheckState.Checked if ev.action != "note" else Qt.CheckState.Unchecked)
+            self.table.setItem(r, 0, use)
+            for c, v in enumerate([ev.time, ev.code, ev.action, ev.description], start=1):
+                it = QTableWidgetItem(v); it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable); self.table.setItem(r, c, it)
+        self.table.blockSignals(False)
+        self._preview()
+
+    def _current_import(self) -> saphir_wiki.WikiImport:
+        for r, ev in enumerate(self._events):
+            it = self.table.item(r, 0)
+            ev.use = bool(it and it.checkState() == Qt.CheckState.Checked)
+        return saphir_wiki.events_to_import(self._events, self.date.text().strip(), self.T_K, self.P_hPa, self.chamber_name)
+
+    def _preview(self):
+        if not self._events:
+            self.preview.setPlainText(""); return
+        imp = self._current_import()
+        lines = [f"Date {imp.date or '?'};  roof open: " + (", ".join(f"{o}–{c}" for o, c in imp.roof_open) or "never")]
+        day = saphir_wiki.archive_day_folder(self.archive_root, imp.date) if imp.date else ""
+        lines.append("Archive: " + (f"found {day} → measured T/P/H2O/J/NO/NO2/O3 will be used" if day
+                                    else "day folder not found → manual conditions, clear-sky J"))
+        lines.append("Precursors (MCM): " + (", ".join(imp.precursors) or "none"))
+        for inj in imp.injections:
+            what = f"{inj.total_ppb or '?'} ppb → {inj.products[:60]}" if inj.products else "recorded only"
+            mode = inj.delivery.get("mode", "")
+            lines.append(f"  {ACTIONS[inj.action]['label']:42s} {inj.name:10s} {inj.start} +{inj.duration_min:g} min   {what}"
+                         + (f"   [{mode}]" if mode else ""))
+        for lvl, msg in imp.checks:
+            lines.append(("⚠ " if lvl == "warning" else "✖ ") + msg)
+        if imp.notes:
+            lines.append("Notes kept out of the model: " + "; ".join(n[:60] for n in imp.notes[:8]) + (" …" if len(imp.notes) > 8 else ""))
+        self.preview.setPlainText("\n".join(lines))
+
+    def _accept(self):
+        if not self._events:
+            QMessageBox.information(self, "Wiki import", "Nothing parsed yet — fetch, load or paste the action log first."); return
+        self.result_import = self._current_import()
+        self.accept()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 class ExperimentWizard(QWizard):
     experiment_written = pyqtSignal(str)
 
@@ -585,6 +1062,43 @@ class ExperimentWizard(QWizard):
         self.page_init.apply(spec)
         spec.overrides = [l.strip() for l in self.page_review.overrides.toPlainText().splitlines() if l.strip()]
         return spec
+
+    # ── wiki import ───────────────────────────────────────────────────────────
+    def import_from_wiki(self, parent=None):
+        cond = self.page_cond.get()
+        dlg = WikiImportDialog(parent or self, date=cond.date, archive_root=cond.archive_root,
+                               T_K=cond.temperature_K, P_hPa=cond.pressure_hPa, chamber_name=cond.chamber_name)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_import is None:
+            return
+        self.apply_wiki_import(dlg.result_import, replace=dlg.replace_box.isChecked())
+
+    def apply_wiki_import(self, imp: "saphir_wiki.WikiImport", replace: bool = True):
+        """Put a WikiImport into the pages: date + roof + archive mode (Conditions), precursors
+        (Chemistry), injections (Injections).  The name defaults to the date if still the placeholder."""
+        cond = self.page_cond.get()
+        if imp.date:
+            cond.date = imp.date
+        if imp.roof_open:
+            cond.roof_open = list(imp.roof_open)
+        day = saphir_wiki.archive_day_folder(cond.archive_root, cond.date)
+        if day:
+            cond.source, cond.j_source = "archive", "measured"
+        else:
+            cond.source, cond.j_source = "manual", "clear_sky"
+        self.page_cond.set_from(cond)
+        chem = self.page_chem
+        if imp.precursors:
+            chem.mode_compounds.setChecked(True)
+            have = {chem.chosen.item(i).text() for i in range(chem.chosen.count())}
+            for p in imp.precursors:
+                if p not in have:
+                    chem.chosen.addItem(p)
+        spec = self.collect_spec()
+        spec.injections = list(imp.injections) if replace else spec.injections + list(imp.injections)
+        self.page_inj.set_from(spec)
+        if imp.date and self.page_start.name_edit.text().strip() in ("", "my_experiment", "experiment"):
+            self.page_start.name_edit.setText("saphir_" + imp.date.replace("-", ""))
+        self.last_wiki_import = imp
 
     def out_dir(self) -> str:
         return os.path.join(self.page_start.out_edit.text().strip() or self.easy_root,

@@ -57,6 +57,63 @@ STANDARD_COLUMNS = {"NO": "QNO", "NO2": "QNO2", "O3": "QO3", "H2O": "QH2O", "CO2
 # humidification carries chamber impurities (ppb per humidification, scene_05/09 defaults)
 H2O_IMPURITY_DEFAULTS = [("HONO+XNOy", "0.002"), ("CO", "0.5"), ("NO2+XNOy", "0.00"), ("NO+XNOy", "0.000")]
 
+# Injection actions: what the operator did at the chamber.  Each action carries the
+# defaults a new row gets in the wizard (name, product, total ppb, duration [min],
+# ENZ column, EASY switch, comment, extra channels).  The action only steers defaults
+# and labelling; the ENZ/EASY writers work from the InjectionEvent fields.
+ACTIONS: Dict[str, dict] = {
+    "humidification": dict(label="Humidification (water vapour + impurities)", name="H2O",
+                           products=H2O_IMPURITY_DEFAULTS[0][0], total_ppb=H2O_IMPURITY_DEFAULTS[0][1],
+                           duration_min=45, column="QH2O", switch="qH2O",
+                           comment="humidification: HONO impurity (SAPHIR default)",
+                           extra_channels=list(H2O_IMPURITY_DEFAULTS[1:])),
+    "voc":            dict(label="VOC injection", name="VOC", products="", total_ppb="10", duration_min=2,
+                           column="", switch="", comment="set the product to the MCM name and the total ppb"),
+    "o3":             dict(label="Ozone injection", name="O3", products="O3", total_ppb="50", duration_min=20,
+                           column="QO3", switch="qO3", comment=""),
+    "no":             dict(label="NO injection", name="NO", products="NO", total_ppb="5", duration_min=1,
+                           column="QNO", switch="qNO", comment=""),
+    "no2":            dict(label="NO2 injection", name="NO2", products="NO2", total_ppb="5", duration_min=1,
+                           column="QNO2", switch="qNO2", comment=""),
+    "co":             dict(label="CO injection", name="CO", products="CO", total_ppb="100", duration_min=1,
+                           column="QCO", switch="qCO", comment=""),
+    "co2_tracer":     dict(label="CO2 tracer (dilution)", name="CO2", products="CO2", total_ppb="0", duration_min=1,
+                           column="QCO2", switch="qCO2", comment="dilution tracer"),
+    "seed":           dict(label="Seed aerosol (recorded only)", name="seed", products="", total_ppb="",
+                           duration_min=10, column="Q_seed", switch="", comment="recorded only"),
+    "mixture":        dict(label="Emission mixture (recorded only / surrogates)", name="mixture", products="",
+                           total_ppb="", duration_min=2, column="", switch="", comment="recorded only"),
+    "other":          dict(label="Other", name="", products="", total_ppb="0", duration_min=1,
+                           column="", switch="", comment=""),
+}
+ACTION_ORDER = list(ACTIONS)
+
+# wiki action-log codes (saphirwiki "HH:MM <code> <person> <type>: text") → action
+WIKI_CODE_ACTION = {"H": "humidification", "h": "humidification", "X": "voc", "O": "o3", "M": "no", "D": "no2",
+                    "c": "co", "C": "co2_tracer", "S": "seed", "s": "seed"}
+
+
+def infer_action(name: str, products: str = "", column: str = "") -> str:
+    """Best-effort action for specs written before the action field existed."""
+    n = (name or "").strip().upper()
+    if n == "H2O" or (column or "").upper() == "QH2O":
+        return "humidification"
+    if n in ("O3",):
+        return "o3"
+    if n == "NO":
+        return "no"
+    if n == "NO2":
+        return "no2"
+    if n == "CO":
+        return "co"
+    if n == "CO2":
+        return "co2_tracer"
+    if n == "SEED":
+        return "seed"
+    if n in ("GASOLINE", "DIESEL", "COOKING", "BIOGENIC", "VCP1", "VCP2", "MIXTURE"):
+        return "mixture"
+    return "voc" if (products or "").strip() else "other"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Specification
@@ -78,6 +135,7 @@ class Conditions:
     roof_open: List[Tuple[str, str]] = field(default_factory=list)   # [(open HH:MM, close HH:MM)]
     j_source: str = "measured"            # measured (ENZ j columns) | clear_sky (jno2 = PHTFKT_CS, rest from mechanism)
     constrain_species: List[str] = field(default_factory=list)       # e.g. ["NO2", "O3"] → held to ENZ columns
+    chamber_name: str = "SAPHIR"          # injection_calc.CHAMBERS profile (volume, MFC/syringe standards)
 
 
 @dataclass
@@ -93,6 +151,11 @@ class InjectionEvent:
     extra_channels: List[Tuple[str, str]] = field(default_factory=list)   # (products, total_ppb): impurities / second product
     chain: List[Tuple[str, str, str]] = field(default_factory=list)       # follow-up reactions (lhs, rhs, rate expr)
     comment: str = ""
+    action: str = ""                      # key of ACTIONS (humidification, voc, o3, ...); "" = infer from name
+    delivery: Dict[str, str] = field(default_factory=dict)   # how the amount was derived (injection_calc.resolve_delivery)
+
+    def action_key(self) -> str:
+        return self.action if self.action in ACTIONS else infer_action(self.name, self.products, self.column)
 
     def enz_column(self) -> str:
         if self.column:
@@ -416,7 +479,11 @@ def spec_from_dict(d: dict) -> ExperimentSpec:
         e = {k: v for k, v in e.items() if k in InjectionEvent.__dataclass_fields__}
         e["extra_channels"] = [tuple(x) for x in e.get("extra_channels", [])]
         e["chain"] = [tuple(x) for x in e.get("chain", [])]
-        inj.append(InjectionEvent(**e))
+        e["delivery"] = dict(e.get("delivery") or {})
+        ev = InjectionEvent(**e)
+        if not ev.action:
+            ev.action = ev.action_key()
+        inj.append(ev)
     spec = ExperimentSpec(**{k: v for k, v in d.items() if k in ExperimentSpec.__dataclass_fields__})
     spec.conditions, spec.chamber, spec.injections = cond, ch, inj
     spec.initials = [tuple(x) for x in spec.initials]

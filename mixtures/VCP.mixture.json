@@ -1,0 +1,181 @@
+{
+ "name": "VCP",
+ "description": "VCP solution as injected on 2024-07-09 (saphirwiki recipe, µl per component)",
+ "aliases": [
+  "VCP solution",
+  "VCP mixture"
+ ],
+ "components": [
+  {
+   "name": "Limonene",
+   "amount": 5.61,
+   "unit": "ul",
+   "mcm": "LIMONENE",
+   "surrogate": "",
+   "mw": 136.23,
+   "density": 0.841,
+   "note": "'limonene' → MCM LIMONENE"
+  },
+  {
+   "name": "propylene glycol",
+   "amount": 16.95,
+   "unit": "ul",
+   "mcm": "PROPGLY",
+   "surrogate": "",
+   "mw": 76.09,
+   "density": 1.036,
+   "note": "'propylene glycol' → MCM PROPGLY"
+  },
+  {
+   "name": "a-pinene",
+   "amount": 0.78,
+   "unit": "ul",
+   "mcm": "APINENE",
+   "surrogate": "",
+   "mw": 136.23,
+   "density": 0.858,
+   "note": "'a-pinene' → MCM APINENE"
+  },
+  {
+   "name": "b-pinene",
+   "amount": 0.77,
+   "unit": "ul",
+   "mcm": "BPINENE",
+   "surrogate": "",
+   "mw": 136.23,
+   "density": 0.872,
+   "note": "'b-pinene' → MCM BPINENE"
+  },
+  {
+   "name": "ethanol",
+   "amount": 59.19,
+   "unit": "ul",
+   "mcm": "C2H5OH",
+   "surrogate": "",
+   "mw": 46.07,
+   "density": 0.789,
+   "note": "'ethanol' → MCM C2H5OH"
+  },
+  {
+   "name": "ethylene glycol",
+   "amount": 3.31,
+   "unit": "ul",
+   "mcm": "ETHGLY",
+   "surrogate": "",
+   "mw": 62.07,
+   "density": 1.113,
+   "note": "'ethylene glycol' → MCM ETHGLY"
+  },
+  {
+   "name": "D5 siloxane",
+   "amount": 5.89,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 370.77,
+   "density": 0.959,
+   "note": "'d5 siloxane' is not an MCM species — choose a surrogate"
+  },
+  {
+   "name": "triethanolamine",
+   "amount": 0.52,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 149.19,
+   "density": 1.124,
+   "note": "'triethanolamine' is not an MCM species — choose a surrogate"
+  },
+  {
+   "name": "n-dodecane",
+   "amount": 31.96,
+   "unit": "ul",
+   "mcm": "NC12H26",
+   "surrogate": "",
+   "mw": 170.33,
+   "density": 0.75,
+   "note": "'n-dodecane' → MCM NC12H26"
+  },
+  {
+   "name": "i-propyl alcohol",
+   "amount": 34.63,
+   "unit": "ul",
+   "mcm": "IPROPOL",
+   "surrogate": "",
+   "mw": 60.1,
+   "density": 0.786,
+   "note": "'i-propyl alcohol' → MCM IPROPOL"
+  },
+  {
+   "name": "toluene",
+   "amount": 6.08,
+   "unit": "ul",
+   "mcm": "TOLUENE",
+   "surrogate": "",
+   "mw": 92.14,
+   "density": 0.867,
+   "note": "'toluene' → MCM TOLUENE"
+  },
+  {
+   "name": "m-xylene",
+   "amount": 9.54,
+   "unit": "ul",
+   "mcm": "MXYL",
+   "surrogate": "",
+   "mw": 106.17,
+   "density": 0.86,
+   "note": "'m-xylene' → MCM MXYL"
+  },
+  {
+   "name": "carbitol",
+   "amount": 0.93,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 134.17,
+   "density": 0.999,
+   "note": "'carbitol' is not an MCM species — choose a surrogate"
+  },
+  {
+   "name": "tetrahydrofuran",
+   "amount": 1.54,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 72.11,
+   "density": 0.889,
+   "note": "'tetrahydrofuran' is not an MCM species — choose a surrogate"
+  },
+  {
+   "name": "ethanolamine",
+   "amount": 1.27,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 61.08,
+   "density": 1.012,
+   "note": "'ethanolamine' is not an MCM species — choose a surrogate"
+  },
+  {
+   "name": "2-butoxyethanol",
+   "amount": 1.23,
+   "unit": "ul",
+   "mcm": "BUOX2ETOH",
+   "surrogate": "",
+   "mw": 118.17,
+   "density": 0.901,
+   "note": "'2-butoxyethanol' → MCM BUOX2ETOH"
+  },
+  {
+   "name": "octadecane",
+   "amount": 1.84,
+   "unit": "ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 254.5,
+   "density": 0.777,
+   "note": "'octadecane' is not an MCM species — choose a surrogate"
+  }
+ ],
+ "source": "saphirwiki/2024-07-09"
+}
