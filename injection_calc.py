@@ -221,6 +221,15 @@ SURROGATE_HINTS: Dict[str, Tuple[str, str]] = {
     "ethanolamine": ("", "amine chemistry is not in the MCM; small fraction, usually left unmodelled"),
     "monoethanolamine": ("", "amine chemistry is not in the MCM; usually left unmodelled"),
 }
+# formulas of compounds the MCM lacks (for the surrogate search); MCM species carry their own
+FORMULAS: Dict[str, str] = {
+    "d5 siloxane": "C10H30O5Si5", "decamethylcyclopentasiloxane": "C10H30O5Si5", "d5": "C10H30O5Si5",
+    "triethanolamine": "C6H15NO3", "ethanolamine": "C2H7NO", "monoethanolamine": "C2H7NO",
+    "carbitol": "C6H14O3", "diethylene glycol monoethyl ether": "C6H14O3",
+    "tetrahydrofuran": "C4H8O", "thf": "C4H8O", "texanol": "C12H24O3", "benzyl alcohol": "C7H8O",
+    "tetradecane": "C14H30", "n-tetradecane": "C14H30", "hexadecane": "C16H34", "n-hexadecane": "C16H34",
+    "octadecane": "C18H38", "n-octadecane": "C18H38", "2-ethoxyethanol": "C4H10O2", "ethoxyethanol": "C4H10O2",
+}
 _COMPOUND_KEYS = sorted(COMPOUNDS, key=len, reverse=True)
 NON_MCM_OK = {"CO2"}                     # tracers that are fine as EASY species without an MCM entry
 
@@ -239,6 +248,7 @@ class ResolvedCompound:
     status: str = "unresolved"    # mcm | no_mcm | ambiguous | unresolved
     note: str = ""
     candidates: List[str] = field(default_factory=list)
+    formula: str = ""
 
 
 def resolve_compound(text: str) -> ResolvedCompound:
@@ -261,6 +271,7 @@ def resolve_compound(text: str) -> ResolvedCompound:
                 rc.note = (f"'{key}' is not an MCM species — suggested surrogate {hint[0]} ({hint[1]})" if hint and hint[0]
                            else f"'{key}' is not an MCM species — {hint[1]}" if hint else f"'{key}' is not an MCM species — choose a surrogate")
                 rc.candidates = [hint[0]] if hint and hint[0] else []
+            rc.formula = FORMULAS.get(key, "")
             return rc
     # 2) typed MCM name
     up = q.upper()

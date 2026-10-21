@@ -35,7 +35,7 @@ import saphir_wiki
 import injection_calc as ic
 
 try:
-    from mcm_species_db import MCM_DB, reactions_of
+    from mcm_species_db import MCM_DB, reactions_of, search_species
 except Exception:                               # database optional
     MCM_DB = {}
 
@@ -304,15 +304,14 @@ class ChemistryPage(QWizardPage):
         lay.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
                             "the CHANEL template shows how a mixture is written as mole fractions."))
 
-        # first-generation products of the chosen compounds (from the full MCM .fac)
+        # first-generation products of the chosen compounds (from the full MCM .fac): one block per
+        # compound, one column per reaction partner, products listed downwards, rate on hover
         tb = QGroupBox("First-generation chemistry of the chosen compounds"); tl = QVBoxLayout(tb)
-        self.tree = QTreeWidget(); self.tree.setHeaderLabels(["Compound → reaction partner → products", "MCM rate expression"])
-        self.tree.setColumnWidth(0, 420); self.tree.setMinimumHeight(180)
-        self.tree.itemDoubleClicked.connect(self._adjust_from_tree)
-        tl.addWidget(self.tree)
+        self.tree_area = QWidget(); self.tree_lay = QVBoxLayout(self.tree_area); self.tree_lay.setContentsMargins(0, 0, 0, 0)
+        tl.addWidget(self.tree_area)
         hb3 = QHBoxLayout(); b = QPushButton("Show / update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
-        hb3.addWidget(_info("Every reaction the MCM has for each compound, grouped by what it reacts with. "
-                            "Double-click a reaction to adjust its rate below."), stretch=1)
+        hb3.addWidget(_info("Each compound with its reaction partners side by side and the products below each. "
+                            "Hover a product set for the MCM rate; double-click it to adjust the rate below."), stretch=1)
         tl.addLayout(hb3); lay.addWidget(tb)
 
         # reaction adjustments = EASY k[...] overrides
@@ -339,30 +338,36 @@ class ChemistryPage(QWizardPage):
         return FULL_MCM_FAC
 
     def update_tree(self):
-        self.tree.clear()
+        while self.tree_lay.count():
+            w = self.tree_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
         names = [self.chosen.item(i).text() for i in range(self.chosen.count())]
         for n in names:
-            root = QTreeWidgetItem([n, ""]); self.tree.addTopLevelItem(root)
             try:
                 rxns = reactions_of(n, self._fac())
             except Exception as e:
-                root.addChild(QTreeWidgetItem([f"cannot read the MCM file: {e}", ""])); continue
+                self.tree_lay.addWidget(_info(f"{n}: cannot read the MCM file: {e}")); continue
             if not rxns:
-                root.addChild(QTreeWidgetItem(["no reactions found (not an MCM species?)", ""])); continue
-            groups: Dict[str, QTreeWidgetItem] = {}
-            for r in rxns:
-                key = r["partner"] or "unimolecular"
-                g = groups.get(key)
-                if g is None:
-                    g = QTreeWidgetItem([f"+ {key}" if key != "unimolecular" else "unimolecular", ""]); groups[key] = g; root.addChild(g)
-                it = QTreeWidgetItem(["→ " + " + ".join(r["products"]), r["easy_rate"]])
-                it.setData(0, Qt.ItemDataRole.UserRole, (r["easy"], r["easy_rate"])); g.addChild(it)
-            root.setExpanded(True)
-            for g in groups.values():
-                g.setText(0, g.text(0) + f"   ({g.childCount()})"); g.setExpanded(len(groups) <= 4)
+                self.tree_lay.addWidget(_info(f"{n}: no reactions found (not an MCM species?)")); continue
+            order = ["OH", "O3", "NO3", "hv", ""]
+            partners = sorted({r["partner"] for r in rxns}, key=lambda p: (order.index(p) if p in order else 9, p))
+            cols = {p: [r for r in rxns if r["partner"] == p] for p in partners}
+            t = QTableWidget(max(len(v) for v in cols.values()), len(partners))
+            t.setHorizontalHeaderLabels([f"{n} + {p}" if p else f"{n} alone" for p in partners])
+            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); t.verticalHeader().setVisible(False)
+            t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers); t.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            for c, p in enumerate(partners):
+                for r_, rx in enumerate(cols[p]):
+                    it = QTableWidgetItem("→ " + " + ".join(rx["products"]))
+                    it.setToolTip(f"{rx['easy']}\nk = {rx['easy_rate']}")
+                    it.setData(Qt.ItemDataRole.UserRole, (rx["easy"], rx["easy_rate"])); t.setItem(r_, c, it)
+            t.itemDoubleClicked.connect(self._adjust_from_tree)
+            t.setFixedHeight(min(260, 30 + 24 * t.rowCount()))
+            self.tree_lay.addWidget(t)
 
-    def _adjust_from_tree(self, item, _col):
-        data = item.data(0, Qt.ItemDataRole.UserRole)
+    def _adjust_from_tree(self, item, _col=None):
+        data = item.data(Qt.ItemDataRole.UserRole)
         if data:
             _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
 
@@ -414,7 +419,10 @@ class ChemistryPage(QWizardPage):
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         (self.mode_existing if spec.mechanism_stem else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
-        self.tree.clear()
+        while self.tree_lay.count():
+            w = self.tree_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
 
     def apply(self, spec: ExperimentSpec):
         if self.mode_existing.isChecked():
@@ -987,6 +995,18 @@ class MixtureDialog(QDialog):
         hb.addStretch(); lay.addLayout(hb)
         self.table = _table(MIX_HEADERS); lay.addWidget(self.table, stretch=2)
         self.table.itemChanged.connect(lambda _it: self._preview())
+        self.table.itemSelectionChanged.connect(self._row_selected)
+        # surrogate finder: formula or name → MCM species (same formula first, then same C/O count)
+        sb = QGroupBox("Find a surrogate in the MCM for the selected component"); sl = QHBoxLayout(sb)
+        self.sur_query = QLineEdit(); self.sur_query.setPlaceholderText("formula (e.g. C6H14O3) or part of an MCM name")
+        self.sur_query.returnPressed.connect(self._find_surrogate); sl.addWidget(self.sur_query, stretch=1)
+        fb2 = QPushButton("Search"); fb2.clicked.connect(self._find_surrogate); sl.addWidget(fb2)
+        self.sur_list = QListWidget(); self.sur_list.setMinimumWidth(420); self.sur_list.setMaximumHeight(110)
+        self.sur_list.itemDoubleClicked.connect(self._use_surrogate); sl.addWidget(self.sur_list, stretch=2)
+        ub = QPushButton("Use as surrogate"); ub.clicked.connect(lambda: self._use_surrogate(self.sur_list.currentItem())); sl.addWidget(ub)
+        lay.addWidget(sb)
+        lay.addWidget(_info("Every MCM species has a formula and a SMILES; the list shows exact formula matches first, then species "
+                            "with the same carbon and oxygen count, then name matches; radicals last. Double-click to take one."))
         g2 = QGridLayout()
         g2.addWidget(QLabel("Injected volume [µl]"), 0, 0); self.injected = QLineEdit(""); self.injected.setPlaceholderText("empty = recipe amounts as is")
         self.injected.textChanged.connect(self._preview); g2.addWidget(self.injected, 0, 1)
@@ -1037,6 +1057,38 @@ class MixtureDialog(QDialog):
                 comps.append(ic.MixtureComponent(name, 0.0, unit or "ul", mcm.upper(), sur.upper(), None, None, "bad number"))
         return ic.Mixture(self.name.text().strip() or "mixture", aliases=[a.strip() for a in self.aliases.text().split(",") if a.strip()],
                           components=comps)
+
+    def _row_selected(self):
+        r = self.table.currentRow()
+        if r < 0 or self.table.item(r, 3) is None or self.table.item(r, 3).text().strip():
+            return                                  # has an MCM species already
+        rc = ic.resolve_compound(self.table.item(r, 0).text())
+        if rc.formula:
+            self.sur_query.setText(rc.formula); self._find_surrogate()
+
+    def _find_surrogate(self):
+        self.sur_list.clear()
+        q = self.sur_query.text().strip()
+        if not q:
+            return
+        try:
+            hits = search_species(q)
+        except Exception as e:
+            self.sur_list.addItem(f"search failed: {e}"); return
+        for sp, why in hits:
+            it = QListWidgetItem(f"{sp.name:14s} {sp.formula or '':12s} {sp.mass or 0:7.1f} g/mol   {why}   {sp.smiles or ''}")
+            it.setData(Qt.ItemDataRole.UserRole, sp.name); self.sur_list.addItem(it)
+        if not hits:
+            self.sur_list.addItem(f"nothing in the MCM for '{q}' — try the formula with one oxygen more or less, or a shorter carbon chain")
+
+    def _use_surrogate(self, item):
+        r = self.table.currentRow()
+        if item is None or r < 0:
+            return
+        name = item.data(Qt.ItemDataRole.UserRole)
+        if not name:
+            return
+        self.table.setItem(r, 4, QTableWidgetItem(name))
 
     def _parse(self):
         self._set_components(ic.parse_mixture_text(self.paste.toPlainText()))

@@ -300,3 +300,65 @@ def reactions_of(species: str, fac_path: str) -> list[dict]:
     order = {p: i for i, p in enumerate(("OH", "O3", "NO3", "hv", ""))}
     out.sort(key=lambda r: (order.get(r["partner"], 9), r["easy"]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Species search for surrogates: exact formula, then near formula, then name
+# ---------------------------------------------------------------------------
+def _counts(formula: str) -> dict[str, int]:
+    try:
+        return _parse_formula(formula)
+    except Exception:
+        return {}
+
+
+def search_species(query: str, limit: int = 40) -> list[tuple["MCMSpecies", str]]:
+    """Candidates for `query` (a formula such as C6H14O3, or part of an MCM name).
+    Returns [(species, why)] best first: exact formula → same C and O count →
+    same C count → name match.  Only non-radical, closed-shell species are listed
+    first; peroxy radicals come last."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    out: list[tuple[int, str, "MCMSpecies"]] = []
+    looks_formula = bool(re.fullmatch(r"[A-Z][A-Za-z0-9]*", q)) and any(ch.isdigit() for ch in q)
+    qn = _normalise_formula(q) if looks_formula else ""
+    qc = _counts(q) if looks_formula else {}
+    qu = q.upper()
+    for name, sp in MCM_DB.items():
+        rank, why = None, ""
+        if qn and _normalise_formula(sp.formula or "") == qn:
+            rank, why = 0, f"same formula {sp.formula}"
+        elif qc and sp.n_C == qc.get("n_C", -1) and sp.n_O == qc.get("n_O", -2) and sp.n_N == qc.get("n_N", 0):
+            rank, why = 1, f"same C and O count ({sp.formula})"
+        elif qc and sp.n_C == qc.get("n_C", -1) and abs(sp.n_O - qc.get("n_O", 0)) <= 1 and sp.n_N == qc.get("n_N", 0):
+            rank, why = 2, f"same C count, O ±1 ({sp.formula})"
+        elif qu in name:
+            rank, why = 3, f"name contains {qu}"
+        if rank is None:
+            continue
+        if any(tag in name for tag in ("OOH", "NO3", "PAN", "OOA", "OOB")):
+            rank += 5                       # oxidation products: possible, but an emitted compound is the better surrogate
+        if sp.is_peroxy or name.endswith("O2") or name.endswith("O"):
+            rank += 10                      # radicals are never sensible surrogates
+        out.append((rank, name, sp))
+    if not out and qc:                      # nothing with that carbon number: nearest chain with the same O and N
+        cands = [(abs(sp.n_C - qc.get("n_C", 0)), name, sp) for name, sp in MCM_DB.items()
+                 if sp.n_O == qc.get("n_O", 0) and sp.n_N == qc.get("n_N", 0) and not sp.is_peroxy
+                 and not name.endswith("O2") and not name.endswith("O")]
+        if cands:
+            best = min(c[0] for c in cands)
+            out = [(4, name, sp) for d, name, sp in cands if d == best]
+    out.sort(key=lambda t: (t[0], t[1]))
+    return [(sp, _why(rank, sp, qu, qn)) for rank, name, sp in out[:limit]]
+
+
+def _why(rank: int, sp: "MCMSpecies", qu: str, qn: str) -> str:
+    base = {0: "same formula", 1: "same C and O count", 2: "same C count, O ±1", 3: "name match",
+            4: "nearest carbon number with the same O"}.get(rank % 5 if rank < 10 else (rank - 10) % 5, "")
+    tags = []
+    if 5 <= rank < 10 or rank >= 15:
+        tags.append("oxidation product")
+    if rank >= 10:
+        tags.append("radical")
+    return base + (f" ({', '.join(tags)})" if tags else "")
