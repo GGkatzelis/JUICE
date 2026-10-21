@@ -35,7 +35,7 @@ import tomllib
 from typing import Dict, List, Optional
 
 import numpy as np
-from PyQt6.QtCore import Qt, QProcess, QSize
+from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment
 from PyQt6.QtGui import QPixmap, QIcon, QFont, QPalette, QColor
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
@@ -432,6 +432,9 @@ class RunPage(QWidget):
         if self.win.toml_path:
             args += ["--toml", self.win.toml_path]
         self._proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()      # the runner prints '·' and '—': make it write UTF-8
+        env.insert("PYTHONIOENCODING", "utf-8"); env.insert("PYTHONUTF8", "1")
+        self._proc.setProcessEnvironment(env)
         self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self._proc.readyReadStandardOutput.connect(self._on_output)
         self._proc.finished.connect(self._on_finished)
