@@ -36,7 +36,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 from PyQt6.QtCore import Qt, QProcess, QSize
-from PyQt6.QtGui import QPixmap, QIcon, QFont
+from PyQt6.QtGui import QPixmap, QIcon, QFont, QPalette, QColor
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
                              QComboBox, QLineEdit, QCheckBox, QProgressBar, QTextEdit, QPlainTextEdit, QMessageBox,
@@ -56,17 +56,41 @@ STEPS = ["Experiment", "Chemistry", "Injections", "Chamber", "Initial values", "
 ACCENT, ACCENT_DARK, ACCENT_SOFT = "#6b3e85", "#4a3e85", "#efe6f7"
 
 QSS = f"""
-QMainWindow {{ background: #fafafa; }}
-QListWidget#steps {{ background: white; border: none; font-size: 14px; }}
-QListWidget#steps::item {{ padding: 10px 8px; border-bottom: 1px solid #eee; }}
-QListWidget#steps::item:selected {{ background: {ACCENT}; color: white; border-radius: 4px; }}
-QGroupBox {{ font-weight: bold; color: {ACCENT_DARK}; border: 1px solid #ddd; border-radius: 6px; margin-top: 10px; background: white; }}
-QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}
-QPushButton#primary {{ background: {ACCENT}; color: white; font-weight: bold; padding: 8px 18px; border-radius: 4px; }}
-QPushButton#primary:disabled {{ background: #bbb; }}
+QWidget {{ background: #ffffff; color: #222222; }}
+QMainWindow, QScrollArea, QSplitter {{ background: #ffffff; }}
+QMenuBar, QMenu, QStatusBar {{ background: #ffffff; color: #222222; }}
+QMenu::item:selected {{ background: {ACCENT_SOFT}; }}
+QLabel {{ background: transparent; color: #222222; }}
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QListWidget, QTableWidget {{
+    background: #ffffff; color: #222222; border: 1px solid #c8c8c8; border-radius: 3px; selection-background-color: {ACCENT_SOFT}; selection-color: #222222; }}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: #999999; background: #f4f4f4; }}
+QComboBox QAbstractItemView {{ background: #ffffff; color: #222222; selection-background-color: {ACCENT_SOFT}; }}
+QHeaderView::section {{ background: #f0f0f0; color: #222222; border: 1px solid #d8d8d8; padding: 3px; }}
+QTableWidget {{ gridline-color: #e0e0e0; alternate-background-color: #fafafa; }}
+QTableWidget::item:selected, QListWidget::item:selected {{ background: {ACCENT_SOFT}; color: #222222; }}
+QPushButton {{ background: #f3f3f3; color: #222222; border: 1px solid #c8c8c8; border-radius: 4px; padding: 5px 12px; }}
+QPushButton:hover {{ background: #e9e9e9; }}
+QPushButton:disabled {{ color: #a0a0a0; background: #f7f7f7; }}
+QPushButton#primary {{ background: {ACCENT}; color: #ffffff; font-weight: bold; padding: 8px 18px; border: none; }}
+QPushButton#primary:hover {{ background: {ACCENT_DARK}; }}
+QPushButton#primary:disabled {{ background: #c4c4c4; color: #ffffff; }}
+QCheckBox, QRadioButton {{ background: transparent; color: #222222; }}
+QGroupBox {{ font-weight: bold; color: {ACCENT_DARK}; border: 1px solid #dddddd; border-radius: 6px; margin-top: 12px; background: #ffffff; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; background: #ffffff; }}
+QGroupBox::indicator {{ width: 13px; height: 13px; }}
+QListWidget#steps {{ background: #ffffff; border: none; font-size: 14px; }}
+QListWidget#steps::item {{ padding: 10px 8px; border-bottom: 1px solid #eeeeee; color: #222222; }}
+QListWidget#steps::item:selected {{ background: {ACCENT}; color: #ffffff; border-radius: 4px; }}
 QLabel#title {{ font-size: 22px; font-weight: bold; color: {ACCENT_DARK}; }}
-QLabel#subtitle {{ color: #666; }}
-QTabWidget::pane {{ border: 1px solid #ddd; background: white; }}
+QLabel#subtitle {{ color: #666666; }}
+QTabWidget::pane {{ border: 1px solid #dddddd; background: #ffffff; }}
+QTabBar::tab {{ background: #f0f0f0; color: #222222; padding: 6px 12px; border: 1px solid #dddddd; border-bottom: none; }}
+QTabBar::tab:selected {{ background: #ffffff; color: {ACCENT_DARK}; font-weight: bold; }}
+QProgressBar {{ background: #f0f0f0; color: #222222; border: 1px solid #c8c8c8; border-radius: 3px; text-align: center; }}
+QProgressBar::chunk {{ background-color: #2ecc40; }}
+QScrollBar:vertical {{ background: #f4f4f4; width: 12px; }} QScrollBar::handle:vertical {{ background: #cccccc; border-radius: 4px; min-height: 20px; }}
+QScrollBar:horizontal {{ background: #f4f4f4; height: 12px; }} QScrollBar::handle:horizontal {{ background: #cccccc; border-radius: 4px; min-width: 20px; }}
+QToolTip {{ background: #ffffff; color: #222222; border: 1px solid #c8c8c8; }}
 """
 
 # Solver presets → keys written into the scenario JSON (everything else comes from the TOML)
@@ -175,6 +199,7 @@ def _scroll(*widgets: QWidget) -> QScrollArea:
         lay.addWidget(w)
     lay.addStretch()
     sa = QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(inner); sa.setFrameShape(QFrame.Shape.NoFrame)
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)      # pages fit the column width
     return sa
 
 
@@ -199,9 +224,9 @@ class ReviewPanel(QWidget):
         st = QWidget(); sl = QVBoxLayout(st)
         self.summary = QLabel(""); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         sl.addWidget(self.summary)
-        self.checks = QListWidget(); self.checks.setMaximumHeight(120); sl.addWidget(self.checks)
+        self.checks = QListWidget(); self.checks.setMaximumHeight(120); self.checks.setWordWrap(True); sl.addWidget(self.checks)
         sl.addWidget(QLabel("<b>What goes into the input files</b>"))
-        self.bullets = QListWidget(); sl.addWidget(self.bullets, stretch=1)
+        self.bullets = QListWidget(); self.bullets.setWordWrap(True); sl.addWidget(self.bullets, stretch=1)
         self.tabs.addTab(st, "Summary")
         # plot tab
         pt = QWidget(); pl = QVBoxLayout(pt)
@@ -214,7 +239,7 @@ class ReviewPanel(QWidget):
         ft = QWidget(); fl = QVBoxLayout(ft)
         fl.addWidget(_info("Generated in the project folder when you press 'Prepare input files' on the Run step. "
                            "The .easy file is the same input FACSIMILE uses; you do not need to read it."))
-        self.files = QListWidget(); self.files.itemDoubleClicked.connect(lambda it: _open_path(it.data(Qt.ItemDataRole.UserRole))); fl.addWidget(self.files, stretch=1)
+        self.files = QListWidget(); self.files.setWordWrap(True); self.files.itemDoubleClicked.connect(lambda it: _open_path(it.data(Qt.ItemDataRole.UserRole))); fl.addWidget(self.files, stretch=1)
         hb2 = QHBoxLayout()
         fb = QPushButton("Open project folder"); fb.clicked.connect(lambda: _open_path(self.win.out_dir()) if os.path.isdir(self.win.out_dir()) else None); hb2.addWidget(fb)
         ob = QPushButton("Open selected file"); ob.clicked.connect(self._open_selected); hb2.addWidget(ob); hb2.addStretch(); fl.addLayout(hb2)
@@ -330,10 +355,9 @@ class RunPage(QWidget):
         hb.addStretch(); lay.addLayout(hb)
         self.files = QLabel(""); self.files.setWordWrap(True); lay.addWidget(self.files)
         self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setTextVisible(True); self.bar.setFormat("not started")
-        self.bar.setStyleSheet("QProgressBar { text-align: center; } QProgressBar::chunk { background-color: #2ecc40; }")
         lay.addWidget(self.bar)
         self.log = QTextEdit(); self.log.setReadOnly(True)
-        self.log.setStyleSheet("font-family: monospace; font-size: 11px; background: #1e1e1e; color: #d4d4d4;")
+        self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
         lay.addWidget(self.log, stretch=1)
         self._preset_changed()
 
@@ -442,12 +466,12 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             self.setWindowIcon(QIcon(QPixmap(LOGO)))
 
         # ── left: logo + steps ──
-        left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6, 6, 6, 6)
+        left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6, 6, 6, 6); left.setFixedWidth(220)
         if os.path.isfile(LOGO):
             lg = QLabel(); lg.setPixmap(QPixmap(LOGO).scaledToWidth(150, Qt.TransformationMode.SmoothTransformation)); lg.setAlignment(Qt.AlignmentFlag.AlignCenter); ll.addWidget(lg)
         t = QLabel("JUICE"); t.setObjectName("title"); t.setAlignment(Qt.AlignmentFlag.AlignCenter); ll.addWidget(t)
         st = QLabel("chamber experiment → model run"); st.setObjectName("subtitle"); st.setAlignment(Qt.AlignmentFlag.AlignCenter); ll.addWidget(st)
-        self.steps = QListWidget(); self.steps.setObjectName("steps"); self.steps.setFixedWidth(200)
+        self.steps = QListWidget(); self.steps.setObjectName("steps")
         for i, s in enumerate(STEPS):
             self.steps.addItem(QListWidgetItem(f"{i + 1}   {s}"))
         self._state = ["todo"] * len(STEPS)
@@ -470,11 +494,12 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         mid = QWidget(); ml = QVBoxLayout(mid); ml.setContentsMargins(0, 0, 0, 0); ml.addWidget(self.stack, stretch=1); ml.addLayout(nav)
 
         # ── right: review ──
-        self.review = ReviewPanel(self); self.review.setMinimumWidth(400)
+        self.review = ReviewPanel(self); self.review.setMinimumWidth(360); self.review.setMaximumWidth(560)
         self.page_review.hide()                  # keeps the overrides text for collect_spec(); edited via the expert tool
 
         split = QSplitter(); split.addWidget(left); split.addWidget(mid); split.addWidget(self.review)
-        split.setStretchFactor(1, 3); split.setStretchFactor(2, 2)
+        split.setStretchFactor(0, 0); split.setStretchFactor(1, 5); split.setStretchFactor(2, 2)
+        split.setSizes([220, 950, 420]); split.setChildrenCollapsible(False)
         self.setCentralWidget(split)
 
         # ── menu ──
@@ -486,7 +511,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         m.addAction("Expert tool (FR_GUI) …", self._expert)
         m.addSeparator()
         m.addAction("Quit", self.close)
-        self.statusBar().showMessage(f"settings from {os.path.basename(toml_path) if toml_path else 'defaults'}   |   include files: {self.include_dir}")
+        self.statusBar().showMessage(f"settings: {os.path.basename(toml_path) if toml_path else 'defaults'}   |   include files: {os.path.basename(self.include_dir)}")
 
         self.load_spec(self._base, keep_name=True)
         self.steps.setCurrentRow(0)
@@ -561,6 +586,15 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
+    app.setStyle("Fusion")                     # same look on every machine; ignores the OS dark mode
+    pal = QPalette()
+    for role, col in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"), (QPalette.ColorRole.AlternateBase, "#fafafa"),
+                      (QPalette.ColorRole.Button, "#f3f3f3"), (QPalette.ColorRole.ToolTipBase, "#ffffff"), (QPalette.ColorRole.Highlight, ACCENT_SOFT)):
+        pal.setColor(role, QColor(col))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText, QPalette.ColorRole.ToolTipText,
+                 QPalette.ColorRole.HighlightedText, QPalette.ColorRole.PlaceholderText):
+        pal.setColor(role, QColor("#222222" if role != QPalette.ColorRole.PlaceholderText else "#888888"))
+    app.setPalette(pal)
     app.setFont(QFont("Segoe UI", 10))
     w = JuiceWindow(pick_toml(argv))
     w.show()
