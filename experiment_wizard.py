@@ -1020,22 +1020,24 @@ class WikiImportDialog(QDialog):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-class ExperimentWizard(QWizard):
-    experiment_written = pyqtSignal(str)
+class ExperimentHost:
+    """Everything the pages need from their container: the page objects, include/easy
+    roots, spec <-> pages mapping, wiki import, output folder and writing.  Mixed into
+    the QWizard (ExperimentWizard) and into the step-by-step main window (juice_gui)."""
 
-    def __init__(self, parent=None, include_dir: str = "", easy_root: str = "", last_easy_dir: str = ""):
-        super().__init__(parent)
-        self.setWindowTitle("3. Build scenario — JUICE experiment wizard")
-        self.resize(1250, 850)
-        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-        self.include_dir, self.easy_root = include_dir, easy_root or last_easy_dir or os.getcwd()
+    include_dir: str = ""
+    easy_root: str = ""
+
+    def _init_host(self, include_dir: str, easy_root: str):
+        self.include_dir, self.easy_root = include_dir, easy_root or os.getcwd()
         self._base = ExperimentSpec()
         self.page_start = StartPage(self); self.page_cond = ConditionsPage(self); self.page_chem = ChemistryPage(self)
         self.page_inj = InjectionsPage(self); self.page_chamber = ChamberPage(self); self.page_init = InitialsPage(self)
         self.page_review = ReviewPage(self)
-        for p in (self.page_start, self.page_cond, self.page_chem, self.page_inj, self.page_chamber, self.page_init, self.page_review):
-            self.addPage(p)
-        self.load_spec(self._base, keep_name=True)
+        self.last_result: dict = {}
+
+    def pages(self):
+        return (self.page_start, self.page_cond, self.page_chem, self.page_inj, self.page_chamber, self.page_init, self.page_review)
 
     # ── spec ↔ pages ─────────────────────────────────────────────────────────
     def load_spec(self, spec: ExperimentSpec, keep_name: bool = False):
@@ -1104,20 +1106,41 @@ class ExperimentWizard(QWizard):
         return os.path.join(self.page_start.out_edit.text().strip() or self.easy_root,
                             self.page_start.name_edit.text().strip() or "experiment")
 
+    def write_all(self) -> dict:
+        """Write <name>.enz, <name>.easy, chemistry subset and <name>.experiment.json into
+        out_dir().  Returns write_experiment's result dict (+ 'spec', 'spec_path').  Raises on error."""
+        spec = self.collect_spec()
+        out = self.out_dir()
+        res = write_experiment(spec, out)
+        res["spec_path"] = save_spec(spec, os.path.join(out, spec.name + ".experiment.json"))
+        res["spec"] = spec
+        self.last_result = res
+        for n in res.get("notes", []):
+            print(f"[experiment] {n}")
+        return res
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class ExperimentWizard(QWizard, ExperimentHost):
+    experiment_written = pyqtSignal(str)
+
+    def __init__(self, parent=None, include_dir: str = "", easy_root: str = "", last_easy_dir: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("New experiment — JUICE")
+        self.resize(1250, 850)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self._init_host(include_dir, easy_root or last_easy_dir)
+        for p in self.pages():
+            self.addPage(p)
+        self.load_spec(self._base, keep_name=True)
+
     # ── finish ───────────────────────────────────────────────────────────────
     def accept(self):
         try:
-            spec = self.collect_spec()
-            out = self.out_dir()
-            res = write_experiment(spec, out)
-            save_spec(spec, os.path.join(out, spec.name + ".experiment.json"))
+            res = self.write_all()
         except Exception as e:
             QMessageBox.critical(self, "Write failed", str(e)); return
-        # Notes (e.g. archive columns replaced by constants) are kept for the caller
-        # and printed; no modal dialog here so that headless use cannot block.
-        self.last_result = res
-        for n in res.get("notes", []):
-            print(f"[wizard] {n}")
+        # no modal dialog here so that headless use cannot block
         super().accept()
         self.experiment_written.emit(res["easy"])
 

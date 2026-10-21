@@ -443,7 +443,34 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = FULL_MC
     spec.mechanism_stem = os.path.basename(str(res["mech"]))[:-len(".mech")]
     spec.mech_incl_suffix = ".incl"
     spec.use_anorg = False               # inorganic core is inlined in init mode
+    _ensure_comprc(os.path.join(chem, spec.mechanism_stem + ".incl"))
     return res
+
+
+# FACSIMILE fall-off function; normally defined in anorg.mcm331.dark.rate, which the
+# init-mode subset does not include (its inorganic core is inlined) — so the subset's
+# .incl must carry the definition before the first KMT/KFPAN line that uses it.
+COMPRC_DEF = """; Troe fall-off (copied from anorg.mcm331.dark.rate; init-mode subset has no anorg files)
+COMPRC = FUNCTION[(%1)*(%2)/((%1)+(%2))*$
+                  (%3)@(1/(1+(LOG10((%1)/(%2))/$
+                  ((0.75-1.27*LOG10(%3))))@2))]
+
+"""
+
+
+def _ensure_comprc(incl_path: str) -> None:
+    if not os.path.isfile(incl_path):
+        return
+    with open(incl_path, encoding="latin-1") as fh:
+        lines = fh.readlines()
+    if any(re.match(r"\s*COMPRC\s*=\s*FUNCTION", l) for l in lines):
+        return
+    first_use = next((i for i, l in enumerate(lines) if "COMPRC(" in l and not l.lstrip().startswith(";")), None)
+    if first_use is None:
+        return
+    lines[first_use:first_use] = [COMPRC_DEF]
+    with open(incl_path, "w", encoding="latin-1") as fh:
+        fh.writelines(lines)
 
 
 def write_experiment(spec: ExperimentSpec, out_dir: str) -> dict:
