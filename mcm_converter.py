@@ -512,6 +512,10 @@ def _parse_mech_sides(mech_line: str) -> tuple[list[str], list[str]]:
     return [t for t in lhs if t], [t for t in rhs if t]
 
 
+# inorganic species a SAPHIR run always has or may inject: keeps the whole anorg core reachable
+INORGANIC_SEED = {'NO', 'NO2', 'O3', 'CO', 'H2', 'H2O2', 'HNO3', 'SO2'}
+
+
 def _graph_walk_filter(
     reactions: list[tuple[str, str]],
     precursors: list[str],
@@ -550,6 +554,11 @@ def _graph_walk_filter(
         valid.add('hv')  # IDL preserves the lowercase 'hv' literal in the mech
     # M / O2 / N2 are bulk gases — always valid (they appear in anorg reactants)
     valid.update({'M', 'O2', 'N2'})
+    # The inorganic core must run completely whatever the precursors are (the IDL
+    # workflow #includes the whole anorg files); seed it with the chamber's
+    # always-present / injectable inorganics so e.g. the SO2 → sulfate chain is
+    # not pruned when no organic precursor leads to SO2.
+    valid.update(INORGANIC_SEED)
 
     # Pre-parse all reactions once
     parsed = []  # (mech, rate, reactants_set, products_set)
