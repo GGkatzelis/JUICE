@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGr
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
-                             QAbstractItemView, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem)
+                             QAbstractItemView, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QTabWidget)
 
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
@@ -488,6 +488,8 @@ class InjectionsPage(QWizardPage):
         self._delivery: Dict[str, Dict[str, str]] = {}      # name → how the amount was derived (kept with the spec)
         self.table = _table(INJ_HEADERS); lay.addWidget(self.table)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setMinimumHeight(26 * 10 + 30)          # ten rows visible without scrolling
         hb = QHBoxLayout()
         hb.addWidget(QLabel("Add action:"))
         self.action_pick = QComboBox(); self.action_pick.addItems(_ACTION_LABELS); hb.addWidget(self.action_pick)
