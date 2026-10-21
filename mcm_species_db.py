@@ -342,8 +342,12 @@ def search_species(query: str, limit: int = 40) -> list[tuple["MCMSpecies", str]
         if sp.is_peroxy or name.endswith("O2") or name.endswith("O"):
             rank += 10                      # radicals are never sensible surrogates
         out.append((rank, name, sp))
-    if not out and qc:                      # nothing with that carbon number: nearest chain with the same O and N
-        cands = [(abs(sp.n_C - qc.get("n_C", 0)), name, sp) for name, sp in MCM_DB.items()
+    if not out and qc:                      # nothing with that carbon number: same O and N, same saturation
+        def dbe(c, h, n):                   # double-bond equivalents: an alkane stays an alkane
+            return c - h / 2.0 + n / 2.0 + 1
+        q_dbe = dbe(qc.get("n_C", 0), qc.get("n_H", 0), qc.get("n_N", 0))
+        cands = [((abs(dbe(sp.n_C, sp.n_H, sp.n_N) - q_dbe), abs(sp.n_C - qc.get("n_C", 0))), name, sp)
+                 for name, sp in MCM_DB.items()
                  if sp.n_O == qc.get("n_O", 0) and sp.n_N == qc.get("n_N", 0) and not sp.is_peroxy
                  and not name.endswith("O2") and not name.endswith("O")]
         if cands:
