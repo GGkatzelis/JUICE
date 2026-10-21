@@ -19,12 +19,13 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel
 from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
-                             QAbstractItemView, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QTabWidget)
+                             QAbstractItemView, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QTabWidget,
+                             QStyledItemDelegate, QCompleter)
 
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
@@ -45,6 +46,54 @@ def _info(text: str) -> QLabel:
     lab.setWordWrap(True)
     lab.setStyleSheet("color: #888;")
     return lab
+
+
+# ── MCM species completer: type a name, a common name or a formula; pick the MCM species ──
+_MCM_ENTRIES: List[str] = []
+_MCM_ENTRY_TO_NAME: Dict[str, str] = {}
+
+
+def mcm_completer_entries() -> List[str]:
+    """'C5H8   C5H8   68.1 g/mol   C=CC(=C)C' for every MCM species, plus
+    'isoprene → C5H8 …' for the common names of injection_calc.COMPOUNDS (built once)."""
+    if _MCM_ENTRIES:
+        return _MCM_ENTRIES
+    for key, (mcm, mw, _dens) in sorted(ic.COMPOUNDS.items()):      # common names first
+        if mcm and mcm in MCM_DB:
+            e = MCM_DB[mcm]
+            txt = f"{key} → {mcm}   {e.formula or ''}   {mw:.1f} g/mol"
+            _MCM_ENTRIES.append(txt); _MCM_ENTRY_TO_NAME[txt] = mcm
+    # then the MCM species, shortest formula first: typing a formula shows the exact
+    # match (C5H8) before the species that merely contain it (C5H8O5 …)
+    for name, e in sorted(MCM_DB.items(), key=lambda kv: (len(kv[1].formula or ""), kv[0])):
+        if getattr(e, "is_peroxy", False):
+            continue                                   # radicals are never injected
+        txt = f"{name}   {e.formula or ''}   {e.mass or 0:.1f} g/mol   {e.smiles or ''}"
+        _MCM_ENTRIES.append(txt); _MCM_ENTRY_TO_NAME[txt] = name
+    return _MCM_ENTRIES
+
+
+class MCMSpeciesDelegate(QStyledItemDelegate):
+    """Cell editor with an MCM completer: matches anywhere in name, common name, formula
+    or SMILES; the dropdown shows formula, molar mass and SMILES; choosing an entry writes
+    the MCM name into the cell.  Free text (mixtures, surrogates, 0.9*A+0.1*B) still works."""
+
+    def createEditor(self, parent, option, index):
+        ed = QLineEdit(parent)
+        comp = QCompleter(QStringListModel(mcm_completer_entries(), ed), ed)
+        comp.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        comp.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp.setMaxVisibleItems(12)
+        comp.popup().setMinimumWidth(560)
+        comp.activated.connect(lambda txt: ed.setText(_MCM_ENTRY_TO_NAME.get(txt, txt)))
+        ed.setCompleter(comp)
+        ed.setPlaceholderText("MCM name, common name or formula")
+        return ed
+
+    def setModelData(self, editor, model, index):
+        txt = editor.text().strip()
+        model.setData(index, _MCM_ENTRY_TO_NAME.get(txt, txt))
 
 
 def _table(headers: List[str]) -> QTableWidget:
@@ -491,6 +540,8 @@ class InjectionsPage(QWizardPage):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setMinimumHeight(26 * 10 + 30)          # ten rows visible without scrolling
+        self._species_delegate = MCMSpeciesDelegate(self.table)
+        self.table.setItemDelegateForColumn(2, self._species_delegate)   # product: MCM name, common name or formula
         hb = QHBoxLayout()
         hb.addWidget(QLabel("Add action:"))
         self.action_pick = QComboBox(); self.action_pick.addItems(_ACTION_LABELS); hb.addWidget(self.action_pick)
@@ -508,6 +559,8 @@ class InjectionsPage(QWizardPage):
                             "the humidification rows are the trace impurities the water carries into SAPHIR "
                             "(HONO 0.002 ppb, CO 0.5 ppb; NO2/NO 0 = placeholders, fill in if measured). "
                             "XNOy is the NOy bookkeeping tracer, not a chemical species. "
+                            "In the product cell start typing a name, a common name (isoprene) or a formula (C5H8): the list shows the "
+                            "matching MCM species with formula, molar mass and SMILES; pick one to insert its MCM name. "
                             "'Amount calculator' turns µl by syringe, ml of bottle gas or MFC flow × time into ppb for the selected row "
                             "and keeps the derivation; '+ mixture' expands a multi-compound solution into MCM species with mole fractions."))
         self.chain_box = QGroupBox("Delayed release (advanced)"); self.chain_box.setCheckable(True); self.chain_box.setChecked(False)
@@ -791,6 +844,7 @@ class InitialsPage(QWizardPage):
         lay = QVBoxLayout(self)
         hb = QHBoxLayout(); hb.addWidget(QLabel("Floor for all species, INITIAL[*] = CONST(")); self.all_edit = QLineEdit("1."); hb.addWidget(self.all_edit); hb.addWidget(QLabel(") molecules/cm³")); hb.addStretch(); lay.addLayout(hb)
         self.table = _table(["Species", "Expression inside CONST( ), e.g. M*1e-9*14.0 for 14 ppb"]); lay.addWidget(self.table)
+        self._species_delegate = MCMSpeciesDelegate(self.table); self.table.setItemDelegateForColumn(0, self._species_delegate)
         hb2 = QHBoxLayout(); a = QPushButton("+ row"); a.clicked.connect(lambda: _add_row(self.table, ["", "M*1e-9*"])); d = QPushButton("− row"); d.clicked.connect(lambda: _del_row(self.table)); hb2.addWidget(a); hb2.addWidget(d); hb2.addStretch(); lay.addLayout(hb2)
         lay.addWidget(_info("Typical: CO 14 ppb (M*1e-9*14.0); with archive data the measured NO2/O3 at the start can be used."))
 
