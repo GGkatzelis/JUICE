@@ -58,7 +58,7 @@ def mcm_completer_entries() -> List[str]:
     'isoprene → C5H8 …' for the common names of injection_calc.COMPOUNDS (built once)."""
     if _MCM_ENTRIES:
         return _MCM_ENTRIES
-    for key, (mcm, mw, _dens) in sorted(ic.COMPOUNDS.items()):      # common names first
+    for key, (mcm, mw, _dens) in sorted(ic.COMPOUNDS.items(), key=lambda kv: (len(MCM_DB[kv[1][0]].formula or "") if kv[1][0] in MCM_DB else 99, kv[0])):   # common names first, shortest formula first
         if mcm and mcm in MCM_DB:
             e = MCM_DB[mcm]
             txt = f"{key} → {mcm}   {e.formula or ''}   {mw:.1f} g/mol"
