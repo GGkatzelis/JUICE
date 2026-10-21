@@ -221,7 +221,7 @@ class ConditionsPage(QWizardPage):
         self.adv.toggled.connect(lambda on: [w.setVisible(on) for w in self.adv_body + [ag.itemAt(i).widget() for i in range(ag.count()) if isinstance(ag.itemAt(i).widget(), QLabel)]])
         lay.addWidget(self.adv)
         self.adv.toggled.emit(False)
-        self.src_manual.setChecked(True)
+        self.manual_box.setVisible(False)
         self._archive_status()
 
     def _chamber_changed(self, name: str):
@@ -234,6 +234,8 @@ class ConditionsPage(QWizardPage):
         self.jsrc.setCurrentIndex(0 if archive_on else 1)
 
     def _archive_status(self):
+        if not self.date.text().strip():
+            self.archive_status.setText("enter a date"); self.archive_status.setStyleSheet("color: #888;"); return
         day = saphir_wiki.archive_day_folder(self.archive.text().strip(), self.date.text().strip())
         if day:
             self.archive_status.setText("✔ data found for this date"); self.archive_status.setStyleSheet("color: #2e9e4f;")
@@ -245,7 +247,12 @@ class ConditionsPage(QWizardPage):
         self.date.setText(c.date); self.start.setText(c.start); self.end.setText(c.end); self.step.setValue(int(c.step_s))
         self.archive.setText(c.archive_root); self.temp.setText(f"{c.temperature_K:g}")
         self.press.setText(f"{c.pressure_hPa:g}"); self.h2o.setText(f"{c.h2o_percent:g}"); self.flow.setText(f"{c.flow_m3h:g}")
-        (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
+        if c.source in ("archive", "manual"):
+            (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
+        else:                                          # blank experiment: nothing chosen yet
+            for rb in (self.src_archive, self.src_manual):
+                rb.setAutoExclusive(False); rb.setChecked(False); rb.setAutoExclusive(True)
+            self.manual_box.setVisible(False)
         self.jsrc.setCurrentIndex(0 if c.j_source == "measured" else 1)
         self.temp_mode.setCurrentIndex(0 if c.temperature_mode == "enz" else 1)
         _set_rows(self.roof, [[o, cl] for o, cl in c.roof_open])
@@ -255,7 +262,7 @@ class ConditionsPage(QWizardPage):
     def get(self) -> Conditions:
         c = Conditions()
         c.date, c.start, c.end, c.step_s = self.date.text().strip(), self.start.text().strip(), self.end.text().strip(), int(self.step.value())
-        c.source = "archive" if self.src_archive.isChecked() else "manual"
+        c.source = "archive" if self.src_archive.isChecked() else ("manual" if self.src_manual.isChecked() else "")
         c.archive_root = self.archive.text().strip()
         c.temperature_K = float(self.temp.text() or 298); c.temperature_mode = "enz" if self.temp_mode.currentIndex() == 0 else "const"
         c.pressure_hPa = float(self.press.text() or 1006.5); c.h2o_percent = float(self.h2o.text() or 0); c.flow_m3h = float(self.flow.text() or 0)

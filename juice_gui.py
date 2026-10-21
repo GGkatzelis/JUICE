@@ -148,6 +148,22 @@ def prepare_scenario(res: dict, include_dir: str, solver: dict) -> str:
     return path
 
 
+def blank_spec() -> ExperimentSpec:
+    """What a fresh window shows: nothing chosen, no defaults.  Defaults arrive with a
+    template or an import."""
+    spec = ExperimentSpec(name="")
+    c = spec.conditions
+    c.date = c.start = c.end = ""; c.source = ""; c.roof_open = []
+    spec.injections = []
+    return spec
+
+
+def is_blank(spec: ExperimentSpec) -> bool:
+    c = spec.conditions
+    # the name alone does not count: collect_spec() substitutes "experiment" when the field is empty
+    return not (c.date or c.start or c.source or spec.injections or spec.precursors or spec.mechanism_stem)
+
+
 def spec_bullets(spec: ExperimentSpec, include_dir: str = "") -> List[str]:
     """Plain-language list of what goes into the input files (no file syntax)."""
     c = spec.conditions
@@ -252,15 +268,19 @@ class ReviewPanel(QWidget):
             spec = self.win.collect_spec()
         except Exception as e:
             self.summary.setText(f"<i>cannot read the pages: {e}</i>"); return
+        self.checks.clear(); self.bullets.clear()
+        if is_blank(spec):
+            self.summary.setText("<i>Nothing entered yet.</i><br>Give the experiment a name, then open a saved experiment, "
+                                 "import the SAPHIR wiki page, paste your notes, or pick a template.")
+            self._plotted = False; self.refresh_files()
+            return []
         known = mechanism_species(self.win.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
         msgs = validate(spec, known)
-        self.summary.setText("<b>" + spec.name + "</b><br>" + ReviewPage._summary(spec).replace("\n", "<br>"))
-        self.checks.clear()
+        self.summary.setText("<b>" + (spec.name or "(no name)") + "</b><br>" + ReviewPage._summary(spec).replace("\n", "<br>"))
         for lvl, m in msgs:
             self.checks.addItem(QListWidgetItem(("✖ " if lvl == "error" else "⚠ ") + m))
         if not msgs:
             self.checks.addItem(QListWidgetItem("✔ No problems found"))
-        self.bullets.clear()
         for b in spec_bullets(spec, self.win.include_dir):
             self.bullets.addItem(QListWidgetItem("• " + b))
         self._plotted = False
@@ -513,7 +533,8 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         m.addAction("Quit", self.close)
         self.statusBar().showMessage(f"settings: {os.path.basename(toml_path) if toml_path else 'defaults'}   |   include files: {os.path.basename(self.include_dir)}")
 
-        self.load_spec(self._base, keep_name=True)
+        self.load_spec(blank_spec())
+        self.page_start.name_edit.setPlaceholderText("e.g. isoprene_2024-07-09")
         self.steps.setCurrentRow(0)
 
     # ── navigation ──
@@ -541,8 +562,10 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self._paint_states()
 
     def _update_states(self, msgs):
+        if not msgs and is_blank(self.collect_spec()):
+            self._state[:5] = ["todo"] * 5; self._paint_states(); return
         txt = " ".join(m for _, m in msgs).lower()
-        self._state[0] = "error" if any(k in txt for k in ("date", "time window")) else ("warn" if "j values" in txt or "roof" in txt else "ok")
+        self._state[0] = "error" if any(k in txt for k in ("date", "time window", "conditions come from")) else ("warn" if "j values" in txt or "roof" in txt else "ok")
         self._state[1] = "error" if "no chemistry" in txt else "ok"
         self._state[2] = "warn" if "injection" in txt else "ok"
         self._state[3] = "ok"; self._state[4] = "ok"
@@ -555,7 +578,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
     # ── file menu ──
     def _new(self):
-        self.load_spec(ExperimentSpec()); self.page_start.name_edit.setText("my_experiment"); self.steps.setCurrentRow(0); self.review.refresh()
+        self.load_spec(blank_spec()); self.steps.setCurrentRow(0); self.review.refresh()
 
     def _open(self):
         p, _ = QFileDialog.getOpenFileName(self, "Open experiment", self.easy_root, "Experiment (*.experiment.json)")

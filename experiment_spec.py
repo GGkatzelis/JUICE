@@ -578,15 +578,20 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
     """Return (level, message) items; level is 'error' or 'warning'."""
     msgs: List[Tuple[str, str]] = []
     c = spec.conditions
-    try:
-        grid = time_grid(c)
-        if len(grid) < 2:
-            msgs.append(("error", "Time window is empty — check start and end time."))
-    except Exception as e:
-        msgs.append(("error", f"Date or time is not valid: {e}"))
+    if not (c.date and c.start and c.end):
+        msgs.append(("error", "Enter the experiment date and the time window (Where and when)."))
+    else:
+        try:
+            grid = time_grid(c)
+            if len(grid) < 2:
+                msgs.append(("error", "Time window is empty — check start and end time."))
+        except Exception as e:
+            msgs.append(("error", f"Date or time is not valid: {e}"))
+    if c.source not in ("archive", "manual"):
+        msgs.append(("error", "Choose where the chamber conditions come from: measured (archive) or manual."))
     if not spec.mechanism_stem and not spec.precursors:
         msgs.append(("error", "No chemistry: choose compounds or an existing mechanism."))
-    if c.j_source == "measured" and c.source != "archive":
+    if c.j_source == "measured" and c.source == "manual":
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
                                 "(no photolysis). Use 'clear sky' or provide archive data."))
     if not c.roof_open:
