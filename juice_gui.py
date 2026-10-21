@@ -10,7 +10,7 @@ last step.  No pop-ups on the main path.
     3 Injections        actions, amounts, mixtures
     4 Chamber           wall deposition, sources, background reactivity, dilution
     5 Initial values    concentrations at the start
-    6 Run               preset, prepare the input files, run the solver, open the results
+    6 Run               prepare the input files, run the solver, open the results
 
 The only thing a user edits is the experiment description (<name>.experiment.json).
 The input files (ENZ, EASY, scenario JSON) are generated from it in the project
@@ -93,16 +93,6 @@ QScrollBar:horizontal {{ background: #f4f4f4; height: 12px; }} QScrollBar::handl
 QToolTip {{ background: #ffffff; color: #222222; border: 1px solid #c8c8c8; }}
 """
 
-# Solver presets → keys written into the scenario JSON (everything else comes from the TOML)
-PRESETS = {
-    "Standard (validated against FACSIMILE)": dict(perstep_snap=True, perstep_warm=True, interpolation="piecewise",
-                                                   rtol=1e-4, first_step=1e-6, export_kv_pd=True),
-    "Quick look (no rate/budget files)":      dict(perstep_snap=True, perstep_warm=True, interpolation="piecewise",
-                                                   rtol=1e-4, first_step=1e-6, export_kv_pd=False),
-    "Custom":                                 None,
-}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 def load_paths(toml_path: str) -> Dict[str, str]:
     """[paths] of the TOML (+ .local.toml overlay); defaults relative to this file."""
@@ -131,16 +121,43 @@ def pick_toml(argv: List[str]) -> str:
     return ""
 
 
-def prepare_scenario(res: dict, include_dir: str, solver: dict) -> str:
+def solver_from_toml(toml_path: str) -> dict:
+    """The solver keys scenario_runner reads from the scenario JSON (not from the TOML),
+    taken from the TOML's [solver] section so every run uses the validated set.
+    Fallbacks are the validated values, never the runner's own (python / linear / 1e-2)."""
+    sol: dict = {}
+    for p in (toml_path, toml_path[:-5] + ".local.toml" if toml_path.endswith(".toml") else ""):
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "rb") as fh:
+                    sol.update(tomllib.load(fh).get("solver", {}))
+            except Exception as e:
+                print(f"[juice_gui] could not read {p}: {e}")
+    def _f(key, default):
+        v = sol.get(key, default)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+    return {"rtol": _f("rtol_default", 1e-4),
+            "ode_backend": str(sol.get("ode_backend", "numba")),
+            "solver_method": str(sol.get("solver_method", "BDF")),
+            "jac_mode": str(sol.get("jac_mode", "analytic")),
+            "interpolation": str(sol.get("interpolation", "piecewise")),
+            "first_step": _f("first_step", 1e-6)}
+
+
+def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, toml_path: str = "") -> str:
     """EASY + ENZ (from write_all) → canonical elog → scenario JSON next to them.
-    Returns the JSON path.  The JSON stem = experiment name, so the runner writes <name>.cs."""
+    Returns the JSON path.  The JSON stem = experiment name, so the runner writes <name>.cs.
+    Solver numerics are the validated ones from the TOML (solver_from_toml); the user
+    never chooses them here."""
     out = os.path.dirname(res["easy"])
     raw, canon = generate_both(res["easy"], search_dirs=[out, os.path.join(out, "chemistry"), include_dir], output_dir=out)
     cfg = parse_idl_easy(canon, enz_path=res["enz"], chemistry_folder=out,
                          include_fallbacks=[os.path.join(out, "chemistry"), include_dir])
-    cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon,
-                "ode_backend": "numba", "solver_method": "BDF", "jac_mode": "analytic"})
-    cfg.update(solver)
+    cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon, "export_kv_pd": bool(export_kv_pd)})
+    cfg.update(solver_from_toml(toml_path))
     name = os.path.splitext(os.path.basename(res["easy"]))[0]
     path = os.path.join(out, name + ".json")
     with open(path, "w", encoding="utf-8") as fh:
@@ -355,18 +372,13 @@ class RunPage(QWidget):
         g = QGridLayout(); r = 0
         g.addWidget(QLabel("Project folder"), r, 0); self.folder = QLabel(""); self.folder.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         g.addWidget(self.folder, r, 1, 1, 3); r += 1
-        g.addWidget(QLabel("Solver preset"), r, 0); self.preset = QComboBox(); self.preset.addItems(list(PRESETS))
-        self.preset.currentIndexChanged.connect(self._preset_changed); g.addWidget(self.preset, r, 1, 1, 3); r += 1
-        self.custom = QWidget(); cg = QGridLayout(self.custom); cg.setContentsMargins(0, 0, 0, 0)
-        cg.addWidget(QLabel("rtol"), 0, 0); self.rtol = QLineEdit("1e-4"); cg.addWidget(self.rtol, 0, 1)
-        cg.addWidget(QLabel("first_step"), 0, 2); self.first_step = QLineEdit("1e-6"); cg.addWidget(self.first_step, 0, 3)
-        self.warm = QCheckBox("Warm restart across ENZ rows"); self.warm.setChecked(True); cg.addWidget(self.warm, 1, 0, 1, 2)
-        self.kvpd = QCheckBox("Write rate (.kv) and budget (.pd) files"); self.kvpd.setChecked(True); cg.addWidget(self.kvpd, 1, 2, 1, 2)
-        g.addWidget(self.custom, r, 0, 1, 4); r += 1
+        self.kvpd = QCheckBox("Also write the reaction rates and production/loss budgets "
+                              "(large files; needed for the process analysis and reactivity views in the viewer)")
+        self.kvpd.setChecked(True); g.addWidget(self.kvpd, r, 0, 1, 4); r += 1
         lay.addLayout(g)
-        lay.addWidget(_info("Standard = the settings validated against FACSIMILE (piecewise inputs, warm restart, rtol 1e-4, "
-                            "rate and budget files on). Quick look only skips the large rate/budget files. "
-                            f"Everything else comes from {os.path.basename(self.win.toml_path) or 'the TOML'}."))
+        lay.addWidget(_info(f"The solver runs with the validated settings from {os.path.basename(self.win.toml_path) or 'the TOML'} "
+                            "(the same for every experiment, so runs stay comparable with FACSIMILE). "
+                            "Benchmark and tolerance experiments belong in the expert tool, not here."))
         hb = QHBoxLayout()
         self.prep_btn = QPushButton("1. Prepare input files"); self.prep_btn.setObjectName("primary"); self.prep_btn.clicked.connect(self.prepare); hb.addWidget(self.prep_btn)
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
@@ -379,18 +391,6 @@ class RunPage(QWidget):
         self.log = QTextEdit(); self.log.setReadOnly(True)
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
         lay.addWidget(self.log, stretch=1)
-        self._preset_changed()
-
-    def _preset_changed(self):
-        self.custom.setVisible(PRESETS[self.preset.currentText()] is None)
-
-    def solver_settings(self) -> dict:
-        p = PRESETS[self.preset.currentText()]
-        if p is not None:
-            return dict(p)
-        return dict(perstep_snap=True, perstep_warm=self.warm.isChecked(), interpolation="piecewise",
-                    rtol=float(self.rtol.text() or 1e-4), first_step=float(self.first_step.text() or 1e-6),
-                    export_kv_pd=self.kvpd.isChecked())
 
     def refresh(self):
         self.folder.setText(self.win.out_dir())
@@ -407,7 +407,7 @@ class RunPage(QWidget):
         self.bar.setFormat("preparing …"); QApplication.processEvents()
         try:
             res = self.win.write_all()
-            self.json_path = prepare_scenario(res, self.win.include_dir, self.solver_settings())
+            self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path)
         except Exception as e:
             self.log.append(f"Prepare failed: {e}"); self.bar.setFormat("prepare failed"); return ""
         out = os.path.dirname(self.json_path)
