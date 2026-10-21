@@ -1,16 +1,18 @@
 """
 juice_gui.py — JUICE, step by step.
 
-One window, six steps down the left, the active step in the middle, a review panel on
+One window, five steps down the left, the active step in the middle, a review panel on
 the right that always shows what the experiment contains, and the solver run as the
 last step.  No pop-ups on the main path.
 
-    1 Experiment        name, folder, load (saved / wiki / pasted notes), template, date, conditions, roof
-    2 Chemistry         precursors (MCM subset) or an existing mechanism
-    3 Injections        actions, amounts, mixtures
-    4 Chamber           wall deposition, sources, background reactivity, dilution
-    5 Initial values    concentrations at the start
-    6 Run               prepare the input files, run the solver, open the results
+    1 Experiment   name, folder, load (saved / wiki / pasted notes), template, date,
+                   conditions, roof  — with a plot of the conditions the model will see
+    2 Chemistry    precursors (MCM subset) or an existing mechanism, first-generation
+                   chemistry tree, reaction adjustments (EASY k[...] overrides)
+    3 Injections   actions, amounts, mixtures, delayed release — with the injection timeline
+    4 Chamber      wall deposition, sources, background reactivity, dilution, initial
+                   values — with a plot of what the chamber adds per hour
+    5 Run          prepare the input files, run the solver, open the results
 
 The only thing a user edits is the experiment description (<name>.experiment.json).
 The input files (ENZ, EASY, scenario JSON) are generated from it in the project
@@ -22,6 +24,7 @@ the expert tool for file-level editing.
     python juice_gui.py -t FR_GUI.toml  # another TOML
 
 The step pages are the ones of experiment_wizard.py (shared through ExperimentHost).
+Solver numerics come from the TOML (solver_from_toml), never from this window.
 """
 from __future__ import annotations
 
@@ -32,15 +35,14 @@ import subprocess
 import sys
 import time
 import tomllib
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment
 from PyQt6.QtGui import QPixmap, QIcon, QFont, QPalette, QColor
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
-                             QComboBox, QLineEdit, QCheckBox, QProgressBar, QTextEdit, QPlainTextEdit, QMessageBox,
-                             QFileDialog, QSplitter, QTabWidget, QFrame)
+                             QCheckBox, QProgressBar, QTextEdit, QMessageBox, QFileDialog, QSplitter, QTabWidget, QFrame)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -52,7 +54,8 @@ import injection_calc as ic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO = os.path.join(HERE, "JUICE Logo.png")
-STEPS = ["Experiment", "Chemistry", "Injections", "Chamber", "Initial values", "Run"]
+STEPS = ["Experiment", "Chemistry", "Injections", "Chamber", "Run"]
+RUN_STEP = len(STEPS) - 1
 ACCENT, ACCENT_DARK, ACCENT_SOFT = "#6b3e85", "#4a3e85", "#efe6f7"
 
 QSS = f"""
@@ -61,13 +64,13 @@ QMainWindow, QScrollArea, QSplitter {{ background: #ffffff; }}
 QMenuBar, QMenu, QStatusBar {{ background: #ffffff; color: #222222; }}
 QMenu::item:selected {{ background: {ACCENT_SOFT}; }}
 QLabel {{ background: transparent; color: #222222; }}
-QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QListWidget, QTableWidget {{
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QListWidget, QTableWidget, QTreeWidget {{
     background: #ffffff; color: #222222; border: 1px solid #c8c8c8; border-radius: 3px; selection-background-color: {ACCENT_SOFT}; selection-color: #222222; }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: #999999; background: #f4f4f4; }}
 QComboBox QAbstractItemView {{ background: #ffffff; color: #222222; selection-background-color: {ACCENT_SOFT}; }}
 QHeaderView::section {{ background: #f0f0f0; color: #222222; border: 1px solid #d8d8d8; padding: 3px; }}
 QTableWidget {{ gridline-color: #e0e0e0; alternate-background-color: #fafafa; }}
-QTableWidget::item:selected, QListWidget::item:selected {{ background: {ACCENT_SOFT}; color: #222222; }}
+QTableWidget::item:selected, QListWidget::item:selected, QTreeWidget::item:selected {{ background: {ACCENT_SOFT}; color: #222222; }}
 QPushButton {{ background: #f3f3f3; color: #222222; border: 1px solid #c8c8c8; border-radius: 4px; padding: 5px 12px; }}
 QPushButton:hover {{ background: #e9e9e9; }}
 QPushButton:disabled {{ color: #a0a0a0; background: #f7f7f7; }}
@@ -92,6 +95,7 @@ QScrollBar:vertical {{ background: #f4f4f4; width: 12px; }} QScrollBar::handle:v
 QScrollBar:horizontal {{ background: #f4f4f4; height: 12px; }} QScrollBar::handle:horizontal {{ background: #cccccc; border-radius: 4px; min-width: 20px; }}
 QToolTip {{ background: #ffffff; color: #222222; border: 1px solid #c8c8c8; }}
 """
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 def load_paths(toml_path: str) -> Dict[str, str]:
@@ -133,10 +137,10 @@ def solver_from_toml(toml_path: str) -> dict:
                     sol.update(tomllib.load(fh).get("solver", {}))
             except Exception as e:
                 print(f"[juice_gui] could not read {p}: {e}")
+
     def _f(key, default):
-        v = sol.get(key, default)
         try:
-            return float(v)
+            return float(sol.get(key, default))
         except (TypeError, ValueError):
             return default
     return {"rtol": _f("rtol_default", 1e-4),
@@ -149,9 +153,7 @@ def solver_from_toml(toml_path: str) -> dict:
 
 def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, toml_path: str = "") -> str:
     """EASY + ENZ (from write_all) → canonical elog → scenario JSON next to them.
-    Returns the JSON path.  The JSON stem = experiment name, so the runner writes <name>.cs.
-    Solver numerics are the validated ones from the TOML (solver_from_toml); the user
-    never chooses them here."""
+    Returns the JSON path.  The JSON stem = experiment name, so the runner writes <name>.cs."""
     out = os.path.dirname(res["easy"])
     raw, canon = generate_both(res["easy"], search_dirs=[out, os.path.join(out, "chemistry"), include_dir], output_dir=out)
     cfg = parse_idl_easy(canon, enz_path=res["enz"], chemistry_folder=out,
@@ -181,7 +183,7 @@ def is_blank(spec: ExperimentSpec) -> bool:
     return not (c.date or c.start or c.source or spec.injections or spec.precursors or spec.mechanism_stem)
 
 
-def spec_bullets(spec: ExperimentSpec, include_dir: str = "") -> List[str]:
+def spec_bullets(spec: ExperimentSpec) -> List[str]:
     """Plain-language list of what goes into the input files (no file syntax)."""
     c = spec.conditions
     ch = ic.chamber(c.chamber_name)
@@ -192,10 +194,12 @@ def spec_bullets(spec: ExperimentSpec, include_dir: str = "") -> List[str]:
         out.append(f"Chemistry: mechanism include set '{spec.mechanism_stem}' + inorganic core and photolysis")
     else:
         out.append("Chemistry: not chosen yet")
+    for rxn, rate, _cmt in spec.reaction_adjustments:
+        out.append(f"Reaction adjusted: {rxn}  →  " + ("switched off" if (rate or "0").strip() in ("0", "0.", "0.0") else f"k = {rate}"))
     if c.source == "archive":
         out.append(f"Conditions: measured T, P, humidity, flow and J values from the archive for {c.date}"
                    + (", clear-sky J" if c.j_source == "clear_sky" else ""))
-    else:
+    elif c.source == "manual":
         out.append(f"Conditions: constant T {c.temperature_K:g} K, P {c.pressure_hPa:g} hPa, H2O {c.h2o_percent:g} %, "
                    f"flow {c.flow_m3h:g} m³/h, {'clear-sky' if c.j_source == 'clear_sky' else 'measured'} photolysis")
     out.append(f"Time: {c.date} {c.start}–{c.end} UTC in {c.step_s} s steps; roof open "
@@ -206,7 +210,8 @@ def spec_bullets(spec: ExperimentSpec, include_dir: str = "") -> List[str]:
         what = f"{inj.total_ppb} ppb of {inj.products[:50]}" if inj.products else "recorded only"
         extra = f" + {len(inj.extra_channels)} impurity channel(s)" if inj.extra_channels else ""
         mode = inj.delivery.get("mode", "")
-        out.append(f"Injection {inj.start or '--:--'} {label}: {what}{extra}" + (f" [from {mode}]" if mode and mode != "ppb" else ""))
+        out.append(f"Injection {inj.start or '--:--'} {label}: {what}{extra}" + (f" [from {mode}]" if mode and mode != "ppb" else "")
+                   + (" (delayed release)" if inj.chain else ""))
     on = [t for k, t, _d in CHAMBER_ITEMS if getattr(spec.chamber, k)]
     out.append("Chamber effects: " + (", ".join(t.split(" (")[0] for t in on) or "none"))
     out.append(f"Initial values: {len(spec.initials)} species set, all others at the floor value")
@@ -217,7 +222,7 @@ def spec_bullets(spec: ExperimentSpec, include_dir: str = "") -> List[str]:
 
 def _boxed(page: QWidget, title: str = "") -> QWidget:
     """A wizard page shown as a plain section: title as group box, page inside."""
-    box = QGroupBox(title or page.title())
+    box = QGroupBox(title or (page.title() if hasattr(page, "title") else ""))
     lay = QVBoxLayout(box); lay.setContentsMargins(8, 10, 8, 6)
     sub = page.subTitle() if hasattr(page, "subTitle") else ""
     if sub:
@@ -243,17 +248,130 @@ def _open_path(path: str):
         subprocess.Popen(["xdg-open", path])
 
 
+def _const(expr: str, default: float = 0.0) -> float:
+    """Numeric value of a small EASY constant expression such as '2.6*0.7' (no names)."""
+    try:
+        return float(eval(expr.replace("@", "**").replace("D", "e").replace("d", "e"), {"__builtins__": {}}, {}))
+    except Exception:
+        return default
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class InputsPlot(QWidget):
+    """Matplotlib view of the inputs as the model will see them.  Modes:
+    'conditions' (T + roof, jNO2 + H2O), 'injections' (pulse timeline),
+    'chamber' (what the chamber adds per hour), 'all' (the three stacked)."""
+
+    def __init__(self, win: "JuiceWindow", mode: str, height: float = 3.2):
+        super().__init__()
+        self.win, self.mode = win, mode
+        lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
+        self.fig = Figure(figsize=(6, height), tight_layout=True); self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMinimumHeight(int(height * 95)); lay.addWidget(self.canvas, stretch=1)
+        hb = QHBoxLayout(); b = QPushButton("Update plot"); b.clicked.connect(self.plot); hb.addWidget(b)
+        self.note = _info({"conditions": "Temperature, roof, photolysis and humidity as the model will see them (archive data is read on update).",
+                           "injections": "When each injection pulse is on; the model spreads the total ppb over the pulse.",
+                           "chamber": "Chamber contributions per hour from the chosen effects and the conditions.",
+                           "all": "Conditions and injections as the model will see them."}[mode])
+        hb.addWidget(self.note, stretch=1); lay.addLayout(hb)
+        self.plotted = False
+
+    def _inputs(self):
+        spec = self.win.collect_spec()
+        grid, cols, notes = self.win.inputs_for(spec)
+        c = spec.conditions
+        h0 = float(c.start.split(":")[0]) + float(c.start.split(":")[1]) / 60.0
+        hours = (grid - grid[0]) / 3600.0 + h0
+        return spec, hours, cols, notes
+
+    def plot(self):
+        self.fig.clear()
+        try:
+            spec, hours, cols, notes = self._inputs()
+        except Exception as e:
+            ax = self.fig.add_subplot(111); ax.text(0.5, 0.5, f"nothing to plot yet:\n{e}", ha="center", va="center", wrap=True, fontsize=8)
+            self.canvas.draw(); return
+        if self.mode == "all":
+            axes = [self.fig.add_subplot(311), self.fig.add_subplot(312), self.fig.add_subplot(313)]
+            self._conditions(axes[0], axes[1], hours, cols); self._injections(axes[2], hours, cols)
+        elif self.mode == "conditions":
+            self._conditions(self.fig.add_subplot(121), self.fig.add_subplot(122), hours, cols)
+        elif self.mode == "injections":
+            self._injections(self.fig.add_subplot(111), hours, cols)
+        else:
+            self._chamber(self.fig.add_subplot(111), spec, hours, cols)
+        for ax in self.fig.axes:
+            ax.tick_params(labelsize=7)
+        if notes:
+            self.note.setText("; ".join(n[:70] for n in notes[:3]))
+        self.canvas.draw(); self.plotted = True
+
+    def _conditions(self, ax1, ax2, hours, cols):
+        if "t" in cols:
+            ax1.plot(hours, cols["t"], color=ACCENT, lw=1.2); ax1.set_ylabel("T [K]", color=ACCENT, fontsize=8)
+        if "hv" in cols:
+            axb = ax1.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.4, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
+        ax1.set_title("temperature, roof open (yellow)", fontsize=8); ax1.set_xlabel("hour (UTC)", fontsize=8)
+        jn = [k for k in cols if k.lower() == "jno2"] or [k for k in cols if k.lower().startswith("j")][:1]
+        for k in jn:
+            ax2.plot(hours, cols[k], lw=1, color="#3b6fc4", label=k)
+        ax2.set_ylabel("jNO2 [1/s]", color="#3b6fc4", fontsize=8)
+        if "H2O" in cols:
+            axc = ax2.twinx(); axc.plot(hours, cols["H2O"], color="#2e9e4f", lw=1, ls="--"); axc.set_ylabel("H2O [%]", color="#2e9e4f", fontsize=8)
+        ax2.set_title("photolysis, humidity (dashed)", fontsize=8); ax2.set_xlabel("hour (UTC)", fontsize=8)
+
+    def _injections(self, ax, hours, cols):
+        qs = [k for k in cols if k.upper().startswith("Q")]
+        for i, k in enumerate(qs):
+            y = cols[k]
+            if np.any(y > 0):
+                ax.fill_between(hours, i, i + 0.8 * (y > 0), step="post", color=ACCENT, alpha=0.6)
+        ax.set_yticks([i + 0.4 for i in range(len(qs))]); ax.set_yticklabels(qs, fontsize=7); ax.set_ylim(-0.2, max(1, len(qs)))
+        if "hv" in cols:
+            axb = ax.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.25, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
+        ax.set_xlabel("hour (UTC)", fontsize=8); ax.set_title("injection pulses (roof open in yellow)", fontsize=8)
+
+    def _chamber(self, ax, spec, hours, cols):
+        c, ch = spec.conditions, spec.chamber
+        n = len(hours)
+        T = np.asarray(cols.get("t", np.full(n, c.temperature_K)), dtype=float); P = c.pressure_hPa
+        M = 7.2428e18 * P / np.maximum(T, 1.0)                    # molecules/cm³ = P/(k_B T)
+        h2o = np.asarray(cols.get("H2O", np.full(n, c.h2o_percent)), dtype=float)   # vol-%
+        hv = np.asarray(cols.get("hv", np.zeros(n)), dtype=float)
+        j = cols.get("jNO2", cols.get("jno2"))
+        j = np.asarray(j, dtype=float) if j is not None else np.zeros(n)
+        if not np.any(j > 0):                                      # manual / clear-sky run: jNO2 = PHTFKT(1.165e-2, 0.244, -0.267)
+            sza = np.asarray(cols.get("sz", np.full(n, 90.0)), dtype=float)
+            cz = np.maximum(np.cos(np.radians(np.minimum(sza, 89.9))), 1e-3)
+            j = np.where(sza < 89.9, 1.165e-2 * cz ** 0.244 * np.exp(-0.267 / cz), 0.0) * (hv > 0.5)
+        to_ppb_h = 1e9 * 3600.0 / M
+        rh = h2o * P / np.exp(21.36469 - 5339.66 / np.maximum(T, 1.0))
+        if ch.hono:
+            rate = _const(ch.hono_const, 1.82) * 4.7e13 * (1 + (rh / 11.6) ** 2) * np.exp(-3950.0 / T) * j
+            ax.plot(hours, rate * to_ppb_h, color=ACCENT, lw=1.3, label="HONO from the walls")
+        if ch.hcho:
+            ax.plot(hours, _const(ch.hcho_const, 1.0) * 2.8e6 * hv * to_ppb_h, color="#3b6fc4", lw=1.2, label="HCHO from the walls")
+        if ch.dark_hono:
+            ax.plot(hours, _const(ch.dark_hono_rate, 1e-13) * h2o * 1e-2 * M * to_ppb_h, color="#888", lw=1, ls=":", label="dark HONO")
+        if ch.dilution:
+            flow = np.asarray(cols.get("dilute", np.full(n, c.flow_m3h)), dtype=float)
+            dil = (flow + 0.6) / (ic.chamber(c.chamber_name).volume_m3 * 3600.0) * 3600.0 * 100.0   # %/h
+            axb = ax.twinx(); axb.plot(hours, dil, color="#2e9e4f", lw=1, ls="--"); axb.set_ylabel("dilution [%/h]", color="#2e9e4f", fontsize=8)
+        ax.set_ylabel("source [ppb/h]", fontsize=8); ax.set_xlabel("hour (UTC)", fontsize=8)
+        ax.set_title("what the chamber adds per hour (dilution dashed)", fontsize=8)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(fontsize=7, loc="upper left")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class ReviewPanel(QWidget):
-    """Always visible: summary, what goes into the files, validation, a plot of the
-    inputs (conditions and injections against time), and the generated files."""
+    """Always visible: summary, what goes into the files, validation, the inputs plot, the files."""
 
     def __init__(self, win: "JuiceWindow"):
         super().__init__()
         self.win = win
         lay = QVBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4)
         self.tabs = QTabWidget(); lay.addWidget(self.tabs, stretch=1)
-        # summary tab
         st = QWidget(); sl = QVBoxLayout(st)
         self.summary = QLabel(""); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         sl.addWidget(self.summary)
@@ -261,14 +379,7 @@ class ReviewPanel(QWidget):
         sl.addWidget(QLabel("<b>What goes into the input files</b>"))
         self.bullets = QListWidget(); self.bullets.setWordWrap(True); sl.addWidget(self.bullets, stretch=1)
         self.tabs.addTab(st, "Summary")
-        # plot tab
-        pt = QWidget(); pl = QVBoxLayout(pt)
-        self.fig = Figure(figsize=(4, 6), tight_layout=True); self.canvas = FigureCanvas(self.fig); pl.addWidget(self.canvas, stretch=1)
-        hb = QHBoxLayout(); b = QPushButton("Update plot"); b.clicked.connect(self.plot); hb.addWidget(b)
-        self.plot_note = _info("Conditions and injections as the model will see them (archive data is read when you update)."); hb.addWidget(self.plot_note, stretch=1)
-        pl.addLayout(hb)
-        self.tabs.addTab(pt, "Inputs plot")
-        # files tab
+        self.plot = InputsPlot(win, "all", height=6.0); self.tabs.addTab(self.plot, "Inputs plot")
         ft = QWidget(); fl = QVBoxLayout(ft)
         fl.addWidget(_info("Generated in the project folder when you press 'Prepare input files' on the Run step. "
                            "The .easy file is the same input FACSIMILE uses; you do not need to read it."))
@@ -277,20 +388,18 @@ class ReviewPanel(QWidget):
         fb = QPushButton("Open project folder"); fb.clicked.connect(lambda: _open_path(self.win.out_dir()) if os.path.isdir(self.win.out_dir()) else None); hb2.addWidget(fb)
         ob = QPushButton("Open selected file"); ob.clicked.connect(self._open_selected); hb2.addWidget(ob); hb2.addStretch(); fl.addLayout(hb2)
         self.tabs.addTab(ft, "Files")
-        self.tabs.currentChanged.connect(lambda i: self.plot() if i == 1 and not self._plotted else None)
-        self._plotted = False
+        self.tabs.currentChanged.connect(lambda i: self.plot.plot() if i == 1 and not self.plot.plotted else None)
 
     def refresh(self):
         try:
             spec = self.win.collect_spec()
         except Exception as e:
-            self.summary.setText(f"<i>cannot read the pages: {e}</i>"); return
-        self.checks.clear(); self.bullets.clear()
+            self.summary.setText(f"<i>cannot read the pages: {e}</i>"); return []
+        self.checks.clear(); self.bullets.clear(); self.plot.plotted = False
         if is_blank(spec):
             self.summary.setText("<i>Nothing entered yet.</i><br>Give the experiment a name, then open a saved experiment, "
                                  "import the SAPHIR wiki page, paste your notes, or pick a template.")
-            self._plotted = False; self.refresh_files()
-            return []
+            self.refresh_files(); return []
         known = mechanism_species(self.win.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
         msgs = validate(spec, known)
         self.summary.setText("<b>" + (spec.name or "(no name)") + "</b><br>" + ReviewPage._summary(spec).replace("\n", "<br>"))
@@ -298,9 +407,8 @@ class ReviewPanel(QWidget):
             self.checks.addItem(QListWidgetItem(("✖ " if lvl == "error" else "⚠ ") + m))
         if not msgs:
             self.checks.addItem(QListWidgetItem("✔ No problems found"))
-        for b in spec_bullets(spec, self.win.include_dir):
+        for b in spec_bullets(spec):
             self.bullets.addItem(QListWidgetItem("• " + b))
-        self._plotted = False
         self.refresh_files()
         return msgs
 
@@ -324,43 +432,10 @@ class ReviewPanel(QWidget):
         if it:
             _open_path(it.data(Qt.ItemDataRole.UserRole))
 
-    def plot(self):
-        self.fig.clear()
-        try:
-            spec = self.win.collect_spec()
-            grid, cols, notes = enz_columns(spec)
-        except Exception as e:
-            ax = self.fig.add_subplot(111); ax.text(0.5, 0.5, f"cannot build the inputs:\n{e}", ha="center", va="center", wrap=True); self.canvas.draw(); return
-        hours = (grid - grid[0]) / 3600.0 + float(spec.conditions.start.split(":")[0]) + float(spec.conditions.start.split(":")[1]) / 60.0
-        ax1 = self.fig.add_subplot(311); ax2 = self.fig.add_subplot(312, sharex=ax1); ax3 = self.fig.add_subplot(313, sharex=ax1)
-        if "t" in cols:
-            ax1.plot(hours, cols["t"], color=ACCENT, lw=1.2, label="T [K]"); ax1.set_ylabel("T [K]", color=ACCENT)
-        if "hv" in cols:
-            ax1b = ax1.twinx(); ax1b.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.4, step="post", label="roof open"); ax1b.set_ylim(0, 1.05); ax1b.set_yticks([])
-        ax1.set_title("Conditions", fontsize=9)
-        jn = [k for k in cols if k.lower() == "jno2"] or [k for k in cols if k.lower().startswith("j")][:1]
-        for k in jn:
-            ax2.plot(hours, cols[k], lw=1, color="#3b6fc4", label=k)
-        if "H2O" in cols:
-            ax2b = ax2.twinx(); ax2b.plot(hours, cols["H2O"], color="#3b82c4", lw=1, ls="--", label="H2O [%]"); ax2b.set_ylabel("H2O [%]", color="#3b82c4")
-        ax2.set_ylabel("J [1/s]"); ax2.legend(fontsize=7, loc="upper left") if jn else None
-        qs = [k for k in cols if k.upper().startswith("Q")]
-        for i, k in enumerate(qs):
-            y = cols[k]
-            if np.any(y > 0):
-                ax3.fill_between(hours, i, i + 0.8 * (y > 0), step="post", color=ACCENT, alpha=0.5)
-        ax3.set_yticks([i + 0.4 for i in range(len(qs))]); ax3.set_yticklabels(qs, fontsize=7); ax3.set_ylim(-0.2, max(1, len(qs)))
-        ax3.set_xlabel("hour of day (UTC)"); ax3.set_title("Injections", fontsize=9)
-        for ax in (ax1, ax2):
-            ax.tick_params(labelsize=7)
-        ax3.tick_params(labelsize=7)
-        self.plot_note.setText("; ".join(notes[:3]) if notes else "Conditions and injections as the model will see them.")
-        self.canvas.draw(); self._plotted = True
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 class RunPage(QWidget):
-    """Step 6: preset → prepare the input files → run scenario_runner → open the results."""
+    """Last step: prepare the input files → run scenario_runner → open the results."""
 
     def __init__(self, win: "JuiceWindow"):
         super().__init__()
@@ -386,16 +461,14 @@ class RunPage(QWidget):
         self.view_btn = QPushButton("3. Open results"); self.view_btn.setObjectName("primary"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
         hb.addStretch(); lay.addLayout(hb)
         self.files = QLabel(""); self.files.setWordWrap(True); lay.addWidget(self.files)
-        self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setTextVisible(True); self.bar.setFormat("not started")
-        lay.addWidget(self.bar)
-        self.log = QTextEdit(); self.log.setReadOnly(True)
+        self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setTextVisible(True); self.bar.setFormat("not started"); lay.addWidget(self.bar)
+        self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMinimumHeight(260)
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
         lay.addWidget(self.log, stretch=1)
 
     def refresh(self):
         self.folder.setText(self.win.out_dir())
 
-    # ── actions ──
     def prepare(self) -> str:
         """Write ENZ/EASY/experiment.json and the scenario JSON.  Returns the JSON path ('' on error)."""
         self.refresh()
@@ -418,7 +491,7 @@ class RunPage(QWidget):
         self.bar.setFormat("inputs ready"); self.run_btn.setEnabled(True)
         self.view_btn.setEnabled(os.path.isfile(self.cs_path()))
         self.win.review.refresh_files()
-        self.win.set_step_state(5, "ok")
+        self.win.set_step_state(RUN_STEP, "ok")
         return self.json_path
 
     def cs_path(self) -> str:
@@ -464,7 +537,7 @@ class RunPage(QWidget):
         self.bar.setFormat(f"done   {mm}m {ss:02d}s" if ok else f"failed (exit {code})   {mm}m {ss:02d}s")
         self.run_btn.setEnabled(True); self.prep_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.view_btn.setEnabled(ok)
         self.win.review.refresh_files()
-        self.win.set_step_state(5, "ok" if ok else "error")
+        self.win.set_step_state(RUN_STEP, "ok" if ok else "error")
 
     def open_results(self):
         cs = self.cs_path()
@@ -482,6 +555,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         paths = load_paths(toml_path)
         self.output_root = paths["output_root"]
         self._init_host(paths["include_dir"], paths["output_root"] if os.path.isdir(paths["output_root"]) else paths["easy_root"])
+        self._enz_cache: Tuple[str, tuple] = ("", ())
         self.setWindowTitle("JUICE — Jülich Utility for Integrating Chemical Equations")
         self.resize(1550, 920)
         self.setStyleSheet(QSS)
@@ -501,13 +575,16 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.steps.currentRowChanged.connect(self._go)
         ll.addWidget(self.steps, stretch=1)
 
-        # ── middle: pages ──
+        # ── middle: pages, each with its plot at the bottom ──
+        self.plot_cond = InputsPlot(self, "conditions", 2.8)
+        self.plot_inj = InputsPlot(self, "injections", 2.6)
+        self.plot_chamber = InputsPlot(self, "chamber", 2.8)
         self.stack = QStackedWidget()
-        self.stack.addWidget(_scroll(_boxed(self.page_start, "Experiment"), _boxed(self.page_cond, "Where and when")))
+        self.stack.addWidget(_scroll(_boxed(self.page_start, "Experiment"), _boxed(self.page_cond, "Where and when"),
+                                     _boxed(self.plot_cond, "Conditions the model will see")))
         self.stack.addWidget(_scroll(_boxed(self.page_chem, "Chemistry")))
-        self.stack.addWidget(_scroll(_boxed(self.page_inj, "Injections")))
-        self.stack.addWidget(_scroll(_boxed(self.page_chamber, "What the chamber adds on its own")))
-        self.stack.addWidget(_scroll(_boxed(self.page_init, "Initial values")))
+        self.stack.addWidget(_scroll(_boxed(self.page_inj, "Injections"), _boxed(self.plot_inj, "Injection timeline")))
+        self.stack.addWidget(_scroll(_boxed(self.page_chamber, "What the chamber adds on its own"), _boxed(self.plot_chamber, "Chamber contributions")))
         self.page_run = RunPage(self)
         self.stack.addWidget(_scroll(_boxed(self.page_run, "Run the model")))
         nav = QHBoxLayout()
@@ -527,7 +604,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
         # ── menu ──
         m = self.menuBar().addMenu("File")
-        m.addAction("New experiment (SAPHIR defaults)", self._new)
+        m.addAction("New experiment (blank)", self._new)
         m.addAction("Open experiment (.experiment.json) …", self._open)
         m.addAction("Save experiment", self._save)
         m.addSeparator()
@@ -540,25 +617,46 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.page_start.name_edit.setPlaceholderText("e.g. isoprene_2024-07-09")
         self.steps.setCurrentRow(0)
 
+    def load_spec(self, spec: ExperimentSpec, keep_name: bool = False):
+        """A template, an import or an opened file arrived: fill the pages, then redraw
+        the review and the plot of the step on screen."""
+        super().load_spec(spec, keep_name)
+        if hasattr(self, "review"):
+            msgs = self.review.refresh(); self._update_states(msgs or [])
+            plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(self.steps.currentRow())
+            if plot is not None and not is_blank(spec):
+                plot.plot()
+
+    # ── inputs cache for the plots (archive reads are slow) ──
+    def inputs_for(self, spec: ExperimentSpec):
+        key = json.dumps({"c": spec.conditions.__dict__, "i": [(i.name, i.start, i.duration_min, i.column) for i in spec.injections]},
+                         default=str, sort_keys=True)
+        if self._enz_cache[0] != key:
+            self._enz_cache = (key, enz_columns(spec))
+        return self._enz_cache[1]
+
     # ── navigation ──
     def _go(self, row: int):
         if row < 0:
             return
         self.stack.setCurrentIndex(row)
-        self.back_btn.setEnabled(row > 0); self.next_btn.setEnabled(row < len(STEPS) - 1)
-        if row == len(STEPS) - 1:
+        self.back_btn.setEnabled(row > 0); self.next_btn.setEnabled(row < RUN_STEP)
+        if row == RUN_STEP:
             self.page_run.refresh()
         msgs = self.review.refresh()
         self._update_states(msgs or [])
+        plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(row)
+        if plot is not None and not is_blank(self.collect_spec()):
+            plot.plot()
 
     def _step(self, d: int):
         row = self.steps.currentRow()
         if d > 0:
-            if row == 0 and not (self.page_start.validatePage() and True):
+            if row == 0 and not self.page_start.validatePage():
                 return
             if row == 1 and not self.page_chem.validatePage():
                 return
-        self.steps.setCurrentRow(max(0, min(len(STEPS) - 1, row + d)))
+        self.steps.setCurrentRow(max(0, min(RUN_STEP, row + d)))
 
     def set_step_state(self, i: int, state: str):
         self._state[i] = state
@@ -566,12 +664,12 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
     def _update_states(self, msgs):
         if not msgs and is_blank(self.collect_spec()):
-            self._state[:5] = ["todo"] * 5; self._paint_states(); return
+            self._state[:RUN_STEP] = ["todo"] * RUN_STEP; self._paint_states(); return
         txt = " ".join(m for _, m in msgs).lower()
         self._state[0] = "error" if any(k in txt for k in ("date", "time window", "conditions come from")) else ("warn" if "j values" in txt or "roof" in txt else "ok")
         self._state[1] = "error" if "no chemistry" in txt else "ok"
         self._state[2] = "warn" if "injection" in txt else "ok"
-        self._state[3] = "ok"; self._state[4] = "ok"
+        self._state[3] = "ok"
         self._paint_states()
 
     def _paint_states(self):

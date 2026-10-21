@@ -224,6 +224,9 @@ class ExperimentSpec:
     outstep: str = "100000"
     extra_includes: List[str] = field(default_factory=list)
     overrides: List[str] = field(default_factory=list)              # expert statements, verbatim
+    # (reaction "A + B --> C", new rate expression or "0" = remove, comment) → written exactly as EASY
+    # does it: k[A + B --> C] = CONST(expr) after the mechanism includes (last definition wins)
+    reaction_adjustments: List[Tuple[str, str, str]] = field(default_factory=list)
     template: str = ""
 
 
@@ -412,6 +415,9 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
     f.extra_statements = []
     for sp in c.constrain_species:
         f.extra_statements += [f"{sp}_in=input({sp})", f"{sp}=CONST({sp}_in*1e-9*M)"]
+    for rxn, rate, cmt in spec.reaction_adjustments:
+        if rxn.strip():
+            f.extra_statements.append(f"k[{rxn.strip()}] = CONST({(rate or '0').strip()})" + (f"   ;{cmt.strip()}" if cmt.strip() else ""))
     f.extra_statements += list(spec.overrides)
     return f
 
@@ -514,6 +520,7 @@ def spec_from_dict(d: dict) -> ExperimentSpec:
     spec = ExperimentSpec(**{k: v for k, v in d.items() if k in ExperimentSpec.__dataclass_fields__})
     spec.conditions, spec.chamber, spec.injections = cond, ch, inj
     spec.initials = [tuple(x) for x in spec.initials]
+    spec.reaction_adjustments = [tuple(x) for x in spec.reaction_adjustments]
     return spec
 
 

@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGr
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
-                             QAbstractItemView, QDialog, QDialogButtonBox)
+                             QAbstractItemView, QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem)
 
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
@@ -35,7 +35,7 @@ import saphir_wiki
 import injection_calc as ic
 
 try:
-    from mcm_species_db import MCM_DB
+    from mcm_species_db import MCM_DB, reactions_of
 except Exception:                               # database optional
     MCM_DB = {}
 
@@ -303,7 +303,87 @@ class ChemistryPage(QWizardPage):
         lay.addLayout(hb2)
         lay.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
                             "the CHANEL template shows how a mixture is written as mole fractions."))
+
+        # first-generation products of the chosen compounds (from the full MCM .fac)
+        tb = QGroupBox("First-generation chemistry of the chosen compounds"); tl = QVBoxLayout(tb)
+        self.tree = QTreeWidget(); self.tree.setHeaderLabels(["Compound → reaction partner → products", "MCM rate expression"])
+        self.tree.setColumnWidth(0, 420); self.tree.setMinimumHeight(180)
+        self.tree.itemDoubleClicked.connect(self._adjust_from_tree)
+        tl.addWidget(self.tree)
+        hb3 = QHBoxLayout(); b = QPushButton("Show / update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
+        hb3.addWidget(_info("Every reaction the MCM has for each compound, grouped by what it reacts with. "
+                            "Double-click a reaction to adjust its rate below."), stretch=1)
+        tl.addLayout(hb3); lay.addWidget(tb)
+
+        # reaction adjustments = EASY k[...] overrides
+        ab = QGroupBox("Reaction adjustments (written exactly as EASY does it)"); al = QVBoxLayout(ab)
+        self.adjust = _table(["Reaction (as in the mechanism)", "New rate expression — 0 removes the reaction", "Comment"])
+        self.adjust.setMinimumHeight(110); al.addWidget(self.adjust)
+        hb4 = QHBoxLayout()
+        self.rxn_search = QLineEdit(); self.rxn_search.setPlaceholderText("species name, e.g. CISOPA — lists its MCM reactions")
+        hb4.addWidget(self.rxn_search, stretch=1)
+        fb = QPushButton("Find reactions"); fb.clicked.connect(self._find_reactions); hb4.addWidget(fb)
+        ab_ = QPushButton("+ row"); ab_.clicked.connect(lambda: _add_row(self.adjust, ["", "", ""])); hb4.addWidget(ab_)
+        db_ = QPushButton("− row"); db_.clicked.connect(lambda: _del_row(self.adjust)); hb4.addWidget(db_)
+        al.addLayout(hb4)
+        self.found = QListWidget(); self.found.setMaximumHeight(90); self.found.itemDoubleClicked.connect(self._adjust_from_found); al.addWidget(self.found)
+        al.addWidget(_info("Each row becomes  k[reaction] = CONST(expression)  after the mechanism includes; the last definition "
+                           "wins, so the MCM rate is replaced. A rate of 0 switches the reaction off (FACSIMILE evaluates it as zero, "
+                           "JUICE drops the reaction). Write rates in EASY notation, e.g. 2.70D-11*EXP(390/T)*0.5."))
+        lay.addWidget(ab)
         self._filter("")
+
+    # ── first-generation tree / adjustments ──
+    def _fac(self) -> str:
+        from experiment_spec import FULL_MCM_FAC
+        return FULL_MCM_FAC
+
+    def update_tree(self):
+        self.tree.clear()
+        names = [self.chosen.item(i).text() for i in range(self.chosen.count())]
+        for n in names:
+            root = QTreeWidgetItem([n, ""]); self.tree.addTopLevelItem(root)
+            try:
+                rxns = reactions_of(n, self._fac())
+            except Exception as e:
+                root.addChild(QTreeWidgetItem([f"cannot read the MCM file: {e}", ""])); continue
+            if not rxns:
+                root.addChild(QTreeWidgetItem(["no reactions found (not an MCM species?)", ""])); continue
+            groups: Dict[str, QTreeWidgetItem] = {}
+            for r in rxns:
+                key = r["partner"] or "unimolecular"
+                g = groups.get(key)
+                if g is None:
+                    g = QTreeWidgetItem([f"+ {key}" if key != "unimolecular" else "unimolecular", ""]); groups[key] = g; root.addChild(g)
+                it = QTreeWidgetItem(["→ " + " + ".join(r["products"]), r["easy_rate"]])
+                it.setData(0, Qt.ItemDataRole.UserRole, (r["easy"], r["easy_rate"])); g.addChild(it)
+            root.setExpanded(True)
+            for g in groups.values():
+                g.setText(0, g.text(0) + f"   ({g.childCount()})"); g.setExpanded(len(groups) <= 4)
+
+    def _adjust_from_tree(self, item, _col):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data:
+            _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
+
+    def _find_reactions(self):
+        self.found.clear()
+        q = self.rxn_search.text().strip()
+        if not q:
+            return
+        try:
+            rxns = reactions_of(q, self._fac())
+        except Exception as e:
+            self.found.addItem(f"cannot read the MCM file: {e}"); return
+        for r in rxns:
+            it = QListWidgetItem(f"{r['easy']}      k = {r['easy_rate']}"); it.setData(Qt.ItemDataRole.UserRole, (r["easy"], r["easy_rate"])); self.found.addItem(it)
+        if not rxns:
+            self.found.addItem(f"no MCM reactions with {q.upper()} as a reactant")
+
+    def _adjust_from_found(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
 
     def _filter(self, text: str):
         self.candidates.clear()
@@ -333,12 +413,15 @@ class ChemistryPage(QWizardPage):
             self.chosen.addItem(p)
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         (self.mode_existing if spec.mechanism_stem else self.mode_compounds).setChecked(True)
+        _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
+        self.tree.clear()
 
     def apply(self, spec: ExperimentSpec):
         if self.mode_existing.isChecked():
             spec.mechanism_stem = self.mech_combo.currentText().strip(); spec.precursors = []
         else:
             spec.mechanism_stem = ""; spec.precursors = [self.chosen.item(i).text() for i in range(self.chosen.count())]
+        spec.reaction_adjustments = [(a, b, c) for a, b, c in _rows(self.adjust) if a.strip()]
 
     def validatePage(self) -> bool:
         if self.mode_existing.isChecked() and not self.mech_combo.currentText().strip():
@@ -409,9 +492,20 @@ class InjectionsPage(QWizardPage):
                             "XNOy is the NOy bookkeeping tracer, not a chemical species. "
                             "'Amount calculator' turns µl by syringe, ml of bottle gas or MFC flow × time into ppb for the selected row "
                             "and keeps the derivation; '+ mixture' expands a multi-compound solution into MCM species with mole fractions."))
-        lay.addWidget(QLabel("Follow-up reactions (advanced; e.g. TwoReaction chain: VOCin1 → VOCin_all, rate 1./60)"))
-        self.chain = _table(["Reactants", "Products", "Rate expression"]); self.chain.setMaximumHeight(110); lay.addWidget(self.chain)
-        hb2 = QHBoxLayout(); a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.chain)); d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.chain)); hb2.addWidget(a); hb2.addWidget(d); hb2.addStretch(); lay.addLayout(hb2)
+        self.chain_box = QGroupBox("Delayed release (advanced)"); self.chain_box.setCheckable(True); self.chain_box.setChecked(False)
+        cl = QVBoxLayout(self.chain_box)
+        cl.addWidget(_info("Normally the injected amount appears in the chamber during the injection pulse. Some injections "
+                           "evaporate or mix more slowly: the IDL scenarios then let the pulse fill a holding species that "
+                           "converts to the real compound with a first-order rate. Example from the ethanol scenario: the pulse "
+                           "makes 0.9*VOCin1 + 0.1*VOCin2; VOCin1 --> VOCin_all at 1./60 (1 min), VOCin2 --> VOCin_all at "
+                           "1./1800 (30 min), VOCin_all --> C2H5OH at 1./60. Put the holding species in the product of the "
+                           "injection row and list the conversion steps here. Leave empty for an instantaneous injection."))
+        self.chain = _table(["Reactants", "Products", "Rate expression [1/s]"]); self.chain.setMaximumHeight(110); cl.addWidget(self.chain)
+        hb2 = QHBoxLayout(); a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.chain)); d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.chain)); hb2.addWidget(a); hb2.addWidget(d); hb2.addStretch(); cl.addLayout(hb2)
+        self._chain_widgets = [cl.itemAt(i).widget() for i in range(cl.count()) if cl.itemAt(i).widget()]
+        self.chain_box.toggled.connect(lambda on: [w.setVisible(on) for w in self._chain_widgets])
+        self.chain_box.toggled.emit(False)
+        lay.addWidget(self.chain_box)
 
     def _add_compounds(self):
         page = self.wiz.page_chem
@@ -491,6 +585,7 @@ class InjectionsPage(QWizardPage):
             for prod, ppb in inj.extra_channels:
                 _inj_add_row(self.table, key, [inj.name, prod, ppb, "", "", inj.column, inj.switch, f"↳ extra channel of '{inj.name}'"])
         _set_rows(self.chain, [[a, b, c] for inj in spec.injections for a, b, c in inj.chain])
+        self.chain_box.setChecked(self.chain.rowCount() > 0)
 
     def get(self) -> List[InjectionEvent]:
         events: Dict[str, InjectionEvent] = {}
@@ -569,6 +664,11 @@ class ChamberPage(QWizardPage):
         g.addWidget(QLabel("SNO2 --> "), 5, 0); g.addWidget(self.light_rhs, 5, 1); g.addWidget(QLabel("k = CONST("), 5, 2); g.addWidget(self.light_rate, 5, 3); g.addWidget(QLabel("INITIAL[SNO2]"), 5, 4); g.addWidget(self.light_init, 5, 5)
         lay.addWidget(self.params)
 
+    def embed_initials(self, page: "InitialsPage"):
+        box = QGroupBox("Initial values"); bl = QVBoxLayout(box)
+        bl.addWidget(_info(page.subTitle())); bl.addWidget(page)
+        self.layout().addWidget(box)
+
     def set_from(self, ch: ChamberEffects):
         for key, cb in self.checks.items():
             cb.setChecked(bool(getattr(ch, key)))
@@ -602,8 +702,9 @@ class InitialsPage(QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Initial conditions")
-        self.setSubTitle("Concentrations at the start of the time window. Everything not listed starts at the floor value.")
+        self.setTitle("Initial values")
+        self.setSubTitle("Concentrations at the start of the time window; usually empty for a flushed chamber. "
+                         "Everything not listed starts at the floor value.")
         lay = QVBoxLayout(self)
         hb = QHBoxLayout(); hb.addWidget(QLabel("Floor for all species, INITIAL[*] = CONST(")); self.all_edit = QLineEdit("1."); hb.addWidget(self.all_edit); hb.addWidget(QLabel(") molecules/cm³")); hb.addStretch(); lay.addLayout(hb)
         self.table = _table(["Species", "Expression inside CONST( ), e.g. M*1e-9*14.0 for 14 ppb"]); lay.addWidget(self.table)
@@ -1073,11 +1174,13 @@ class ExperimentHost:
         self._base = ExperimentSpec()
         self.page_start = StartPage(self); self.page_cond = ConditionsPage(self); self.page_chem = ChemistryPage(self)
         self.page_inj = InjectionsPage(self); self.page_chamber = ChamberPage(self); self.page_init = InitialsPage(self)
+        self.page_chamber.embed_initials(self.page_init)
         self.page_review = ReviewPage(self)
         self.last_result: dict = {}
 
     def pages(self):
-        return (self.page_start, self.page_cond, self.page_chem, self.page_inj, self.page_chamber, self.page_init, self.page_review)
+        """Pages shown one after the other (the initial values sit inside the chamber page)."""
+        return (self.page_start, self.page_cond, self.page_chem, self.page_inj, self.page_chamber, self.page_review)
 
     # ── spec ↔ pages ─────────────────────────────────────────────────────────
     def load_spec(self, spec: ExperimentSpec, keep_name: bool = False):

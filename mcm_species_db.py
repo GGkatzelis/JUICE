@@ -237,3 +237,66 @@ KNOWN_ZERO_CARBON: frozenset[str] = frozenset({
     # Common aliases / measurement columns
     'NA', 'SA',
 })
+
+
+# ---------------------------------------------------------------------------
+# Reactions of a species (first-generation products) from the full MCM .fac
+# ---------------------------------------------------------------------------
+_FAC_CACHE: dict = {}
+_FAC_LINE = re.compile(r"^\s*%\s*(?P<rate>.+?)\s*:\s*(?P<lhs>.*?)\s*=\s*(?P<rhs>.*?)\s*;")
+_PARTNERS = ("OH", "O3", "NO3", "HV", "NO", "HO2", "NO2", "CL")
+
+
+def _fac_species(side: str) -> list[str]:
+    """'HCHO + 2 HO2' → ['HCHO', '2*HO2']  (EASY coefficient style)."""
+    out = []
+    for tok in side.split("+"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        m = re.match(r"^([0-9.]+)\s+(\S+)$", tok)
+        out.append(f"{m.group(1)}*{m.group(2)}" if m else tok)
+    return out
+
+
+def fac_to_easy_rate(rate: str) -> str:
+    """MCM .fac rate text → the form the EASY include files use (TEMP → T, J<n> → Jn)."""
+    r = re.sub(r"J<(\d+)>", r"J\1", rate)
+    return r.replace("TEMP", "T")
+
+
+def load_fac_reactions(fac_path: str) -> list[dict]:
+    """All reactions of a .fac file: {'rate', 'reactants', 'products', 'easy'} (cached)."""
+    if fac_path in _FAC_CACHE:
+        return _FAC_CACHE[fac_path]
+    rx = []
+    with open(fac_path, encoding="latin-1") as fh:
+        for line in fh:
+            m = _FAC_LINE.match(line)
+            if not m:
+                continue
+            lhs, rhs = _fac_species(m.group("lhs")), _fac_species(m.group("rhs"))
+            rate = m.group("rate").strip()
+            photo = rate.startswith("J<")
+            easy_lhs = lhs + (["HV"] if photo else [])
+            rx.append({"rate": rate, "reactants": lhs, "products": rhs, "photolysis": photo,
+                       "easy": " + ".join(easy_lhs) + " --> " + " + ".join(rhs),
+                       "easy_rate": fac_to_easy_rate(rate)})
+    _FAC_CACHE[fac_path] = rx
+    return rx
+
+
+def reactions_of(species: str, fac_path: str) -> list[dict]:
+    """Reactions consuming `species`, each with a 'partner' (OH, O3, NO3, hv, …, or '' for unimolecular)."""
+    sp = species.strip().upper()
+    out = []
+    for r in load_fac_reactions(fac_path):
+        names = [t.split("*")[-1].upper() for t in r["reactants"]]
+        if sp not in names:
+            continue
+        others = [n for n in names if n != sp]
+        partner = "hv" if r["photolysis"] else (others[0] if others else "")
+        out.append(dict(r, partner=partner))
+    order = {p: i for i, p in enumerate(("OH", "O3", "NO3", "hv", ""))}
+    out.sort(key=lambda r: (order.get(r["partner"], 9), r["easy"]))
+    return out

@@ -901,7 +901,15 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             continue
         if '+DIL' in _olhs or 'DIL' in _olhs_parts:
             continue
-        if not _orate or _is_zero_rate(_orate):
+        if not _orate:
+            continue
+        if _is_zero_rate(_orate):
+            # FACSIMILE evaluates CONST(0) → the reaction never runs; JUICE drops it
+            _mcm_rate_overrides.append({
+                "reactants": '+'.join(_olhs_parts), "products": _orhs.strip(),
+                "action": "Remove", "rate": "",
+                "comment": f"[EASY override] k[{_olhs}-->{_orhs}] = {_orate} (zero → removed)",
+            })
             continue
         # Skip photolysis reactions (X+HV-->...) whose rate is a single J-value
         # already covered by env_map (JNO2, JO1D, JH2O2, JHONO, JHCHO_*).
