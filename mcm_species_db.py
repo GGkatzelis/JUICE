@@ -333,6 +333,10 @@ def search_species(query: str, limit: int = 40) -> list[tuple["MCMSpecies", str]
             rank, why = 1, f"same C and O count ({sp.formula})"
         elif qc and sp.n_C == qc.get("n_C", -1) and abs(sp.n_O - qc.get("n_O", 0)) <= 1 and sp.n_N == qc.get("n_N", 0):
             rank, why = 2, f"same C count, O ±1 ({sp.formula})"
+        if rank in (1, 2) and qc:               # a C14 alkane should not become a C14 ketone with 3 double bonds
+            d_dbe = abs((sp.n_C - sp.n_H / 2.0 + sp.n_N / 2.0) - (qc.get("n_C", 0) - qc.get("n_H", 0) / 2.0 + qc.get("n_N", 0) / 2.0))
+            if d_dbe > 2:
+                rank = None
         elif qu in name:
             rank, why = 3, f"name contains {qu}"
         if rank is None:
@@ -342,7 +346,7 @@ def search_species(query: str, limit: int = 40) -> list[tuple["MCMSpecies", str]
         if sp.is_peroxy or name.endswith("O2") or name.endswith("O"):
             rank += 10                      # radicals are never sensible surrogates
         out.append((rank, name, sp))
-    if not out and qc:                      # nothing with that carbon number: same O and N, same saturation
+    if qc and not any(r <= 2 for r, _n, _s in out):   # no close match: same O and N, same saturation, nearest chain
         def dbe(c, h, n):                   # double-bond equivalents: an alkane stays an alkane
             return c - h / 2.0 + n / 2.0 + 1
         q_dbe = dbe(qc.get("n_C", 0), qc.get("n_H", 0), qc.get("n_N", 0))
@@ -352,7 +356,7 @@ def search_species(query: str, limit: int = 40) -> list[tuple["MCMSpecies", str]
                  and not name.endswith("O2") and not name.endswith("O")]
         if cands:
             best = min(c[0] for c in cands)
-            out = [(4, name, sp) for d, name, sp in cands if d == best]
+            out += [(4, name, sp) for d, name, sp in cands if d == best]
     out.sort(key=lambda t: (t[0], t[1]))
     return [(sp, _why(rank, sp, qu, qn)) for rank, name, sp in out[:limit]]
 

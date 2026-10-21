@@ -54,6 +54,14 @@ import injection_calc as ic
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO = os.path.join(HERE, "JUICE Logo.png")
+ICON = os.path.join(HERE, "JUICE.ico")          # multi-size icon: Windows takes the taskbar image from here
+
+
+def app_icon() -> QIcon:
+    ico = QIcon(ICON) if os.path.isfile(ICON) else QIcon()
+    if ico.isNull() and os.path.isfile(LOGO):
+        ico = QIcon(QPixmap(LOGO))
+    return ico
 STEPS = ["Experiment", "Chemistry", "Injections", "Chamber", "Run"]
 RUN_STEP = len(STEPS) - 1
 ACCENT, ACCENT_DARK, ACCENT_SOFT = "#6b3e85", "#4a3e85", "#efe6f7"
@@ -559,8 +567,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.setWindowTitle("JUICE — Jülich Utility for Integrating Chemical Equations")
         self.resize(1550, 920)
         self.setStyleSheet(QSS)
-        if os.path.isfile(LOGO):
-            self.setWindowIcon(QIcon(QPixmap(LOGO)))
+        self.setWindowIcon(app_icon())
 
         # ── left: logo + steps ──
         left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6, 6, 6, 6); left.setFixedWidth(220)
@@ -716,8 +723,7 @@ def main(argv=None):
         except Exception:
             pass
     app = QApplication(argv)
-    if os.path.isfile(LOGO):
-        app.setWindowIcon(QIcon(QPixmap(LOGO)))
+    app.setWindowIcon(app_icon())
     app.setStyle("Fusion")                     # same look on every machine; ignores the OS dark mode
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"), (QPalette.ColorRole.AlternateBase, "#fafafa"),
