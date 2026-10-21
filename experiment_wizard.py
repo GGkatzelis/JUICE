@@ -86,27 +86,13 @@ def _del_row(t: QTableWidget):
 
 # ─────────────────────────────────────────────────────────────────────────────
 class StartPage(QWizardPage):
-    def __init__(self, wiz: "ExperimentWizard"):
+    def __init__(self, wiz: "ExperimentHost"):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Start")
-        self.setSubTitle("Pick a template that resembles your experiment, give it a name and choose where the files go.")
+        self.setTitle("Experiment")
+        self.setSubTitle("Name the experiment, choose where its files go, then load what you already have "
+                         "(a saved experiment, the SAPHIR wiki page, or pasted notes). A template is optional.")
         lay = QVBoxLayout(self)
-        self.tpl_list = QListWidget()
-        self.templates = list_templates()
-        self.tpl_list.addItem(QListWidgetItem("Empty — start from the SAPHIR defaults"))
-        for name, path in self.templates.items():
-            try:
-                title, desc, _ = load_template(path)
-            except Exception as e:
-                title, desc = name, f"(unreadable: {e})"
-            it = QListWidgetItem(f"{title}\n    {desc}")
-            it.setData(Qt.ItemDataRole.UserRole, path)
-            self.tpl_list.addItem(it)
-        self.tpl_list.setCurrentRow(0)
-        self.tpl_list.itemSelectionChanged.connect(self._template_chosen)
-        lay.addWidget(QLabel("Template"))
-        lay.addWidget(self.tpl_list)
         g = QGridLayout()
         g.addWidget(QLabel("Experiment name"), 0, 0)
         self.name_edit = QLineEdit("my_experiment"); g.addWidget(self.name_edit, 0, 1, 1, 2)
@@ -114,33 +100,51 @@ class StartPage(QWizardPage):
         self.out_edit = QLineEdit(wiz.easy_root); g.addWidget(self.out_edit, 1, 1)
         b = QPushButton("…"); b.clicked.connect(self._browse); g.addWidget(b, 1, 2)
         lay.addLayout(g)
-        lay.addWidget(_info("A sub-folder with the experiment name is created inside the project folder. "
-                            "It will hold the generated .enz, .easy, chemistry and the experiment description "
-                            "(.experiment.json) that you can reopen here later."))
+        lay.addWidget(_info("A sub-folder with the experiment name is created inside the project folder for the "
+                            "generated input files and the experiment description (.experiment.json)."))
+        lay.addWidget(QLabel("<b>Start from</b>"))
         hb = QHBoxLayout()
-        ob = QPushButton("Open a saved experiment (.experiment.json) …"); ob.clicked.connect(self._open_saved)
-        hb.addWidget(ob)
-        wb = QPushButton("Import a SAPHIR experiment from the wiki …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self))
-        hb.addWidget(wb); hb.addStretch(); lay.addLayout(hb)
-        lay.addWidget(_info("Wiki import reads the action log of saphirwiki/YYYY-MM-DD (roof, humidification, "
-                            "injections) and switches to the Z: archive for the measured conditions when the day folder exists. "
-                            "Everything imported stays editable on the following pages."))
+        ob = QPushButton("Open a saved experiment …"); ob.clicked.connect(self._open_saved); hb.addWidget(ob)
+        wb = QPushButton("Import from the SAPHIR wiki …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self)); hb.addWidget(wb)
+        pb = QPushButton("Paste experiment notes …"); pb.clicked.connect(lambda: self.wiz.import_from_wiki(self, paste=True)); hb.addWidget(pb)
+        hb.addStretch(); lay.addLayout(hb)
+        lay.addWidget(_info("Wiki import and pasted notes read the action log (roof, humidification, injections), "
+                            "switch to the archive for the measured conditions when the day folder exists, and leave "
+                            "everything editable in the following steps."))
+        hb2 = QHBoxLayout(); hb2.addWidget(QLabel("Template (optional)"))
+        self.tpl_combo = QComboBox()
+        self.templates = list_templates()
+        self.tpl_combo.addItem("Empty — SAPHIR defaults", "")
+        self._tpl_desc: Dict[str, str] = {}
+        for name, path in self.templates.items():
+            try:
+                title, desc, _ = load_template(path)
+            except Exception as e:
+                title, desc = name, f"(unreadable: {e})"
+            self.tpl_combo.addItem(title, path); self._tpl_desc[path] = desc
+        self.tpl_combo.currentIndexChanged.connect(self._template_chosen)
+        hb2.addWidget(self.tpl_combo, stretch=1); lay.addLayout(hb2)
+        self.tpl_info = _info("Templates pre-fill the typical SAPHIR day (humidification, VOC, ozone, roof times). "
+                              "Choosing one replaces the current entries.")
+        lay.addWidget(self.tpl_info)
+        lay.addStretch()
 
     def _browse(self):
         d = QFileDialog.getExistingDirectory(self, "Project folder", self.out_edit.text() or self.wiz.easy_root)
         if d:
             self.out_edit.setText(d)
 
-    def _template_chosen(self):
-        it = self.tpl_list.currentItem()
-        path = it.data(Qt.ItemDataRole.UserRole) if it else None
+    def _template_chosen(self, _idx: int = 0):
+        path = self.tpl_combo.currentData()
         if path:
             try:
-                _t, _d, spec = load_template(path)
+                _t, desc, spec = load_template(path)
             except Exception as e:
                 QMessageBox.warning(self, "Template", str(e)); return
+            self.tpl_info.setText(desc)
         else:
             spec = ExperimentSpec()
+            self.tpl_info.setText("SAPHIR defaults, nothing pre-filled.")
         spec.name = self.name_edit.text().strip() or spec.name
         self.wiz.load_spec(spec, keep_name=True)
 
@@ -169,55 +173,84 @@ class ConditionsPage(QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Where and when")
-        self.setSubTitle("Date and time window of the experiment, chamber conditions and the roof schedule. "
-                         "These become the .enz environment file.")
-        g = QGridLayout(self)
-        r = 0
-        g.addWidget(QLabel("Date (UTC)"), r, 0); self.date = QLineEdit("2024-07-09"); g.addWidget(self.date, r, 1)
+        self.setSubTitle("Date and time window, where the chamber conditions come from, and the roof schedule.")
+        lay = QVBoxLayout(self)
+        g = QGridLayout(); r = 0
+        g.addWidget(QLabel("Date (UTC)"), r, 0); self.date = QLineEdit("2024-07-09"); self.date.textChanged.connect(self._archive_status); g.addWidget(self.date, r, 1)
         g.addWidget(QLabel("from"), r, 2); self.start = QLineEdit("04:00"); g.addWidget(self.start, r, 3)
         g.addWidget(QLabel("to"), r, 4); self.end = QLineEdit("21:59"); g.addWidget(self.end, r, 5)
-        g.addWidget(QLabel("step [s]"), r, 6); self.step = QSpinBox(); self.step.setRange(10, 3600); self.step.setValue(60); g.addWidget(self.step, r, 7)
-        r += 1
-        self.src_manual = QRadioButton("Manual conditions (constants below)")
-        self.src_archive = QRadioButton("SAPHIR archive (NetCDF) — measured T, flow, humidity, J values, NO/NO2/O3")
-        self.src_manual.setChecked(True)
-        g.addWidget(self.src_manual, r, 0, 1, 4); g.addWidget(self.src_archive, r, 4, 1, 4); r += 1
-        g.addWidget(QLabel("Archive root"), r, 0); self.archive = QLineEdit(r"Z:\IEK8-SAPHIR\data"); g.addWidget(self.archive, r, 1, 1, 7); r += 1
-        g.addWidget(QLabel("Temperature [K]"), r, 0); self.temp = QLineEdit("298"); g.addWidget(self.temp, r, 1)
-        self.temp_mode = QComboBox(); self.temp_mode.addItems(["follow ENZ column (T = T_in)", "hold constant in the model"])
-        g.addWidget(self.temp_mode, r, 2, 1, 2)
-        g.addWidget(QLabel("Pressure [hPa]"), r, 4); self.press = QLineEdit("1006.5"); g.addWidget(self.press, r, 5); r += 1
-        g.addWidget(QLabel("Water vapour [vol-%]"), r, 0); self.h2o = QLineEdit("1.0"); g.addWidget(self.h2o, r, 1)
-        g.addWidget(QLabel("Replenishment flow [m³/h]"), r, 2); self.flow = QLineEdit("6.0"); g.addWidget(self.flow, r, 3)
-        g.addWidget(QLabel("Photolysis frequencies"), r, 4)
-        self.jsrc = QComboBox(); self.jsrc.addItems(["measured (archive J values)", "clear sky from solar zenith angle"])
-        g.addWidget(self.jsrc, r, 5, 1, 3); r += 1
+        g.addWidget(QLabel("step [s]"), r, 6); self.step = QSpinBox(); self.step.setRange(10, 3600); self.step.setValue(60); g.addWidget(self.step, r, 7); r += 1
         g.addWidget(QLabel("Chamber"), r, 0)
         self.chamber = QComboBox(); self.chamber.addItems(list(ic.CHAMBERS)); g.addWidget(self.chamber, r, 1)
         self.chamber_info = _info(""); g.addWidget(self.chamber_info, r, 2, 1, 6)
         self.chamber.currentTextChanged.connect(self._chamber_changed); self._chamber_changed(self.chamber.currentText()); r += 1
-        g.addWidget(QLabel("Roof open / close (HH:MM)"), r, 0)
-        self.roof = _table(["open", "close"]); self.roof.setMaximumHeight(110); g.addWidget(self.roof, r, 1, 1, 5)
-        bb = QVBoxLayout(); a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.roof, ["09:30", "18:30"])); d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.roof)); bb.addWidget(a); bb.addWidget(d); g.addLayout(bb, r, 6); r += 1
-        g.addWidget(QLabel("Hold species to measured values"), r, 0)
-        self.constrain = QLineEdit(""); self.constrain.setPlaceholderText("e.g. NO2, O3  (archive only; the model then does not predict them)")
-        g.addWidget(self.constrain, r, 1, 1, 7); r += 1
-        g.addWidget(_info("Without archive access choose 'clear sky' photolysis; measured J values need the archive."), r, 0, 1, 8)
+        lay.addLayout(g)
+
+        lay.addWidget(QLabel("<b>Chamber conditions</b> — temperature, pressure, humidity, flow and photolysis frequencies "
+                             "drive the rate constants and the air density; the model needs them for every minute."))
+        self.src_archive = QRadioButton("Measured — from the SAPHIR archive (T, P, humidity, flow, J values, NO, NO2, O3)")
+        self.src_manual = QRadioButton("Manual — constant values, clear-sky photolysis (no measurements available)")
+        self.src_archive.toggled.connect(self._source_changed)
+        lay.addWidget(self.src_archive); lay.addWidget(self.src_manual)
+        ha = QHBoxLayout(); ha.addSpacing(24); ha.addWidget(QLabel("Archive root"))
+        self.archive = QLineEdit(r"Z:\IEK8-SAPHIR\data"); self.archive.textChanged.connect(self._archive_status); ha.addWidget(self.archive, stretch=1)
+        self.archive_status = QLabel(""); ha.addWidget(self.archive_status); lay.addLayout(ha)
+
+        self.manual_box = QGroupBox("Manual values")
+        mg = QGridLayout(self.manual_box)
+        mg.addWidget(QLabel("Temperature [K]"), 0, 0); self.temp = QLineEdit("298"); mg.addWidget(self.temp, 0, 1)
+        mg.addWidget(QLabel("Pressure [hPa]"), 0, 2); self.press = QLineEdit("1006.5"); mg.addWidget(self.press, 0, 3)
+        mg.addWidget(QLabel("Water vapour [vol-%]"), 1, 0); self.h2o = QLineEdit("1.0"); mg.addWidget(self.h2o, 1, 1)
+        mg.addWidget(QLabel("Replenishment flow [m³/h]"), 1, 2); self.flow = QLineEdit("6.0"); mg.addWidget(self.flow, 1, 3)
+        lay.addWidget(self.manual_box)
+
+        hr = QHBoxLayout(); hr.addWidget(QLabel("<b>Roof open / close</b> (HH:MM, UTC)"))
+        a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.roof, ["09:30", "18:30"])); hr.addWidget(a)
+        d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.roof)); hr.addWidget(d); hr.addStretch(); lay.addLayout(hr)
+        self.roof = _table(["open", "close"]); self.roof.setMaximumHeight(100); lay.addWidget(self.roof)
+
+        self.adv = QGroupBox("Advanced"); self.adv.setCheckable(True); self.adv.setChecked(False)
+        ag = QGridLayout(self.adv)
+        ag.addWidget(QLabel("Photolysis frequencies"), 0, 0)
+        self.jsrc = QComboBox(); self.jsrc.addItems(["measured (archive J values)", "clear sky from solar zenith angle"]); ag.addWidget(self.jsrc, 0, 1)
+        ag.addWidget(QLabel("Temperature in the model"), 1, 0)
+        self.temp_mode = QComboBox(); self.temp_mode.addItems(["follow the measured / tabulated temperature", "hold constant at the manual value"]); ag.addWidget(self.temp_mode, 1, 1)
+        ag.addWidget(QLabel("Hold species to measured values"), 2, 0)
+        self.constrain = QLineEdit(""); self.constrain.setPlaceholderText("e.g. NO2, O3  (archive only; the model then does not predict them)"); ag.addWidget(self.constrain, 2, 1)
+        self.adv_body = [self.jsrc, self.temp_mode, self.constrain]
+        self.adv.toggled.connect(lambda on: [w.setVisible(on) for w in self.adv_body + [ag.itemAt(i).widget() for i in range(ag.count()) if isinstance(ag.itemAt(i).widget(), QLabel)]])
+        lay.addWidget(self.adv)
+        self.adv.toggled.emit(False)
+        self.src_manual.setChecked(True)
+        self._archive_status()
 
     def _chamber_changed(self, name: str):
         ch = ic.chamber(name)
-        self.chamber_info.setText(f"{ch.volume_m3:g} m³ — used for injected amount → ppb (syringe, bottle, MFC). {ch.note}")
+        self.chamber_info.setText(f"{ch.volume_m3:g} m³ — used to turn injected amounts into ppb. {ch.note}")
+
+    def _source_changed(self, archive_on: bool):
+        self.manual_box.setVisible(not archive_on)
+        self.archive.setEnabled(archive_on)
+        self.jsrc.setCurrentIndex(0 if archive_on else 1)
+
+    def _archive_status(self):
+        day = saphir_wiki.archive_day_folder(self.archive.text().strip(), self.date.text().strip())
+        if day:
+            self.archive_status.setText("✔ data found for this date"); self.archive_status.setStyleSheet("color: #2e9e4f;")
+        else:
+            self.archive_status.setText("✖ no archive folder for this date"); self.archive_status.setStyleSheet("color: #c0392b;")
 
     def set_from(self, c: Conditions):
         self.chamber.setCurrentText(c.chamber_name if c.chamber_name in ic.CHAMBERS else ic.DEFAULT_CHAMBER)
         self.date.setText(c.date); self.start.setText(c.start); self.end.setText(c.end); self.step.setValue(int(c.step_s))
-        (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
         self.archive.setText(c.archive_root); self.temp.setText(f"{c.temperature_K:g}")
-        self.temp_mode.setCurrentIndex(0 if c.temperature_mode == "enz" else 1)
         self.press.setText(f"{c.pressure_hPa:g}"); self.h2o.setText(f"{c.h2o_percent:g}"); self.flow.setText(f"{c.flow_m3h:g}")
+        (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
         self.jsrc.setCurrentIndex(0 if c.j_source == "measured" else 1)
+        self.temp_mode.setCurrentIndex(0 if c.temperature_mode == "enz" else 1)
         _set_rows(self.roof, [[o, cl] for o, cl in c.roof_open])
         self.constrain.setText(", ".join(c.constrain_species))
+        self._archive_status()
 
     def get(self) -> Conditions:
         c = Conditions()
@@ -1066,10 +1099,12 @@ class ExperimentHost:
         return spec
 
     # ── wiki import ───────────────────────────────────────────────────────────
-    def import_from_wiki(self, parent=None):
+    def import_from_wiki(self, parent=None, paste: bool = False):
         cond = self.page_cond.get()
         dlg = WikiImportDialog(parent or self, date=cond.date, archive_root=cond.archive_root,
                                T_K=cond.temperature_K, P_hPa=cond.pressure_hPa, chamber_name=cond.chamber_name)
+        if paste:
+            dlg.paste.setFocus()
         if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_import is None:
             return
         self.apply_wiki_import(dlg.result_import, replace=dlg.replace_box.isChecked())
