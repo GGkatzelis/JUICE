@@ -663,18 +663,45 @@ CHAMBER_ITEMS = [
 ]
 
 
+def _dark_factor_of(rate: str) -> str:
+    """'1e-012' → '1', '1e-012/10' → '0.1', '1e-012*0' → '0'; anything else → '1'."""
+    r = (rate or "").replace(" ", "")
+    m = re.fullmatch(r"1e-0?12(?:/([0-9.]+)|\*([0-9.]+))?", r)
+    if not m:
+        return "1"
+    if m.group(1):
+        return f"{1.0 / float(m.group(1)):g}"
+    if m.group(2):
+        return f"{float(m.group(2)):g}"
+    return "1"
+
+
 class ChamberPage(QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
         self.setTitle("What the chamber adds on its own")
-        self.setSubTitle("SAPHIR chamber effects. All are on by default with the values used in the IDL scenarios; "
-                         "open 'parameters' to change them.")
+        self.setSubTitle("SAPHIR chamber effects with the values of the IDL scenarios. Two numbers are tuned per experiment: "
+                         "the strength of the HONO wall source and the background OH reactivity. Everything else is a switch; "
+                         "the underlying formulas are only in the expert tool.")
         lay = QVBoxLayout(self)
         self.checks: Dict[str, QCheckBox] = {}
+        self.hono_factor = QLineEdit("2.6*0.7"); self.hono_factor.setFixedWidth(90)
+        self.y_inline = QLineEdit("250"); self.y_inline.setFixedWidth(70)
+        self.dark_factor = QLineEdit("1"); self.dark_factor.setFixedWidth(60)
         for key, title, desc in CHAMBER_ITEMS:
             cb = QCheckBox(title); cb.setChecked(key != "light_source"); self.checks[key] = cb
-            lay.addWidget(cb); lay.addWidget(_info("      " + desc))
+            row = QHBoxLayout(); row.addWidget(cb)
+            if key == "hono":
+                row.addSpacing(12); row.addWidget(QLabel("strength factor")); row.addWidget(self.hono_factor)
+                desc += " Fitted per experiment to the measured HONO or OH on a clean day (2.0 to 2.6*1.1*0.7 in the reference scenes)."
+            elif key == "bgreac":
+                row.addSpacing(12); row.addWidget(self.y_inline); row.addWidget(QLabel("ppb CO-equivalent"))
+                desc += " Set from the measured OH reactivity of the clean chamber (50 to 250 ppb in the reference scenes)."
+            elif key == "dark_hono":
+                row.addSpacing(12); row.addWidget(QLabel("×")); row.addWidget(self.dark_factor)
+                desc += " Factor on the standard rate (1 = IDL default, 0.1 as in scene_09)."
+            row.addStretch(); lay.addLayout(row); lay.addWidget(_info("      " + desc))
         self.params = QGroupBox("Parameters (advanced)"); self.params.setCheckable(True); self.params.setChecked(False)
         g = QGridLayout(self.params)
         self.hono_const = QLineEdit("2.6*0.7"); self.hono_lhs = QLineEdit("SHONO+HV"); self.hono_rhs = QLineEdit("HONO+XNOy")
@@ -689,7 +716,7 @@ class ChamberPage(QWizardPage):
         g.addWidget(QLabel("Dark HONO: H2O --> "), 4, 0); g.addWidget(self.dark_rhs, 4, 1); g.addWidget(QLabel("k = CONST("), 4, 2); g.addWidget(self.dark_rate, 4, 3)
         self.light_rate = QLineEdit("jno2/5e-3/3600*HV_in/1.6*0.55"); self.light_rhs = QLineEdit("NO2+XNOy"); self.light_init = QLineEdit("M*1e-9*3.5*0")
         g.addWidget(QLabel("SNO2 --> "), 5, 0); g.addWidget(self.light_rhs, 5, 1); g.addWidget(QLabel("k = CONST("), 5, 2); g.addWidget(self.light_rate, 5, 3); g.addWidget(QLabel("INITIAL[SNO2]"), 5, 4); g.addWidget(self.light_init, 5, 5)
-        lay.addWidget(self.params)
+        self.params.hide()                       # formulas stay in the spec (template / expert tool), not on this page
 
     def embed_initials(self, page: "InitialsPage"):
         box = QGroupBox("Initial values"); bl = QVBoxLayout(box)
@@ -705,6 +732,8 @@ class ChamberPage(QWizardPage):
         self.dilute.setText(ch.dilute_expr); self.tracer.setText(", ".join(ch.tracer_dilution))
         self.dark_rate.setText(ch.dark_hono_rate); self.dark_rhs.setText(ch.dark_hono_rhs)
         self.light_rate.setText(ch.light_source_rate); self.light_rhs.setText(ch.light_source_rhs); self.light_init.setText(ch.light_source_initial)
+        self.hono_factor.setText(ch.hono_const); self.y_inline.setText(ch.y_expr or ch.y_ppb)
+        self.dark_factor.setText(_dark_factor_of(ch.dark_hono_rate))
 
     def get(self, base: ChamberEffects) -> ChamberEffects:
         ch = ChamberEffects(**{k: getattr(base, k) for k in ChamberEffects.__dataclass_fields__})
@@ -721,6 +750,16 @@ class ChamberPage(QWizardPage):
         ch.dilute_expr = self.dilute.text().strip(); ch.tracer_dilution = [t.strip() for t in self.tracer.text().split(",") if t.strip()]
         ch.dark_hono_rate, ch.dark_hono_rhs = self.dark_rate.text().strip(), self.dark_rhs.text().strip()
         ch.light_source_rate, ch.light_source_rhs, ch.light_source_initial = self.light_rate.text().strip(), self.light_rhs.text().strip(), self.light_init.text().strip()
+        # the two tuned numbers and the dark-HONO factor come from the inline fields
+        ch.hono_const = self.hono_factor.text().strip() or ch.hono_const
+        yv = self.y_inline.text().strip()
+        if yv:
+            if re.fullmatch(r"[0-9.]+", yv):
+                ch.y_ppb, ch.y_expr = yv, ""
+            else:
+                ch.y_expr = yv
+        f = self.dark_factor.text().strip() or "1"
+        ch.dark_hono_rate = "1e-012" if f in ("1", "1.", "1.0") else f"1e-012*{f}"
         return ch
 
 
