@@ -709,7 +709,15 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
+    if sys.platform.startswith("win"):            # own taskbar entry + icon instead of python.exe's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FZJ.JUICE.GUI")
+        except Exception:
+            pass
     app = QApplication(argv)
+    if os.path.isfile(LOGO):
+        app.setWindowIcon(QIcon(QPixmap(LOGO)))
     app.setStyle("Fusion")                     # same look on every machine; ignores the OS dark mode
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"), (QPalette.ColorRole.AlternateBase, "#fafafa"),

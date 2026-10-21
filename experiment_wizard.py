@@ -478,7 +478,8 @@ class InjectionsPage(QWizardPage):
         hb.addWidget(QLabel("Add action:"))
         self.action_pick = QComboBox(); self.action_pick.addItems(_ACTION_LABELS); hb.addWidget(self.action_pick)
         for label, fn in [("+ add", self._add_action), ("+ compounds from Chemistry", self._add_compounds),
-                          ("+ mixture …", self._mixture_dialog), ("Amount calculator …", self._amount_dialog),
+                          ("+ mixture …", self._mixture_dialog), ("Edit mixture …", self._edit_mixture),
+                          ("Amount calculator …", self._amount_dialog),
                           ("Import from wiki …", lambda: self.wiz.import_from_wiki(self)),
                           ("− row", lambda: _del_row(self.table))]:
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
@@ -551,6 +552,32 @@ class InjectionsPage(QWizardPage):
         old = re.sub(r"\s*\|\s*calc:.*$", "", old)
         self.table.setItem(r, 8, QTableWidgetItem((old + " | " if old else "") + "calc: " + dlg.result_expl))
         self._delivery[name] = dlg.result_delivery
+
+    def _edit_mixture(self):
+        """Selected mixture row → its recipe (surrogates editable) → row and precursors replaced."""
+        r = self.table.currentRow()
+        name = self._selected_name()
+        d = self._delivery.get(name, {}) if name else {}
+        if r < 0 or d.get("mode") != "mixture":
+            QMessageBox.information(self, "Edit mixture", "Select a mixture row (one that came from a recipe) first."); return
+        m = ic.load_mixtures().get(d.get("mixture", ""))
+        if m is None:
+            QMessageBox.information(self, "Edit mixture", f"Recipe '{d.get('mixture', '')}' not found in {ic.MIXTURE_DIR}"); return
+        cond = self.wiz.page_cond.get()
+        dlg = MixtureDialog(self, cond=cond)
+        dlg.preload(m, d.get("injected_ul", ""), self.table.item(r, 4).text() if self.table.item(r, 4) else "",
+                    self.table.item(r, 5).text() if self.table.item(r, 5) else "")
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_event is None:
+            return
+        ev = dlg.result_event
+        self.table.setItem(r, 2, QTableWidgetItem(ev.products)); self.table.setItem(r, 3, QTableWidgetItem(ev.total_ppb))
+        self.table.setItem(r, 8, QTableWidgetItem(ev.comment))
+        self._delivery[name] = ev.delivery
+        chem = self.wiz.page_chem
+        have = {chem.chosen.item(i).text() for i in range(chem.chosen.count())}
+        for sp in dlg.result_precursors:
+            if sp not in have:
+                chem.chosen.addItem(sp)
 
     def _mixture_dialog(self):
         cond = self.wiz.page_cond.get()
@@ -929,9 +956,27 @@ class MixtureDialog(QDialog):
         lay.addLayout(g2)
         lay.addWidget(QLabel("Result — alerts (⚠ needs a decision, ✖ blocks)"))
         self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); lay.addWidget(self.preview, stretch=1)
+        self.save_box = QCheckBox("Save the recipe (with the surrogates) to the mixtures folder for reuse by the wiki import")
+        self.save_box.setChecked(True); lay.addWidget(self.save_box)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Add injection")
         bb.accepted.connect(self._accept); bb.rejected.connect(self.reject); lay.addWidget(bb)
+
+    def preload(self, m: ic.Mixture, injected_ul: str = "", start: str = "", dur: str = ""):
+        """Show an existing recipe (e.g. the one a wiki import used) with its surrogates editable."""
+        self.name.setText(m.name); self.aliases.setText(", ".join(m.aliases))
+        ic.resolve_mixture(m)
+        for c in m.components:                       # fill suggested surrogates as notes, never silently as choices
+            if not c.mcm and not c.surrogate:
+                rc = ic.resolve_compound(c.name)
+                c.note = rc.note
+        self._set_components(m.components)
+        if injected_ul:
+            self.injected.setText(injected_ul)
+        if start:
+            self.start.setText(start)
+        if dur:
+            self.dur.setText(dur)
 
     # ── recipe table ↔ Mixture ──
     def _set_components(self, comps: List[ic.MixtureComponent]):
@@ -1007,6 +1052,11 @@ class MixtureDialog(QDialog):
             QMessageBox.critical(self, "Mixture", str(e)); return
         if any(l == "error" for l, _ in alerts) or not ev.products:
             QMessageBox.warning(self, "Mixture", "Fix the ✖ alerts first (molar mass/density, MCM names, surrogates)."); return
+        if self.save_box.isChecked():
+            try:
+                ic.save_mixture(self._mixture())
+            except Exception as e:
+                QMessageBox.warning(self, "Mixture", f"Recipe not saved: {e}")
         self.result_event, self.result_precursors = ev, precs
         self.accept()
 
@@ -1073,8 +1123,11 @@ class WikiImportDialog(QDialog):
         lay.addWidget(self.table, stretch=2)
         lay.addWidget(QLabel("What will be imported — ⚠ marks things the wiki did not say clearly"))
         self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); lay.addWidget(self.preview, stretch=1)
+        hbr = QHBoxLayout()
         self.replace_box = QCheckBox("Replace the current injection rows (untick to append)"); self.replace_box.setChecked(True)
-        lay.addWidget(self.replace_box)
+        hbr.addWidget(self.replace_box); hbr.addStretch()
+        self.sur_btn = QPushButton("Set surrogates for the mixture …"); self.sur_btn.setEnabled(False); self.sur_btn.clicked.connect(self._surrogates)
+        hbr.addWidget(self.sur_btn); lay.addLayout(hbr)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Use in wizard")
         bb.accepted.connect(self._accept); bb.rejected.connect(self.reject); lay.addWidget(bb)
@@ -1151,7 +1204,28 @@ class WikiImportDialog(QDialog):
             lines.append(("⚠ " if lvl == "warning" else "✖ ") + msg)
         if imp.notes:
             lines.append("Notes kept out of the model: " + "; ".join(n[:60] for n in imp.notes[:8]) + (" …" if len(imp.notes) > 8 else ""))
+        self._mix_names = sorted({inj.delivery.get("mixture", "") for inj in imp.injections if inj.delivery.get("mode") == "mixture"} - {""})
+        self.sur_btn.setEnabled(bool(self._mix_names))
+        if self._mix_names:
+            lines.append(f"Mixture recipe(s) used: {', '.join(self._mix_names)} — 'Set surrogates …' opens the recipe to map "
+                         "the components the MCM lacks.")
         self.preview.setPlainText("\n".join(lines))
+
+    def _surrogates(self):
+        """Open the recipe of the mixture the import used, let the user map components to
+        MCM surrogates, save it, and rebuild the preview with it."""
+        names = getattr(self, "_mix_names", [])
+        if not names:
+            return
+        mixes = ic.load_mixtures()
+        m = mixes.get(names[0])
+        if m is None:
+            QMessageBox.information(self, "Mixture", f"Recipe '{names[0]}' not found in {ic.MIXTURE_DIR}"); return
+        dlg = MixtureDialog(self, cond=None)
+        dlg.preload(m)
+        dlg.injected.setText(""); dlg.save_box.setChecked(True)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._preview()
 
     def _accept(self):
         if not self._events:

@@ -202,6 +202,25 @@ COMPOUNDS: Dict[str, Tuple[str, float, Optional[float]]] = {
     "tetradecane": ("", 198.39, 0.763), "n-tetradecane": ("", 198.39, 0.763), "hexadecane": ("", 226.45, 0.773),
     "n-hexadecane": ("", 226.45, 0.773), "octadecane": ("", 254.50, 0.777), "n-octadecane": ("", 254.50, 0.777),
 }
+# suggestions for compounds the MCM does not have: (MCM species, why).  The user decides.
+SURROGATE_HINTS: Dict[str, Tuple[str, str]] = {
+    "carbitol": ("BUOX2ETOH", "glycol ether of similar size and OH reactivity"),
+    "diethylene glycol monoethyl ether": ("BUOX2ETOH", "glycol ether of similar size and OH reactivity"),
+    "tetrahydrofuran": ("DIETETHER", "cyclic ether; diethyl ether has a similar OH rate (1.3e-11 vs 1.6e-11)"),
+    "thf": ("DIETETHER", "cyclic ether; diethyl ether has a similar OH rate"),
+    "octadecane": ("NC12H26", "longest MCM alkane; carbon-number scaled, SOA-forming"),
+    "n-octadecane": ("NC12H26", "longest MCM alkane; carbon-number scaled, SOA-forming"),
+    "hexadecane": ("NC12H26", "longest MCM alkane"), "n-hexadecane": ("NC12H26", "longest MCM alkane"),
+    "tetradecane": ("NC12H26", "longest MCM alkane"), "n-tetradecane": ("NC12H26", "longest MCM alkane"),
+    "texanol": ("NC12H26", "C12 oxygenate; alkane of the same size as a first guess"),
+    "benzyl alcohol": ("TOLUENE", "aromatic ring with one substituent"),
+    "d5 siloxane": ("", "no MCM analogue; slow OH loss (k ~2e-12), usually left unmodelled or treated as inert tracer"),
+    "decamethylcyclopentasiloxane": ("", "no MCM analogue; slow OH loss, usually left unmodelled"),
+    "d5": ("", "no MCM analogue; slow OH loss, usually left unmodelled"),
+    "triethanolamine": ("", "amine chemistry is not in the MCM; small fraction, usually left unmodelled"),
+    "ethanolamine": ("", "amine chemistry is not in the MCM; small fraction, usually left unmodelled"),
+    "monoethanolamine": ("", "amine chemistry is not in the MCM; usually left unmodelled"),
+}
 _COMPOUND_KEYS = sorted(COMPOUNDS, key=len, reverse=True)
 NON_MCM_OK = {"CO2"}                     # tracers that are fine as EASY species without an MCM entry
 
@@ -237,7 +256,11 @@ def resolve_compound(text: str) -> ResolvedCompound:
             if mcm and (not MCM_DB or mcm in MCM_DB or mcm in NON_MCM_OK):
                 rc.mcm, rc.status, rc.note = mcm, "mcm", f"'{key}' → MCM {mcm}"
             else:
-                rc.status, rc.note = "no_mcm", f"'{key}' is not an MCM species — choose a surrogate"
+                hint = SURROGATE_HINTS.get(key)
+                rc.status = "no_mcm"
+                rc.note = (f"'{key}' is not an MCM species — suggested surrogate {hint[0]} ({hint[1]})" if hint and hint[0]
+                           else f"'{key}' is not an MCM species — {hint[1]}" if hint else f"'{key}' is not an MCM species — choose a surrogate")
+                rc.candidates = [hint[0]] if hint and hint[0] else []
             return rc
     # 2) typed MCM name
     up = q.upper()
