@@ -306,7 +306,7 @@ class ChemistryPage(QWizardPage):
 
         # first-generation products of the chosen compounds (from the full MCM .fac): one block per
         # compound, one column per reaction partner, products listed downwards, rate on hover
-        tb = QGroupBox("First-generation chemistry of the chosen compounds (show)"); tb.setCheckable(True); tb.setChecked(False)
+        tb = QGroupBox("First-generation chemistry of the chosen compounds (untick to hide)"); tb.setCheckable(True); tb.setChecked(True)
         tl = QVBoxLayout(tb)
         self.tree_tabs = QTabWidget(); self.tree_tabs.setDocumentMode(True); self.tree_tabs.setMaximumHeight(230)
         tl.addWidget(self.tree_tabs)
@@ -316,7 +316,6 @@ class ChemistryPage(QWizardPage):
         tl.addLayout(hb3)
         self._tree_widgets = [self.tree_tabs] + [hb3.itemAt(i).widget() for i in range(hb3.count()) if hb3.itemAt(i).widget()]
         tb.toggled.connect(self._toggle_tree)
-        self._toggle_tree(False)
         lay.addWidget(tb)
 
         # reaction adjustments = EASY k[...] overrides
@@ -416,10 +415,12 @@ class ChemistryPage(QWizardPage):
             name = it.text().split()[0]
             if not any(self.chosen.item(i).text() == name for i in range(self.chosen.count())):
                 self.chosen.addItem(name)
+        self.update_tree()
 
     def _remove_selected(self):
         for it in self.chosen.selectedItems():
             self.chosen.takeItem(self.chosen.row(it))
+        self.update_tree()
 
     def set_from(self, spec: ExperimentSpec):
         self.chosen.clear()
@@ -428,7 +429,7 @@ class ChemistryPage(QWizardPage):
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         (self.mode_existing if spec.mechanism_stem else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
-        self.tree_tabs.clear()
+        self.update_tree()
 
     def apply(self, spec: ExperimentSpec):
         if self.mode_existing.isChecked():
