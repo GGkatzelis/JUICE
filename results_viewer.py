@@ -150,6 +150,7 @@ def _nitrogen_class(name):
 
 # ── Carbon budget helpers ─────────────────────────────────────────────────────
 
+_CB_OTHER_SPLIT = 0.05   # a species classed "Other" with a peak ≥ 5 % of the total carbon peak is shown on its own
 # Ordered list of classes for the "Grouped" stackplot (bottom → top).
 # Dominant, slow-decaying groups at the bottom for visual stability.
 _CB_CLASS_ORDER = [
@@ -211,8 +212,8 @@ def _carbon_class(name, parent_voc=None):
     # PAN family: peroxyacyl nitrates (e.g. CH3CO3NO2, MPAN)
     if n.endswith('CO3NO2') or n in ('PAN', 'MPAN', 'APAN', 'GPAN', 'PBZN'):
         return 'PANs'
-    # Organic nitrates / organic peroxy nitrates
-    if ('NO3' in n and n != 'NO3') or 'ONO2' in n:
+    # Organic nitrates (RONO2, names carry NO3 or ONO2) and peroxy nitrates (RO2NO2)
+    if ('NO3' in n and n != 'NO3') or 'ONO2' in n or n.endswith('O2NO2'):
         return 'Org. Nitrates'
     # Peracids (–C(=O)OOH written as CO3H in MCM)
     if n.endswith('CO3H'):
@@ -3683,8 +3684,24 @@ class ResultsViewer(QMainWindow):
                 class_totals[cls] = np.zeros(len(t))
             class_totals[cls] += np.nan_to_num(ppb_c)
 
+        # "Other" must not hide a major contributor: any species classed Other whose peak
+        # exceeds _CB_OTHER_SPLIT of the total carbon peak gets its own band (named after it)
+        total = sum(np.nan_to_num(v[1]) for v in species_data.values()) if species_data else np.zeros(len(t))
+        split, rest = [], np.zeros(len(t))
+        if 'Other' in class_totals and np.nanmax(total) > 0:
+            thr = _CB_OTHER_SPLIT * float(np.nanmax(total))
+            for sp, (_, ppb_c) in species_data.items():
+                if _carbon_class(sp, parent_voc) == 'Other':
+                    arr = np.nan_to_num(ppb_c)
+                    (split.append((sp, arr)) if np.nanmax(arr) >= thr else rest.__iadd__(arr))
+            split.sort(key=lambda kv: -float(np.nanmean(kv[1])))
+            class_totals['Other'] = rest
         names, arrays, colors = [], [], []
+        _split_cmap = _mcm.get_cmap('Dark2')
         for cls in _CB_CLASS_ORDER:
+            if cls == 'Other':
+                for i, (sp, arr) in enumerate(split):          # just below the remaining "Other"
+                    names.append(f"{sp} (from Other)"); arrays.append(arr); colors.append(_split_cmap(i % 8))
             if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
                 names.append(cls)
                 arrays.append(class_totals[cls])
