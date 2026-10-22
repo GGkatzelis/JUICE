@@ -297,31 +297,14 @@ class InputsPlot(QWidget):
         ax.set_xlabel("hour (UTC)", fontsize=8); ax.set_title("injection pulses (roof open in yellow)", fontsize=8)
 
     def _chamber(self, ax, spec, hours, cols):
-        c, ch = spec.conditions, spec.chamber
-        n = len(hours)
-        T = np.asarray(cols.get("t", np.full(n, c.temperature_K)), dtype=float); P = c.pressure_hPa
-        M = 7.2428e18 * P / np.maximum(T, 1.0)                    # molecules/cm³ = P/(k_B T)
-        h2o = np.asarray(cols.get("H2O", np.full(n, c.h2o_percent)), dtype=float)   # vol-%
-        hv = np.asarray(cols.get("hv", np.zeros(n)), dtype=float)
-        j = cols.get("jNO2", cols.get("jno2"))
-        j = np.asarray(j, dtype=float) if j is not None else np.zeros(n)
-        if not np.any(j > 0):                                      # manual / clear-sky run: jNO2 = PHTFKT(1.165e-2, 0.244, -0.267)
-            sza = np.asarray(cols.get("sz", np.full(n, 90.0)), dtype=float)
-            cz = np.maximum(np.cos(np.radians(np.minimum(sza, 89.9))), 1e-3)
-            j = np.where(sza < 89.9, 1.165e-2 * cz ** 0.244 * np.exp(-0.267 / cz), 0.0) * (hv > 0.5)
-        to_ppb_h = 1e9 * 3600.0 / M
-        rh = h2o * P / np.exp(21.36469 - 5339.66 / np.maximum(T, 1.0))
-        if ch.hono:
-            rate = _const(ch.hono_const, 1.82) * 4.7e13 * (1 + (rh / 11.6) ** 2) * np.exp(-3950.0 / T) * j
-            ax.plot(hours, rate * to_ppb_h, color=ACCENT, lw=1.3, label="HONO from the walls")
-        if ch.hcho:
-            ax.plot(hours, _const(ch.hcho_const, 1.0) * 2.8e6 * hv * to_ppb_h, color="#3b6fc4", lw=1.2, label="HCHO from the walls")
-        if ch.dark_hono:
-            ax.plot(hours, _const(ch.dark_hono_rate, 1e-13) * h2o * 1e-2 * M * to_ppb_h, color="#888", lw=1, ls=":", label="dark HONO")
-        if ch.dilution:
-            flow = np.asarray(cols.get("dilute", np.full(n, c.flow_m3h)), dtype=float)
-            dil = (flow + 0.6) / (ic.chamber(c.chamber_name).volume_m3 * 3600.0) * 3600.0 * 100.0   # %/h
-            axb = ax.twinx(); axb.plot(hours, dil, color="#2e9e4f", lw=1, ls="--"); axb.set_ylabel("dilution [%/h]", color="#2e9e4f", fontsize=8)
+        import experiment_plots as ep
+        src = ep.chamber_sources(spec, cols, len(hours))
+        colors = {"HONO wall source": ACCENT, "HCHO wall source": "#3b6fc4", "dark HONO": "#888"}
+        for name, col in colors.items():
+            if name in src:
+                ax.plot(hours, src[name], color=col, lw=1.3 if name != "dark HONO" else 1, ls=":" if name == "dark HONO" else "-", label=name)
+        if "dilution" in src:
+            axb = ax.twinx(); axb.plot(hours, src["dilution"], color="#2e9e4f", lw=1, ls="--"); axb.set_ylabel("dilution [%/h]", color="#2e9e4f", fontsize=8)
         ax.set_ylabel("source [ppb/h]", fontsize=8); ax.set_xlabel("hour (UTC)", fontsize=8)
         ax.set_title("what the chamber adds per hour (dilution dashed)", fontsize=8)
         if ax.get_legend_handles_labels()[0]:

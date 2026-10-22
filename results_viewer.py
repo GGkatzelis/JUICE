@@ -2398,6 +2398,13 @@ class ResultsViewer(QMainWindow):
         outer_layout.addWidget(splitter, 1)
 
         self.right_tabs.addTab(outer, "Comparison")
+        # Landing page: built from the experiment description + archive observations
+        try:
+            from overview_tab import OverviewTab
+            self.right_tabs.insertTab(0, OverviewTab(self), "Overview")
+            self.right_tabs.setCurrentIndex(0)
+        except Exception as _e:
+            print(f"[viewer] Overview tab not available: {_e}")
 
     # ── Reference loading ─────────────────────────────────────────────────────
     def _cmp_easy_scenario_dir(self) -> str:
