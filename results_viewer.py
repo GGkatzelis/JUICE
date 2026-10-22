@@ -4269,7 +4269,7 @@ class ResultsViewer(QMainWindow):
 
         # ── Controls row ──────────────────────────────────────────────────
         ctrl = QHBoxLayout()
-        ctrl.setSpacing(8)
+        ctrl.setSpacing(5)
         ctrl.addWidget(QLabel("Mode:"))
         self._cs_mode_combo = QComboBox()
         self._cs_mode_combo.addItems(["Snapshot (single time)", "Window (time range)"])
@@ -4303,8 +4303,9 @@ class ResultsViewer(QMainWindow):
         # Video export controls (no live playback — it crashed the GUI).
         # The cursor remains fully interactive manually; clicking or dragging
         # on the timeseries in Snapshot mode updates all panels instantly.
+        ctrl.addStretch(1)                               # keep every control right next to its label
         outer_layout.addLayout(ctrl, 0)                 # row 1: what is shown
-        ctrl = QHBoxLayout(); ctrl.setSpacing(8)         # row 2: video export + readout (one row pushed the tab off-screen)
+        ctrl = QHBoxLayout(); ctrl.setSpacing(5)         # row 2: video export + readout (one row pushed the tab off-screen)
         ctrl.addWidget(QLabel("Video from"))
         self._cs_vid_start = QLineEdit(); self._cs_vid_start.setFixedWidth(52); self._cs_vid_start.setPlaceholderText("HH:MM")
         self._cs_vid_start.setToolTip("first frame of the video (HH:MM UTC); empty = start of the run")
