@@ -3,10 +3,47 @@ import os
 import re
 import json
 import warnings
+
+# Started as a program: say what is happening before pandas / matplotlib / the viewer load
+_LOADER = None
+if __name__ == "__main__":
+    try:
+        from loading_box import LoadingBox
+        _LOADER = LoadingBox.start("opening results")
+        _LOADER.step("Loading the plotting and data libraries", None, "pandas, matplotlib and Qt are imported once per window; this takes a few seconds")
+    except Exception:
+        _LOADER = None
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from column_file_reader import load_column_file
+
+
+def _progress(message: str, percent=None, why: str = "") -> None:
+    """Report a start-up stage to the loading window when there is one (no-op otherwise)."""
+    if _LOADER is not None:
+        try:
+            _LOADER.step(message, percent, why)
+        except Exception:
+            pass
+
+
+_PARSE_CACHE: dict = {}
+
+
+def _parse_easy_cached(parser, path: str):
+    """EasyParser.parse(path) once per file per process: the viewer needs the same mechanism for
+    the species classes and for the budget engine (3–4 s each for a full elog)."""
+    key = (os.path.abspath(path),)                  # same file ⇒ same mechanism (elogs are flat; include files resolve by their own folder)
+    try:
+        st = os.stat(path); key += (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    m = _PARSE_CACHE.get(key)
+    if m is None:
+        m = parser.parse(path); _PARSE_CACHE[key] = m
+    return m
 
 
 def _is_juice_output(path: str) -> bool:
@@ -281,7 +318,7 @@ class BudgetEngine:
             f_path = os.path.join(chem_path, f_name)
             if not os.path.exists(f_path):
                 continue
-            m_part = parser.parse(f_path)
+            m_part = _parse_easy_cached(parser, f_path)
             self.mechanism.species.extend(m_part.species)
             self.mechanism.reactions.extend(m_part.reactions)
             for p_name, p_expr in m_part.parameters.items():
@@ -302,7 +339,7 @@ class BudgetEngine:
             if not os.path.isabs(elog_path):
                 elog_path = os.path.join(self.root, elog_path)
             if os.path.exists(elog_path):
-                m_part = parser.parse(elog_path)
+                m_part = _parse_easy_cached(parser, elog_path)
                 self.mechanism.species.extend(m_part.species)
                 self.mechanism.reactions.extend(m_part.reactions)
                 for p_name, p_expr in m_part.parameters.items():
@@ -892,14 +929,15 @@ class ResultsViewer(QMainWindow):
                 _ep = _EP()
                 _s_entries, _species = [], []
                 _elog = _jcfg.get('elog_path', '')
+                _progress("Reading the mechanism", 25, "species are classified from the chemistry the run used (one parse, reused by the budget engine)")
                 if _elog and os.path.isfile(_elog):
-                    _m = _ep.parse(_elog)
+                    _m = _parse_easy_cached(_ep, _elog)
                     _s_entries.extend(_m.s_entries)
                     _species.extend(_m.species)
                 else:
                     for _f in _jcfg.get('mechanism_files', []):
                         if os.path.isfile(_f):
-                            _m = _ep.parse(_f)
+                            _m = _parse_easy_cached(_ep, _f)
                             _s_entries.extend(_m.s_entries)
                             _species.extend(_m.species)
                 self._easy_s_names = {e.name.lower() for e in _s_entries
@@ -913,7 +951,6 @@ class ResultsViewer(QMainWindow):
 
         self.setWindowTitle("JUICE — Results" + (f"  ·  {os.path.basename(csv_path)}" if csv_path else ""))
         self.setGeometry(50, 50, 1600, 900)
-        self.showMaximized()
         # About as standalone top-left menu bar action (no submenu)
         self.menuBar().addAction("About JUICE…", self._show_about)
         try:
@@ -1044,6 +1081,7 @@ class ResultsViewer(QMainWindow):
         ts_layout.addWidget(self.canvas)
         self.right_tabs.addTab(ts_widget, "Timeseries")
 
+        _progress("Building the tabs: Timeseries, Process analysis, Reactivity", 55)
         # Tab 1 – Process Analysis
         pa_widget = QWidget()
         pa_layout = QVBoxLayout(pa_widget)
@@ -1086,22 +1124,28 @@ class ResultsViewer(QMainWindow):
         self.right_tabs.addTab(rx_widget, "Reactivity")
 
         # Tab 3 – Carbon Budget
+        _progress("Building the tabs: Carbon budget, Chemical space", 65)
         self._build_carbon_tab()
 
         # Tab 4 – Chemical Space (VBS + molecular distribution)
         self._build_chemspace_tab()
 
         # Tab 5 – Comparison (last)
+        _progress("Building the tabs: Comparison, Overview", 75, "the Overview reads the day's observation file next to the result, or the archive the first time")
         self._build_comparison_tab()
 
         splitter.addWidget(right_panel)
         splitter.setSizes([300, 1300])
 
+        _progress("Drawing the default plot", 85)
         self.init_axes()
         self._plot_defaults()
 
         # Auto-discover scenario_config.json — must come after UI is fully built
+        _progress("Loading the scenario for the process analysis", 92, "rate constants and reactions of the run are prepared for the budgets")
         self._auto_load_config(csv_path)
+        _progress("Opening the window", 99)
+        self.showMaximized()
 
     # ── Virtual / derived species ────────────────────────────────────────────
     def _add_virtual_species(self, df):
@@ -4914,7 +4958,13 @@ class ResultsViewer(QMainWindow):
 def show_results(out_path, toml_path=None):
     if HAS_PYQT:
         print(">>> [VISUALIZATION] Launching Interactive PyQt Viewer...")
-        df = load_column_file(out_path)
+        global _LOADER
+        if _LOADER is None:
+            try:
+                from loading_box import LoadingBox
+                _LOADER = LoadingBox.start("opening results")
+            except Exception:
+                _LOADER = None
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
@@ -4923,8 +4973,18 @@ def show_results(out_path, toml_path=None):
             apply_theme(app)                       # same look as the step window
         except Exception as _e:
             print(f"[viewer] theme not applied: {_e}")
+        try:
+            _mb = os.path.getsize(out_path) / 1e6
+        except OSError:
+            _mb = 0.0
+        _progress(f"Reading {os.path.basename(out_path)} ({_mb:.0f} MB)", 5,
+                  "every species at every output time is loaded into memory so that all tabs respond instantly")
+        df = load_column_file(out_path)
+        _progress("Building the viewer", 20)
         viewer = ResultsViewer(df, csv_path=out_path, toml_path=toml_path)
         viewer.show()
+        if _LOADER is not None:
+            _LOADER.done(); _LOADER = None
         app.exec()
         return
 
@@ -5002,7 +5062,7 @@ def main():
 
 if __name__ == "__main__":
     if HAS_PYQT:
-        _app = QApplication(sys.argv)
+        _app = QApplication.instance() or QApplication(sys.argv)
         try:
             from juice_theme import apply_theme
             apply_theme(_app)

@@ -365,7 +365,7 @@ class OverviewTab(QWidget):
         unit = {"ppb": "ppb", "cm-3": "molecules cm⁻³", "s-1": "1/s"}.get(p["kind"], "")
         if p["log"]:
             ax.set_ylim(bottom=1e4)                       # hide the floor value of the flushed chamber
-        panel.finish(unit, f"{twin} [ppb]" if twin else "")
+        panel.finish((f"HO2, RO2 [{unit}]" if twin == "OH" else unit), f"{twin} [{unit}]" if twin else "")
 
     def _fill_sources(self, panel: InteractivePanel, obs: Dict):
         ax = panel.ax

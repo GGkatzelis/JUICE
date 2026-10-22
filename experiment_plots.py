@@ -318,7 +318,7 @@ def landing_panels(spec: Optional[ExperimentSpec], columns: List[str]) -> List[d
     if inj:
         panels.append(dict(title="Injected compounds", species=inj[:8], kind="ppb", obs=[], log=False))
     panels.append(dict(title="NOx and ozone", species=have(["NO", "NO2", "O3"]), kind="ppb", obs=["NO", "NO2", "O3"], log=False))
-    panels.append(dict(title="Radicals", species=have(["OH", "HO2", "RO2"]), kind="cm-3", obs=["OH", "HO2", "RO2"], log=True))
+    panels.append(dict(title="Radicals", species=have(["HO2", "RO2", "OH"]), kind="cm-3", obs=["HO2", "RO2", "OH"], log=False, twin="OH"))
     panels.append(dict(title="HONO and CO", species=have(["HONO", "CO"]), kind="ppb", obs=["HONO", "CO"], log=False, twin="CO"))
     panels.append(dict(title="OH reactivity", species=[], kind="s-1", obs=["kOH"], log=False, koh=True))
     panels.append(dict(title="Chamber sources and conditions", species=[], kind="sources", obs=["jNO2"], log=False, sources=True))
