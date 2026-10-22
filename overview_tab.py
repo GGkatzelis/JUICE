@@ -11,8 +11,8 @@ Panels:
     Chamber sources and conditions
 
 Compact and interactive without a toolbar per panel: the time axis is shared by all panels
-— scroll wheel zooms the time around the cursor (Ctrl+wheel zooms the value axis of that
-panel), left-drag pans, double-click resets, moving the mouse reads the values at that time,
+— scroll wheel zooms the time around the cursor (Ctrl+wheel, or a right-button drag up/down,
+zooms the value axis of that panel), left-drag pans, double-click resets, moving the mouse reads the values at that time,
 clicking a legend entry hides or shows a line.  One row of buttons serves all panels.
 """
 from __future__ import annotations
@@ -122,41 +122,70 @@ class InteractivePanel(QWidget):
         art.set_visible(not art.get_visible()); event.artist.set_alpha(1.0 if art.get_visible() else 0.25)
         self.canvas.draw_idle()
 
+    @staticmethod
+    def _modifiers():
+        """Keyboard modifiers straight from Qt: matplotlib's event.key is only filled after a key press
+        on a focused canvas, so Ctrl+wheel would otherwise never be recognised."""
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import Qt as _Qt
+        m = QApplication.keyboardModifiers()
+        return bool(m & _Qt.KeyboardModifier.ControlModifier), bool(m & _Qt.KeyboardModifier.ShiftModifier)
+
+    def _zoom_y(self, ax, y: float, f: float):
+        """Zoom the value axis `ax` by factor f around y (log-aware)."""
+        lo, hi = ax.get_ylim()
+        if ax.get_yscale() == "log":
+            import math
+            if y <= 0 or lo <= 0:
+                return
+            ly, llo, lhi = math.log10(y), math.log10(lo), math.log10(hi)
+            ax.set_ylim(10 ** (ly - (ly - llo) * f), 10 ** (ly + (lhi - ly) * f))
+        else:
+            ax.set_ylim(y - (y - lo) * f, y + (hi - y) * f)
+        self.canvas.draw_idle()
+
     def _scroll(self, event):
         if event.inaxes is None or event.xdata is None:
             return
         f = 0.8 if event.button == "up" else 1.25
-        ctrl = bool(event.key and "control" in event.key)
-        if ctrl:                                   # value axis of this panel only
-            ax = event.inaxes
-            lo, hi = ax.get_ylim(); y = event.ydata
-            if ax.get_yscale() == "log" and y > 0 and lo > 0:
-                import math
-                ly, llo, lhi = math.log10(y), math.log10(lo), math.log10(hi)
-                ax.set_ylim(10 ** (ly - (ly - llo) * f), 10 ** (ly + (lhi - ly) * f))
-            else:
-                ax.set_ylim(y - (y - lo) * f, y + (hi - y) * f)
-            self.canvas.draw_idle(); return
+        ctrl, shift = self._modifiers()
+        if ctrl or shift:                          # value axis of the panel under the cursor only
+            self._zoom_y(event.inaxes, event.ydata, f); return
         lo, hi = self.ax.get_xlim(); x = event.xdata
         self.group.set_xlim(x - (x - lo) * f, x + (hi - x) * f, source=self)
 
     def _press(self, event):
-        if event.inaxes is None or event.button != 1:
+        if event.inaxes is None:
             return
-        if event.dblclick:
-            self.group.reset(); return
-        self._drag = (event.x, self.ax.get_xlim())
+        if event.button == 1:
+            if event.dblclick:
+                self.group.reset(); return
+            self._drag = ("x", event.x, self.ax.get_xlim(), None)
+        elif event.button == 3:                     # right button: drag up/down = zoom the values
+            ax = event.inaxes
+            self._drag = ("y", event.y, ax.get_ylim(), ax)
 
     def _release(self, _event):
         self._drag = None
 
     def _motion(self, event):
         if self._drag is not None and event.x is not None:
-            x0, (lo, hi) = self._drag
+            kind, p0, lim, ax = self._drag
             bbox = self.ax.get_window_extent()
-            if bbox.width > 0:
-                dx = (event.x - x0) / bbox.width * (hi - lo)
+            if kind == "x" and bbox.width > 0:
+                lo, hi = lim
+                dx = (event.x - p0) / bbox.width * (hi - lo)
                 self.group.set_xlim(lo - dx, hi - dx, source=self)
+            elif kind == "y" and bbox.height > 0:
+                import math
+                f = math.exp(-(event.y - p0) / bbox.height * 2.0)    # drag up = zoom in, down = zoom out
+                lo, hi = lim
+                if ax.get_yscale() == "log" and lo > 0:
+                    llo, lhi = math.log10(lo), math.log10(hi); lc = 0.5 * (llo + lhi)
+                    ax.set_ylim(10 ** (lc - (lc - llo) * f), 10 ** (lc + (lhi - lc) * f))
+                else:
+                    c = 0.5 * (lo + hi); ax.set_ylim(c - (c - lo) * f, c + (hi - c) * f)
+                self.canvas.draw_idle()
             return
         self._hover(event)
 
@@ -224,7 +253,7 @@ class OverviewTab(QWidget):
         bar.addWidget(_small_button("Reset view", "full time range in all panels (or double-click a panel)", lambda: self.group.reset()))
         bar.addWidget(_small_button("Save image", "save the page as a PNG", self._save_png))
         bar.addStretch()
-        hint = QLabel("wheel: zoom time (all panels) · Ctrl+wheel: zoom values · drag: pan · double-click: reset · hover: read values · click legend: hide")
+        hint = QLabel("wheel: zoom time (all panels) · Ctrl+wheel or right-drag up/down: zoom values · left-drag: pan · double-click: reset · click legend: hide")
         hint.setStyleSheet("color: #888; font-size: 10px;"); bar.addWidget(hint)
         lay.addLayout(bar)
         self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;"); lay.addWidget(self.status)
