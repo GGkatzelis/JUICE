@@ -199,6 +199,22 @@ COMPOUNDS: Dict[str, Tuple[str, float, Optional[float]]] = {
     "carbitol": ("", 134.17, 0.999), "diethylene glycol monoethyl ether": ("", 134.17, 0.999),
     "tetrahydrofuran": ("", 72.11, 0.889), "thf": ("", 72.11, 0.889),
     "texanol": ("", 216.32, 0.95), "benzyl alcohol": ("", 108.14, 1.045),
+    # SAPHFIRE (biomass burning) solutions — carbonyls, acids, phenolics, furans
+    "ethyl benzene": ("EBENZ", 106.17, 0.867), "hydroxy acetone": ("ACETOL", 74.08, 1.08),
+    "methyl glyoxal": ("MGLYOX", 72.06, 1.05), "acrolein": ("ACR", 56.06, 0.839),
+    "2,3-butanedione": ("BIACET", 86.09, 0.981), "biacetyl": ("BIACET", 86.09, 0.981), "diacetyl": ("BIACET", 86.09, 0.981),
+    "crotonaldehyde": ("C4ALDB", 70.09, 0.846), "2-butenal": ("C4ALDB", 70.09, 0.846),
+    "glycolaldehyde": ("HOCH2CHO", 60.05, 1.10), "acrylic acid": ("ACO2H", 72.06, 1.051),
+    "methyl vinyl ketone": ("MVK", 70.09, 0.849), "methacrolein": ("MACR", 70.09, 0.847),
+    "o-cresol": ("CRESOL", 108.14, 1.047), "catechol": ("CATECHOL", 110.11, 1.344),
+    "methyl methacrylate": ("", 100.12, 0.94), "acetonitrile": ("", 41.05, 0.786),
+    "guaiacol": ("", 124.14, 1.129), "2-methoxyphenol": ("", 124.14, 1.129), "creosol": ("", 138.17, 1.092),
+    "eugenol": ("", 164.20, 1.06), "eucalyptol": ("", 154.25, 0.9225), "1,8-cineole": ("", 154.25, 0.9225),
+    "furan": ("", 68.07, 0.936), "2-methylfuran": ("", 82.10, 0.913), "2,5-dimethylfuran": ("", 96.13, 0.90),
+    "2-furfural": ("", 96.08, 1.16), "furfural": ("", 96.08, 1.16), "5-methyl-furfural": ("", 110.11, 1.107),
+    "5-methylfurfural": ("", 110.11, 1.107), "2-furanmethanol": ("", 98.10, 1.13), "furfuryl alcohol": ("", 98.10, 1.13),
+    "2(3h)-furanone": ("", 84.07, 1.209), "2-(3h)furanone": ("", 84.07, 1.209), "furanone": ("", 84.07, 1.209),
+    "5-(hydroxymethyl)-2-furfural": ("", 126.11, 1.29), "hmf": ("", 126.11, 1.29),
     "tetradecane": ("", 198.39, 0.763), "n-tetradecane": ("", 198.39, 0.763), "hexadecane": ("", 226.45, 0.773),
     "n-hexadecane": ("", 226.45, 0.773), "octadecane": ("", 254.50, 0.777), "n-octadecane": ("", 254.50, 0.777),
 }
@@ -220,6 +236,24 @@ SURROGATE_HINTS: Dict[str, Tuple[str, str]] = {
     "triethanolamine": ("", "amine chemistry is not in the MCM; small fraction, usually left unmodelled"),
     "ethanolamine": ("", "amine chemistry is not in the MCM; small fraction, usually left unmodelled"),
     "monoethanolamine": ("", "amine chemistry is not in the MCM; usually left unmodelled"),
+    # biomass-burning compounds the MCM lacks
+    "guaiacol": ("MCATECHOL", "methylcatechol, same formula C7H8O2, phenolic with two oxygens"),
+    "2-methoxyphenol": ("MCATECHOL", "methylcatechol, same formula C7H8O2"),
+    "creosol": ("MXYCATECH", "dimethylcatechol, same formula C8H10O2"),
+    "eugenol": ("MXYCATECH", "closest substituted catechol"),
+    "furan": ("M3F", "3-methylfuran is the only furan in the MCM"),
+    "2-methylfuran": ("M3F", "3-methylfuran: same formula C5H6O, the only furan in the MCM"),
+    "2,5-dimethylfuran": ("M3F", "3-methylfuran keeps the furan ring"),
+    "2-furfural": ("", "no furan aldehyde in the MCM; M3F keeps the ring, C4ALDB the conjugated aldehyde"),
+    "furfural": ("", "no furan aldehyde in the MCM; M3F keeps the ring, C4ALDB the conjugated aldehyde"),
+    "5-methyl-furfural": ("", "no furan aldehyde in the MCM; M3F keeps the ring"), "5-methylfurfural": ("", "no furan aldehyde in the MCM"),
+    "2-furanmethanol": ("", "no furan alcohol in the MCM; M3F keeps the ring"), "furfuryl alcohol": ("", "no furan alcohol in the MCM"),
+    "2(3h)-furanone": ("", "no furanone in the MCM"), "2-(3h)furanone": ("", "no furanone in the MCM"), "furanone": ("", "no furanone in the MCM"),
+    "5-(hydroxymethyl)-2-furfural": ("", "no furan aldehyde in the MCM; low volatility, mostly on the walls/particles"),
+    "hmf": ("", "no furan aldehyde in the MCM"),
+    "eucalyptol": ("", "no MCM analogue; OH rate ~1e-11, slow"), "1,8-cineole": ("", "no MCM analogue; slow OH loss"),
+    "acetonitrile": ("", "inert on the experiment time scale (k_OH 2e-14); usually left unmodelled"),
+    "methyl methacrylate": ("MACR", "unsaturated C4 carbonyl of similar OH rate (MMA 4e-11, MACR 3e-11)"),
 }
 # formulas of compounds the MCM lacks (for the surrogate search); MCM species carry their own
 FORMULAS: Dict[str, str] = {
@@ -229,6 +263,11 @@ FORMULAS: Dict[str, str] = {
     "tetrahydrofuran": "C4H8O", "thf": "C4H8O", "texanol": "C12H24O3", "benzyl alcohol": "C7H8O",
     "tetradecane": "C14H30", "n-tetradecane": "C14H30", "hexadecane": "C16H34", "n-hexadecane": "C16H34",
     "octadecane": "C18H38", "n-octadecane": "C18H38", "2-ethoxyethanol": "C4H10O2", "ethoxyethanol": "C4H10O2",
+    "methyl methacrylate": "C5H8O2", "acetonitrile": "C2H3N", "guaiacol": "C7H8O2", "2-methoxyphenol": "C7H8O2",
+    "creosol": "C8H10O2", "eugenol": "C10H12O2", "eucalyptol": "C10H18O", "1,8-cineole": "C10H18O",
+    "furan": "C4H4O", "2-methylfuran": "C5H6O", "2,5-dimethylfuran": "C6H8O", "2-furfural": "C5H4O2", "furfural": "C5H4O2",
+    "5-methyl-furfural": "C6H6O2", "5-methylfurfural": "C6H6O2", "2-furanmethanol": "C5H6O2", "furfuryl alcohol": "C5H6O2",
+    "2(3h)-furanone": "C4H4O2", "2-(3h)furanone": "C4H4O2", "furanone": "C4H4O2", "5-(hydroxymethyl)-2-furfural": "C6H6O3", "hmf": "C6H6O3",
 }
 _COMPOUND_KEYS = sorted(COMPOUNDS, key=len, reverse=True)
 NON_MCM_OK = {"CO2"}                     # tracers that are fine as EASY species without an MCM entry
@@ -298,7 +337,7 @@ def resolve_compound(text: str) -> ResolvedCompound:
 # ─────────────────────────────────────────────────────────────────────────────
 
 MIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mixtures")
-AMOUNT_UNITS = ("ul", "ml", "vol%", "mg", "g", "wt%", "mol%")
+AMOUNT_UNITS = ("ul", "ml", "vol%", "mg", "g", "wt%", "mol%", "ppb/ul")
 
 
 @dataclass
@@ -323,6 +362,7 @@ class Mixture:
     aliases: List[str] = field(default_factory=list)     # words in a wiki line that mean this mixture ("VCP")
     components: List[MixtureComponent] = field(default_factory=list)
     source: str = ""
+    reference_ul: float = 0.0                           # planned injected volume (used when the line gives none)
 
     def path(self) -> str:
         return os.path.join(MIXTURE_DIR, f"{safe_name(self.name)}.mixture.json")
@@ -412,7 +452,7 @@ def resolve_mixture(m: Mixture) -> List[Tuple[str, str]]:
                 alerts.append(("warning", f"{c.name}: no MCM species and no surrogate — injected but NOT modelled ({rc.note})"))
         if c.unit in ("ul", "ml", "vol%") and not c.density:
             alerts.append(("error", f"{c.name}: density needed to convert {c.unit} to moles"))
-        if not c.mw:
+        if not c.mw and c.unit != "ppb/ul":
             alerts.append(("error", f"{c.name}: molar mass needed"))
     return alerts
 
@@ -426,6 +466,8 @@ def mixture_moles(m: Mixture, injected_ul: Optional[float]) -> Tuple[Dict[str, f
     mass: Dict[str, float] = {}
     vol: Dict[str, float] = {}
     for c in m.components:
+        if c.unit == "ppb/ul":
+            continue                                    # handled directly in mixture_event
         if not c.mw:
             continue
         u = c.unit
@@ -466,9 +508,15 @@ def mixture_event(m: Mixture, injected_ul: Optional[float], start: str, duration
     modelled components, total_ppb = modelled sum; plus precursor list and alerts."""
     from experiment_spec import InjectionEvent
     alerts = resolve_mixture(m)
+    if not injected_ul and m.reference_ul:
+        injected_ul = m.reference_ul
     moles, v_recipe, expl = mixture_moles(m, injected_ul)
     n_air = moles_air(ch.volume_m3, T_K, P_hPa)
     ppb = {k: v / n_air * 1e9 for k, v in moles.items()}
+    direct = {c.name: c.amount * (injected_ul or 1.0) for c in m.components if c.unit == "ppb/ul"}
+    if direct:
+        ppb.update(direct)
+        expl += f"; {len(direct)} component(s) as ppb per µl × {injected_ul or 1.0:g} µl"
     modelled: Dict[str, float] = {}
     unmodelled: List[str] = []
     for c in m.components:

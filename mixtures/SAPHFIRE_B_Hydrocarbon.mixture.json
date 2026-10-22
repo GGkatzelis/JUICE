@@ -1,0 +1,92 @@
+{
+ "name": "SAPHFIRE_B_Hydrocarbon",
+ "description": "SAPHFIRE 2026 smoldering plan, Solution B: expected ppb per compound for 15.65 uL (SAPHFIRE_injection_smoldering_150ppb.xlsx, 2026-07-06); amounts = ppb per uL of solution",
+ "aliases": [
+  "Hydrocarbon Mix",
+  "Hydrocarbon_Mix"
+ ],
+ "components": [
+  {
+   "name": "a-pinene",
+   "amount": 0.27789,
+   "unit": "ppb/ul",
+   "mcm": "APINENE",
+   "surrogate": "",
+   "mw": 136.238,
+   "density": 0.858,
+   "note": ""
+  },
+  {
+   "name": "benzene",
+   "amount": 0.143196,
+   "unit": "ppb/ul",
+   "mcm": "BENZENE",
+   "surrogate": "",
+   "mw": 78.114,
+   "density": 0.879,
+   "note": ""
+  },
+  {
+   "name": "Toluene",
+   "amount": 0.130735,
+   "unit": "ppb/ul",
+   "mcm": "TOLUENE",
+   "surrogate": "",
+   "mw": 92.141,
+   "density": 0.867,
+   "note": ""
+  },
+  {
+   "name": "Isoprene",
+   "amount": 0.101051,
+   "unit": "ppb/ul",
+   "mcm": "C5H8",
+   "surrogate": "",
+   "mw": 68.119,
+   "density": 0.681,
+   "note": ""
+  },
+  {
+   "name": "m-xylene",
+   "amount": 0.027555,
+   "unit": "ppb/ul",
+   "mcm": "MXYL",
+   "surrogate": "",
+   "mw": 106.168,
+   "density": 0.86,
+   "note": ""
+  },
+  {
+   "name": "b-caryophyllene",
+   "amount": 0.021052,
+   "unit": "ppb/ul",
+   "mcm": "BCARY",
+   "surrogate": "",
+   "mw": 204.357,
+   "density": 0.905,
+   "note": ""
+  },
+  {
+   "name": "o-xylene",
+   "amount": 0.00932,
+   "unit": "ppb/ul",
+   "mcm": "OXYL",
+   "surrogate": "",
+   "mw": 106.168,
+   "density": 0.88,
+   "note": ""
+  },
+  {
+   "name": "Ethyl Benzene",
+   "amount": 0.004052,
+   "unit": "ppb/ul",
+   "mcm": "EBENZ",
+   "surrogate": "",
+   "mw": 106.168,
+   "density": 0.867,
+   "note": ""
+  }
+ ],
+ "source": "SAPHFIRE_injection_smoldering_150ppb.xlsx",
+ "reference_ul": 15.651
+}

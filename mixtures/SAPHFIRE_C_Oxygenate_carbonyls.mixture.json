@@ -1,0 +1,153 @@
+{
+ "name": "SAPHFIRE_C_Oxygenate_carbonyls",
+ "description": "SAPHFIRE 2026 smoldering plan, Solution C: expected ppb per compound for 37.90 uL (SAPHFIRE_injection_smoldering_150ppb.xlsx, 2026-07-06); amounts = ppb per uL of solution",
+ "aliases": [
+  "Oxygenate (carbonyls) Mix",
+  "Oxygenate_carbonyls_Mix",
+  "carbonyls Mix"
+ ],
+ "components": [
+  {
+   "name": "Methanol",
+   "amount": 0.465736,
+   "unit": "ppb/ul",
+   "mcm": "CH3OH",
+   "surrogate": "",
+   "mw": 32.042,
+   "density": 0.792,
+   "note": ""
+  },
+  {
+   "name": "Acetaldehyde",
+   "amount": 0.29036,
+   "unit": "ppb/ul",
+   "mcm": "CH3CHO",
+   "surrogate": "",
+   "mw": 44.053,
+   "density": 0.784,
+   "note": ""
+  },
+  {
+   "name": "Acrolein",
+   "amount": 0.190129,
+   "unit": "ppb/ul",
+   "mcm": "ACR",
+   "surrogate": "",
+   "mw": 56.064,
+   "density": 0.839,
+   "note": ""
+  },
+  {
+   "name": "Acetone",
+   "amount": 0.097882,
+   "unit": "ppb/ul",
+   "mcm": "CH3COCH3",
+   "surrogate": "",
+   "mw": 58.08,
+   "density": 0.784,
+   "note": ""
+  },
+  {
+   "name": "2,3-butanedione",
+   "amount": 0.070163,
+   "unit": "ppb/ul",
+   "mcm": "BIACET",
+   "surrogate": "",
+   "mw": 86.09,
+   "density": 0.981,
+   "note": ""
+  },
+  {
+   "name": "Hydroxy Acetone",
+   "amount": 0.05925,
+   "unit": "ppb/ul",
+   "mcm": "ACETOL",
+   "surrogate": "",
+   "mw": 74.079,
+   "density": 1.08,
+   "note": ""
+  },
+  {
+   "name": "Methyl Glyoxal",
+   "amount": 0.056702,
+   "unit": "ppb/ul",
+   "mcm": "MGLYOX",
+   "surrogate": "",
+   "mw": 72.063,
+   "density": 1.05,
+   "note": ""
+  },
+  {
+   "name": "acetonitrile",
+   "amount": 0.043275,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 41.053,
+   "density": 0.786,
+   "note": "'acetonitrile' is not an MCM species — inert on the experiment time scale (k_OH 2e-14); usually left unmodelled"
+  },
+  {
+   "name": "Methyl Acetate",
+   "amount": 0.041475,
+   "unit": "ppb/ul",
+   "mcm": "METHACET",
+   "surrogate": "",
+   "mw": 74.079,
+   "density": 0.932,
+   "note": ""
+  },
+  {
+   "name": "MVK",
+   "amount": 0.031632,
+   "unit": "ppb/ul",
+   "mcm": "MVK",
+   "surrogate": "",
+   "mw": 70.091,
+   "density": null,
+   "note": ""
+  },
+  {
+   "name": "MEK",
+   "amount": 0.024638,
+   "unit": "ppb/ul",
+   "mcm": "MEK",
+   "surrogate": "",
+   "mw": 72.107,
+   "density": 0.805,
+   "note": ""
+  },
+  {
+   "name": "Crotonaldehyde",
+   "amount": 0.021747,
+   "unit": "ppb/ul",
+   "mcm": "C4ALDB",
+   "surrogate": "",
+   "mw": 70.091,
+   "density": 0.846,
+   "note": ""
+  },
+  {
+   "name": "Methyl methacrylate",
+   "amount": 0.021294,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 100.117,
+   "density": 0.94,
+   "note": "'methyl methacrylate' is not an MCM species — suggested surrogate MACR (unsaturated C4 carbonyl of similar OH rate (MMA 4e-11, MACR 3e-11))"
+  },
+  {
+   "name": "MACR",
+   "amount": 0.012521,
+   "unit": "ppb/ul",
+   "mcm": "MACR",
+   "surrogate": "",
+   "mw": 70.091,
+   "density": null,
+   "note": ""
+  }
+ ],
+ "source": "SAPHFIRE_injection_smoldering_150ppb.xlsx",
+ "reference_ul": 37.9
+}

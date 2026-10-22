@@ -1,0 +1,153 @@
+{
+ "name": "SAPHFIRE_A_Phenolic_Furanoid",
+ "description": "SAPHFIRE 2026 smoldering plan, Solution A: expected ppb per compound for 43.32 uL (SAPHFIRE_injection_smoldering_150ppb.xlsx, 2026-07-06); amounts = ppb per uL of solution",
+ "aliases": [
+  "Phenolic + Furanoid Mix",
+  "Phenolic_Furanoid_Mix",
+  "Phenolic Furanoid"
+ ],
+ "components": [
+  {
+   "name": "2(3H)-Furanone",
+   "amount": 0.129416,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 84.074,
+   "density": 1.209,
+   "note": "'2(3h)-furanone' is not an MCM species — no furanone in the MCM"
+  },
+  {
+   "name": "Furan",
+   "amount": 0.118732,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 68.075,
+   "density": 0.936,
+   "note": "'furan' is not an MCM species — suggested surrogate M3F (3-methylfuran is the only furan in the MCM)"
+  },
+  {
+   "name": "Guaiacol",
+   "amount": 0.097665,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 124.139,
+   "density": 1.129,
+   "note": "'guaiacol' is not an MCM species — suggested surrogate MCATECHOL (methylcatechol, same formula C7H8O2, phenolic with two oxygens)"
+  },
+  {
+   "name": "2-furfural",
+   "amount": 0.093827,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 96.085,
+   "density": 1.16,
+   "note": "'2-furfural' is not an MCM species — no furan aldehyde in the MCM; M3F keeps the ring, C4ALDB the conjugated aldehyde"
+  },
+  {
+   "name": "Phenol",
+   "amount": 0.089186,
+   "unit": "ppb/ul",
+   "mcm": "PHENOL",
+   "surrogate": "",
+   "mw": 94.113,
+   "density": 1.07,
+   "note": ""
+  },
+  {
+   "name": "5-(hydroxymethyl)-2-furfural",
+   "amount": 0.069022,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 126.111,
+   "density": 1.29,
+   "note": "'5-(hydroxymethyl)-2-furfural' is not an MCM species — no furan aldehyde in the MCM; low volatility, mostly on the walls/particles"
+  },
+  {
+   "name": "2-methylfuran",
+   "amount": 0.060583,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 82.102,
+   "density": 0.913,
+   "note": "'2-methylfuran' is not an MCM species — suggested surrogate M3F (3-methylfuran: same formula C5H6O, the only furan in the MCM)"
+  },
+  {
+   "name": "o-Cresol",
+   "amount": 0.060369,
+   "unit": "ppb/ul",
+   "mcm": "CRESOL",
+   "surrogate": "",
+   "mw": 108.14,
+   "density": 1.047,
+   "note": ""
+  },
+  {
+   "name": "2-furanmethanol",
+   "amount": 0.053871,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 98.101,
+   "density": 1.13,
+   "note": "'2-furanmethanol' is not an MCM species — no furan alcohol in the MCM; M3F keeps the ring"
+  },
+  {
+   "name": "Catechol",
+   "amount": 0.050818,
+   "unit": "ppb/ul",
+   "mcm": "CATECHOL",
+   "surrogate": "",
+   "mw": 110.112,
+   "density": 1.344,
+   "note": ""
+  },
+  {
+   "name": "5-methyl-furfural",
+   "amount": 0.050818,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 110.112,
+   "density": 1.107,
+   "note": "'5-methyl-furfural' is not an MCM species — no furan aldehyde in the MCM; M3F keeps the ring"
+  },
+  {
+   "name": "Creosol",
+   "amount": 0.0405,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 138.166,
+   "density": 1.092,
+   "note": "'creosol' is not an MCM species — suggested surrogate MXYCATECH (dimethylcatechol, same formula C8H10O2)"
+  },
+  {
+   "name": "2,5-dimethylfuran",
+   "amount": 0.032339,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 96.129,
+   "density": 0.9,
+   "note": "'2,5-dimethylfuran' is not an MCM species — suggested surrogate M3F (3-methylfuran keeps the furan ring)"
+  },
+  {
+   "name": "Eucalyptol (1,8-cineole)",
+   "amount": 0.010077,
+   "unit": "ppb/ul",
+   "mcm": "",
+   "surrogate": "",
+   "mw": 154.253,
+   "density": 0.9225,
+   "note": "'1,8-cineole' is not an MCM species — no MCM analogue; slow OH loss"
+  }
+ ],
+ "source": "SAPHFIRE_injection_smoldering_150ppb.xlsx",
+ "reference_ul": 43.318
+}

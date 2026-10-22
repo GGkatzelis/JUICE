@@ -1,0 +1,43 @@
+{
+ "name": "SAPHFIRE_D_Oxygenate_acids",
+ "description": "SAPHFIRE 2026 smoldering plan, Solution D: expected ppb per compound for 11.09 uL (SAPHFIRE_injection_smoldering_150ppb.xlsx, 2026-07-06); amounts = ppb per uL of solution",
+ "aliases": [
+  "Oxygenate (acids) Mix",
+  "Oxygenate_acids_Mix",
+  "acids Mix"
+ ],
+ "components": [
+  {
+   "name": "Acetic Acid",
+   "amount": 1.17817,
+   "unit": "ppb/ul",
+   "mcm": "CH3CO2H",
+   "surrogate": "",
+   "mw": 60.052,
+   "density": 1.049,
+   "note": ""
+  },
+  {
+   "name": "Formic Acid",
+   "amount": 0.263723,
+   "unit": "ppb/ul",
+   "mcm": "HCOOH",
+   "surrogate": "",
+   "mw": 46.025,
+   "density": 1.22,
+   "note": ""
+  },
+  {
+   "name": "Acrylic acid",
+   "amount": 0.193699,
+   "unit": "ppb/ul",
+   "mcm": "ACO2H",
+   "surrogate": "",
+   "mw": 72.063,
+   "density": 1.051,
+   "note": ""
+  }
+ ],
+ "source": "SAPHFIRE_injection_smoldering_150ppb.xlsx",
+ "reference_ul": 11.095
+}
