@@ -201,6 +201,9 @@ def _carbon_class(name, parent_voc=None):
     peroxy before generic peroxy, peracids before hydroperoxides).
     """
     n = name.upper()
+    # inorganic nitrogen is never an organic nitrate, whatever the name suggests
+    if n in ('HNO3', 'HO2NO2', 'N2O5', 'NO3', 'NO2', 'NO', 'HONO', 'NA', 'SA', 'SO2', 'SO3', 'HSO3', 'H2O2', 'O3', 'OH', 'HO2', 'H2', 'H2O', 'CL', 'CLNO2', 'CLONO2'):
+        return 'Other'
     # Parent VOC (injected organic precursors from config)
     if parent_voc and n in parent_voc:
         return 'Parent VOC'
@@ -236,9 +239,14 @@ def _carbon_class(name, parent_voc=None):
     # Ketones / other C=O species (CO still in name after above filters)
     if 'CO' in n:
         return 'Ketones'
-    # Alcohols (ROH, after OOH/CO2H/COOH already caught above)
-    if n.endswith('OH'):
+    # Alcohols (ROH, after OOH/CO2H/COOH already caught above); MCM also names them …OL / …GLY
+    if n.endswith('OH') or n.endswith('OL') or n.endswith('GLY'):
         return 'Alcohols'
+    # MCM aldehyde names ending in …AL (PINAL, MALDIAL, C4MDIAL), ketones …ONE / …CARB (dicarbonyls)
+    if n.endswith('AL') and not n.endswith('SAL'):
+        return 'Aldehydes'
+    if n.endswith('ONE') or n.endswith('CARB'):
+        return 'Ketones'
     return 'Other'
 
 
