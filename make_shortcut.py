@@ -1,4 +1,4 @@
-"""
+r"""
 make_shortcut.py — put a JUICE icon on the Desktop (and optionally the Start menu).
 
     python make_shortcut.py              # Desktop\JUICE.lnk → JUICE.bat with the JUICE icon
