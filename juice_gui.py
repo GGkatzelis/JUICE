@@ -605,8 +605,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             w.toggled.connect(self._schedule_refresh)
         for w in list(cb.checks.values()):
             w.toggled.connect(self._schedule_refresh)
-        for w in ch.addon_checks.values():
-            w.toggled.connect(self._schedule_refresh)
+        ch.addon_combo.changed.connect(self._schedule_refresh)
 
     def _schedule_refresh(self, *_a):
         self._refresh_timer.start()

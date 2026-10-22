@@ -20,6 +20,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel
+from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
@@ -95,6 +96,64 @@ class MCMSpeciesDelegate(QStyledItemDelegate):
     def setModelData(self, editor, model, index):
         txt = editor.text().strip()
         model.setData(index, _MCM_ENTRY_TO_NAME.get(txt, txt))
+
+
+class MultiSelectCombo(QComboBox):
+    """A dropdown whose entries are tick boxes: several can be on at once, the closed
+    combo shows what is on, each entry has a tooltip with the details."""
+    changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._model = QStandardItemModel(self); self.setModel(self._model)
+        self._model.itemChanged.connect(self._on_item_changed)
+        self.setEditable(True); self.lineEdit().setReadOnly(True)
+        self.lineEdit().setPlaceholderText("none")
+        self._ids: List[str] = []
+        self.view().pressed.connect(self._toggle_row)
+        self._updating = False
+
+    def set_items(self, items, empty_text: str = "none"):
+        """items: [(id, label, tooltip, checked)]"""
+        self._updating = True
+        self._model.clear(); self._ids = []
+        for i, label, tip, checked in items:
+            it = QStandardItem(label); it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked); it.setToolTip(tip)
+            self._model.appendRow(it); self._ids.append(i)
+        self._updating = False
+        self.lineEdit().setPlaceholderText(empty_text if not items else "none")
+        self._refresh_text()
+
+    def _toggle_row(self, index):
+        it = self._model.itemFromIndex(index)
+        if it is not None:
+            it.setCheckState(Qt.CheckState.Unchecked if it.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)
+
+    def _on_item_changed(self, _it):
+        if not self._updating:
+            self._refresh_text(); self.changed.emit()
+
+    def checked_ids(self) -> List[str]:
+        return [self._ids[r] for r in range(self._model.rowCount()) if self._model.item(r).checkState() == Qt.CheckState.Checked]
+
+    def set_checked(self, ids: List[str]):
+        self._updating = True
+        for r in range(self._model.rowCount()):
+            self._model.item(r).setCheckState(Qt.CheckState.Checked if self._ids[r] in ids else Qt.CheckState.Unchecked)
+        self._updating = False
+        self._refresh_text()
+
+    def _refresh_text(self):
+        ids = self.checked_ids()
+        self.lineEdit().setText(", ".join(ids) if ids else "")
+        self.setToolTip("\n".join(self._model.item(r).text() for r in range(self._model.rowCount())
+                                   if self._model.item(r).checkState() == Qt.CheckState.Checked) or "no add-on chosen")
+
+    def hidePopup(self):                       # keep the list open while ticking several entries
+        if self.view().underMouse():
+            return
+        super().hidePopup()
 
 
 def _table(headers: List[str]) -> QTableWidget:
@@ -342,9 +401,9 @@ class ChemistryPage(QWizardPage):
         self.base_combo.currentIndexChanged.connect(self._base_changed); mg.addWidget(self.base_combo, 0, 1)
         self.base_info = _info(""); mg.addWidget(self.base_info, 0, 2)
         mg.addWidget(QLabel("Add-ons"), 1, 0)
-        self.addon_box = QWidget(); self.addon_lay = QVBoxLayout(self.addon_box); self.addon_lay.setContentsMargins(0, 0, 0, 0)
-        self.addon_checks: Dict[str, QCheckBox] = {}
-        mg.addWidget(self.addon_box, 1, 1, 1, 2)
+        self.addon_combo = MultiSelectCombo(); self.addon_combo.changed.connect(self._addons_changed)
+        mg.addWidget(self.addon_combo, 1, 1)
+        self.addon_info = _info("none chosen"); mg.addWidget(self.addon_info, 1, 2)
         lay.addLayout(mg)
         self._base_changed()
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
@@ -406,7 +465,12 @@ class ChemistryPage(QWizardPage):
         return self.base_combo.currentData() or mreg.DEFAULT_BASE
 
     def addon_ids(self) -> List[str]:
-        return [i for i, cb in self.addon_checks.items() if cb.isChecked()]
+        return self.addon_combo.checked_ids()
+
+    def _addons_changed(self):
+        ids = self.addon_ids()
+        self.addon_info.setText("none chosen — the base mechanism as published" if not ids else
+                                "on top of the base: " + ", ".join(ids))
 
     def _base_changed(self, _i: int = 0):
         b = self._bases.get(self.base_id())
@@ -415,18 +479,13 @@ class ChemistryPage(QWizardPage):
             self.base_info.setText((f"v{b.version}, downloaded {b.source.get('downloaded', '?')[:60]}" if not probs
                                     else "⚠ " + "; ".join(probs)[:120]))
         keep = self.addon_ids()
-        while self.addon_lay.count():
-            w = self.addon_lay.takeAt(0).widget()
-            if w is not None:
-                w.deleteLater()
-        self.addon_checks = {}
         addons = mreg.addons_for(self.base_id())
-        if not addons:
-            self.addon_lay.addWidget(_info("none installed for this base (mechanisms/addons/<id>/manifest.json)"))
-        for a in addons:
-            cb = QCheckBox(f"{a.name}  v{a.version} [{a.status}]"); cb.setToolTip(a.description)
-            cb.setChecked(a.id in keep); self.addon_checks[a.id] = cb
-            self.addon_lay.addWidget(cb); self.addon_lay.addWidget(_info("      " + a.description[:160]))
+        self.addon_combo.set_items([(a.id, f"{a.name}  v{a.version} [{a.status}]",
+                                     f"{a.description}\n\nfiles: {', '.join(a.files)}\nadds: {', '.join(a.adds_species) or '-'}\n"
+                                     f"needs from base: {', '.join(a.needs_base_species) or '-'}\nstatus: {a.status}, version {a.version}",
+                                     a.id in keep) for a in addons],
+                                    empty_text="none installed for this base (mechanisms/addons/<id>/manifest.json)")
+        self._addons_changed()
 
     # ── first-generation tree / adjustments ──
     def _fac(self) -> str:
@@ -518,8 +577,7 @@ class ChemistryPage(QWizardPage):
         i = self.base_combo.findData(spec.base_mechanism)
         self.base_combo.setCurrentIndex(i if i >= 0 else 0)
         self._base_changed()
-        for aid, cb in self.addon_checks.items():
-            cb.setChecked(aid in spec.addons)
+        self.addon_combo.set_checked(list(spec.addons)); self._addons_changed()
         self.chosen.clear()
         for p in spec.precursors:
             self.chosen.addItem(p)
