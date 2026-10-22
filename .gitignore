@@ -105,3 +105,6 @@ MCM_tested_scenarios/IDL Input/**/*_juice.*
 MCM_tested_scenarios/IDL Input/**/*_reactions.csv
 MCM_tested_scenarios/IDL Input/**/flowchart*
 MCM_tested_scenarios/IDL Input/**/* - Kopie.*
+
+# machine-specific shortcut (absolute paths); recreate with: python make_shortcut.py --here
+JUICE.lnk
