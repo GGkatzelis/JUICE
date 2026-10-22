@@ -20,6 +20,16 @@ from datetime import datetime
 from column_file_reader import load_column_file
 
 
+def _interact(canvas, hover: bool = True):
+    """Overview-style mouse interaction (wheel/Ctrl+wheel/right-drag zoom, drag pan, double-click reset,
+    hover readout) on any canvas of the viewer; silently skipped if the helper is unavailable."""
+    try:
+        from plot_interaction import attach
+        attach(canvas, hover=hover)
+    except Exception as e:
+        print(f"[viewer] interaction not attached: {e}")
+
+
 def _progress(message: str, percent=None, why: str = "") -> None:
     """Report a start-up stage to the loading window when there is one (no-op otherwise)."""
     if _LOADER is not None:
@@ -151,15 +161,21 @@ def _distinct_colors(labels):
             out.append(base[i % len(base)]); i += 1
     return out
 
-_HATCHES = ['', '//', '\\\\', 'xx', '..', '++', 'oo', '--']
+_HATCHES = ['']            # no patterns in the budgets (Georgios 2026-10-22): shades only
 
 
 def _shade(color, k: int, n: int):
-    """Member k of n in the same colour family: the base colour, then progressively lighter."""
+    """Member k of n of one colour family as a ramp from very light (near white) through the base
+    colour to very dark (near black) — no patterns, so many injected precursors stay distinguishable."""
     import matplotlib.colors as _mcolors
     r, g, b = _mcolors.to_rgb(color)
-    f = 0.0 if n <= 1 else 0.55 * k / max(1, n - 1)
-    return (r + (1 - r) * f, g + (1 - g) * f, b + (1 - b) * f)
+    w = min(0.5, 0.12 * (n - 1))                               # few members: stay near the base colour
+    p = 0.5 if n <= 1 else 0.5 - w + 2 * w * k / (n - 1)       # 0 = lightest … 1 = darkest
+    if p <= 0.5:
+        f = 0.88 * (1 - p / 0.5)                               # mix with white
+        return (r + (1 - r) * f, g + (1 - g) * f, b + (1 - b) * f)
+    f = 0.8 * (p - 0.5) / 0.5                                  # mix with black
+    return (r * (1 - f), g * (1 - f), b * (1 - f))
 
 
 # ── Nitrogen budget helpers ───────────────────────────────────────────────────
@@ -1157,7 +1173,7 @@ class ResultsViewer(QMainWindow):
         pa_layout = QVBoxLayout(pa_widget)
         pa_layout.setContentsMargins(0, 0, 0, 0)
         self.pa_fig = Figure(figsize=(12, 6))
-        self.pa_canvas = FigureCanvas(self.pa_fig)
+        self.pa_canvas = FigureCanvas(self.pa_fig); _interact(self.pa_canvas)
         self.pa_toolbar = NavigationToolbar(self.pa_canvas, self)
         pa_layout.addWidget(self.pa_toolbar)
         pa_layout.addWidget(self.pa_canvas)
@@ -1190,7 +1206,7 @@ class ResultsViewer(QMainWindow):
         rx_layout.addLayout(rx_ctrl, 0)
         self._measured_koh = None
         self.rx_fig = Figure(figsize=(12, 6))
-        self.rx_canvas = FigureCanvas(self.rx_fig)
+        self.rx_canvas = FigureCanvas(self.rx_fig); _interact(self.rx_canvas)
         self.rx_toolbar = NavigationToolbar(self.rx_canvas, self)
         rx_layout.addWidget(self.rx_toolbar, 0)
         rx_layout.addWidget(self.rx_canvas, 1)
@@ -2581,7 +2597,7 @@ class ResultsViewer(QMainWindow):
             slot_layout.addLayout(ctrl)
 
             fig = Figure()
-            canvas = FigureCanvas(fig)
+            canvas = FigureCanvas(fig); _interact(canvas, hover=False)      # has its own crosshair
             self._cmp_ts_figs.append(fig)
             self._cmp_ts_canvases.append(canvas)
             slot_layout.addWidget(NavigationToolbar(canvas, self))
@@ -3655,6 +3671,14 @@ class ResultsViewer(QMainWindow):
         self._nb_total_chk.setChecked(True)
         ctrl_layout.addWidget(self._nb_total_chk)
 
+        ctrl_layout.addWidget(QLabel("Exclude:"))
+        self._cb_exclude = QLineEdit(); self._cb_exclude.setFixedWidth(220)
+        self._cb_exclude.setPlaceholderText("names or formulas, e.g. CO, CH4, C2H6O")
+        self._cb_exclude.setToolTip("Species left out of both budgets: MCM names or chemical formulas, comma-separated. "
+                                    "A formula removes every species with that formula (isomers included).")
+        self._cb_exclude.editingFinished.connect(self._update_both_budgets)
+        ctrl_layout.addWidget(self._cb_exclude)
+
         btn = QPushButton("Plot")
         btn.clicked.connect(self._update_both_budgets)
         ctrl_layout.addWidget(btn)
@@ -3675,7 +3699,7 @@ class ResultsViewer(QMainWindow):
         carbon_layout.setContentsMargins(0, 0, 0, 0)
         carbon_layout.setSpacing(0)
         self._cb_fig = Figure(figsize=(12, 4))
-        self._cb_canvas = FigureCanvas(self._cb_fig)
+        self._cb_canvas = FigureCanvas(self._cb_fig); _interact(self._cb_canvas)
         self._cb_toolbar = NavigationToolbar(self._cb_canvas, carbon_widget)
         carbon_layout.addWidget(self._cb_toolbar)
         carbon_layout.addWidget(self._cb_canvas, 1)
@@ -3687,7 +3711,7 @@ class ResultsViewer(QMainWindow):
         nitrogen_layout.setContentsMargins(0, 0, 0, 0)
         nitrogen_layout.setSpacing(0)
         self._nb_fig = Figure(figsize=(12, 4))
-        self._nb_canvas = FigureCanvas(self._nb_fig)
+        self._nb_canvas = FigureCanvas(self._nb_fig); _interact(self._nb_canvas)
         self._nb_toolbar = NavigationToolbar(self._nb_canvas, nitrogen_widget)
         nitrogen_layout.addWidget(self._nb_toolbar)
         nitrogen_layout.addWidget(self._nb_canvas, 1)
@@ -3732,7 +3756,7 @@ class ResultsViewer(QMainWindow):
                 if np.nanmax(np.abs(ppb)) > 1e-3:
                     co2_present = True
                 continue
-            if not self._is_model_species(col):
+            if not self._is_model_species(col) or self._budget_excluded(col):
                 continue
             n_c = _carbon_count(col)
             vals = self.df[col].values
@@ -3828,6 +3852,18 @@ class ResultsViewer(QMainWindow):
         self._cb_fig.tight_layout()
         self._cb_canvas.draw()
 
+    def _budget_excluded(self, col: str) -> bool:
+        """True when the Budgets 'Exclude:' field names this species or its formula."""
+        txt = self._cb_exclude.text() if hasattr(self, '_cb_exclude') else ''
+        if not txt.strip():
+            return False
+        excl = {x.strip().upper() for x in txt.replace(';', ',').split(',') if x.strip()}
+        u = col.upper()
+        if u in excl:
+            return True
+        e = MCM_DB.get(u)
+        return bool(e is not None and (getattr(e, 'formula', '') or '').upper() in excl)
+
     def _is_model_species(self, col: str) -> bool:
         """A result column that is a chemical species: in the species table, or an ODE species of
         the mechanism the run used.  Everything else in a .cs (ENZ switch columns, J values, rate
@@ -3875,13 +3911,14 @@ class ResultsViewer(QMainWindow):
         if not present:
             return names, arrays, colors, hatches
         peak = float(np.nanmax(sum(a for _, a in present)))
-        big = [(sp, a) for sp, a in present if np.nanmax(a) >= _CB_OTHER_SPLIT * peak]
-        minor = [a for sp, a in present if np.nanmax(a) < _CB_OTHER_SPLIT * peak]
-        big.sort(key=lambda kv: -float(np.nanmean(kv[1])))
+        thr = 0.01 * peak                                          # own band down to 1 % of the parent peak
+        big = [(sp, a) for sp, a in present if np.nanmax(a) >= thr]
+        minor = [a for sp, a in present if np.nanmax(a) < thr]
+        big.sort(key=lambda kv: -float(np.nanmean(kv[1])))         # largest first = lightest … darkest
         n = len(big) + (1 if minor else 0)
         for i, (sp, a) in enumerate(big):
             names.append(f"{prefix}: {sp}"); arrays.append(a)
-            colors.append(_shade(base_color, i, n)); hatches.append(_HATCHES[i % len(_HATCHES)])
+            colors.append(_shade(base_color, i, n)); hatches.append('')
         if minor:
             names.append(f"{prefix} (minor, {len(minor)} compounds)"); arrays.append(sum(minor))
             colors.append(_shade(base_color, n - 1, n)); hatches.append('')
@@ -3962,7 +3999,7 @@ class ResultsViewer(QMainWindow):
         for col in self.df.columns:
             if col == 'M' or col.upper().startswith('SAPHIR_'):
                 continue
-            if not self._is_model_species(col):
+            if not self._is_model_species(col) or self._budget_excluded(col):
                 continue  # ENZ switches (QNO), J values (JNO2), rate constants (KRO2NO), sums (XNOY) are not species
             n_n = _nitrogen_count(col)
             if n_n == 0:
@@ -4025,7 +4062,7 @@ class ResultsViewer(QMainWindow):
                 if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
                     names.append(cls + (" (other)" if p_in_cls else ""))
                     arrays.append(class_totals[cls])
-                    colors.append(_shade(_NB_CLASS_COLORS.get(cls, '#aaaaaa'), 1, 2) if p_in_cls else _NB_CLASS_COLORS.get(cls, '#aaaaaa')); hatches.append('')
+                    colors.append(_NB_CLASS_COLORS.get(cls, '#aaaaaa')); hatches.append('')
             for cls, arr in class_totals.items():
                 if cls not in _NB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
                     names.append(cls)
@@ -4313,17 +4350,17 @@ class ResultsViewer(QMainWindow):
 
         # Top-right: VBS
         self._cs_vbs_fig = Figure(figsize=(8, 6))
-        self._cs_vbs_canvas = FigureCanvas(self._cs_vbs_fig)
+        self._cs_vbs_canvas = FigureCanvas(self._cs_vbs_fig); _interact(self._cs_vbs_canvas, hover=False)
         grid.addWidget(self._cs_vbs_canvas, 0, 1)
 
         # Bottom-left: C/O distribution
         self._cs_co_fig = Figure(figsize=(8, 4))
-        self._cs_co_canvas = FigureCanvas(self._cs_co_fig)
+        self._cs_co_canvas = FigureCanvas(self._cs_co_fig); _interact(self._cs_co_canvas, hover=False)
         grid.addWidget(self._cs_co_canvas, 1, 0)
 
         # Bottom-right: family pie
         self._cs_fam_fig = Figure(figsize=(8, 4))
-        self._cs_fam_canvas = FigureCanvas(self._cs_fam_fig)
+        self._cs_fam_canvas = FigureCanvas(self._cs_fam_fig); _interact(self._cs_fam_canvas, hover=False)
         grid.addWidget(self._cs_fam_canvas, 1, 1)
 
         # Stretch: top-left is 1/4 of space (small), top-right is dominant
