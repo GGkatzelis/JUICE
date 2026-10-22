@@ -131,9 +131,13 @@ class InteractivePanel(QWidget):
         m = QApplication.keyboardModifiers()
         return bool(m & _Qt.KeyboardModifier.ControlModifier), bool(m & _Qt.KeyboardModifier.ShiftModifier)
 
-    def _zoom_y(self, ax, y: float, f: float):
-        """Zoom the value axis `ax` by factor f around y (log-aware)."""
-        lo, hi = ax.get_ylim()
+    def _axes(self):
+        return [a for a in (self.ax, self.ax2) if a is not None]
+
+    @staticmethod
+    def _zoom_axis(ax, y: float, f: float, lim=None):
+        """Zoom one value axis by factor f around y in its own units (log-aware)."""
+        lo, hi = lim if lim is not None else ax.get_ylim()
         if ax.get_yscale() == "log":
             import math
             if y <= 0 or lo <= 0:
@@ -142,6 +146,13 @@ class InteractivePanel(QWidget):
             ax.set_ylim(10 ** (ly - (ly - llo) * f), 10 ** (ly + (lhi - ly) * f))
         else:
             ax.set_ylim(y - (y - lo) * f, y + (hi - y) * f)
+
+    def _zoom_y(self, pixel_y: float, f: float):
+        """Zoom both value axes of this panel (left and, if present, right) by factor f around the
+        cursor height — each axis around that height in its own units, so they stay aligned."""
+        for ax in self._axes():
+            y = ax.transData.inverted().transform((0.0, pixel_y))[1]
+            self._zoom_axis(ax, y, f)
         self.canvas.draw_idle()
 
     def _scroll(self, event):
@@ -149,8 +160,8 @@ class InteractivePanel(QWidget):
             return
         f = 0.8 if event.button == "up" else 1.25
         ctrl, shift = self._modifiers()
-        if ctrl or shift:                          # value axis of the panel under the cursor only
-            self._zoom_y(event.inaxes, event.ydata, f); return
+        if ctrl or shift:                          # value axes of the panel under the cursor only
+            self._zoom_y(event.y, f); return
         lo, hi = self.ax.get_xlim(); x = event.xdata
         self.group.set_xlim(x - (x - lo) * f, x + (hi - x) * f, source=self)
 
@@ -161,9 +172,8 @@ class InteractivePanel(QWidget):
             if event.dblclick:
                 self.group.reset(); return
             self._drag = ("x", event.x, self.ax.get_xlim(), None)
-        elif event.button == 3:                     # right button: drag up/down = zoom the values
-            ax = event.inaxes
-            self._drag = ("y", event.y, ax.get_ylim(), ax)
+        elif event.button == 3:                     # right button: drag up/down = zoom the values (both axes)
+            self._drag = ("y", event.y, [a.get_ylim() for a in self._axes()], None)
 
     def _release(self, _event):
         self._drag = None
@@ -179,12 +189,12 @@ class InteractivePanel(QWidget):
             elif kind == "y" and bbox.height > 0:
                 import math
                 f = math.exp(-(event.y - p0) / bbox.height * 2.0)    # drag up = zoom in, down = zoom out
-                lo, hi = lim
-                if ax.get_yscale() == "log" and lo > 0:
-                    llo, lhi = math.log10(lo), math.log10(hi); lc = 0.5 * (llo + lhi)
-                    ax.set_ylim(10 ** (lc - (lc - llo) * f), 10 ** (lc + (lhi - lc) * f))
-                else:
-                    c = 0.5 * (lo + hi); ax.set_ylim(c - (c - lo) * f, c + (hi - c) * f)
+                for a, (lo, hi) in zip(self._axes(), lim):           # around the middle of each axis' start view
+                    if a.get_yscale() == "log" and lo > 0:
+                        c = 10 ** (0.5 * (math.log10(lo) + math.log10(hi)))
+                    else:
+                        c = 0.5 * (lo + hi)
+                    self._zoom_axis(a, c, f, (lo, hi))
                 self.canvas.draw_idle()
             return
         self._hover(event)
