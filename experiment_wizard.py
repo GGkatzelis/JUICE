@@ -897,8 +897,13 @@ class ChamberPage(QWizardPage):
         self.params.hide()                       # formulas stay in the spec (template / expert tool), not on this page
 
     def embed_initials(self, page: "InitialsPage"):
-        box = QGroupBox("Initial values"); bl = QVBoxLayout(box)
+        """Collapsed by default: one line of explanation; tick the box to open the table
+        (it opens by itself when a loaded experiment has initial values)."""
+        box = QGroupBox("Initial values (tick to set)"); box.setCheckable(True); box.setChecked(False)
+        bl = QVBoxLayout(box)
         bl.addWidget(_info(page.subTitle())); bl.addWidget(page)
+        box.toggled.connect(page.setVisible); page.setVisible(False)
+        self.initials_box = box
         self.layout().addWidget(box)
 
     def set_from(self, ch: ChamberEffects):
@@ -959,6 +964,9 @@ class InitialsPage(QWizardPage):
     def set_from(self, spec: ExperimentSpec):
         self.all_edit.setText(spec.initial_all)
         _set_rows(self.table, [[sp, ex] for sp, ex in spec.initials])
+        box = getattr(self.wiz.page_chamber, "initials_box", None) if hasattr(self.wiz, "page_chamber") else None
+        if box is not None:
+            box.setChecked(bool(spec.initials))          # open only when there is something to show
 
     def apply(self, spec: ExperimentSpec):
         spec.initial_all = self.all_edit.text().strip() or "1."
