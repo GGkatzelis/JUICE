@@ -902,14 +902,18 @@ class ResultsViewer(QMainWindow):
         # Instrument data loaded from NC files: display_key -> {t, v, nc_file, nc_var, mcm_match}
         self._inst_data = {}
 
-        self.setWindowTitle("SAPHIR/MCM Results Viewer")
+        self.setWindowTitle("JUICE — Results" + (f"  ·  {os.path.basename(csv_path)}" if csv_path else ""))
         self.setGeometry(50, 50, 1600, 900)
         self.showMaximized()
         # About as standalone top-left menu bar action (no submenu)
         self.menuBar().addAction("About JUICE…", self._show_about)
-        _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
-        if not _icon_pixmap.isNull():
-            self.setWindowIcon(QIcon(_icon_pixmap))
+        try:
+            from juice_theme import app_icon
+            self.setWindowIcon(app_icon())
+        except Exception:
+            _icon_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
+            if not _icon_pixmap.isNull():
+                self.setWindowIcon(QIcon(_icon_pixmap))
 
         # Convert MCM index from SAPHIR epoch (sec since 2000-01-01) to hours since
         # UTC midnight of the experiment day, same reference as NC instrument data.
@@ -1005,7 +1009,7 @@ class ResultsViewer(QMainWindow):
         control_layout.addWidget(btn_clear)
 
         btn_exit = QPushButton("✕ Exit")
-        btn_exit.setStyleSheet("font-weight: bold; background-color: #7a1a1a; color: white;")
+        btn_exit.setObjectName("primary")
         btn_exit.clicked.connect(self.close)
         control_layout.addWidget(btn_exit)
 
@@ -4833,6 +4837,11 @@ def show_results(out_path, toml_path=None):
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
+        try:
+            from juice_theme import apply_theme
+            apply_theme(app)                       # same look as the step window
+        except Exception as _e:
+            print(f"[viewer] theme not applied: {_e}")
         viewer = ResultsViewer(df, csv_path=out_path, toml_path=toml_path)
         viewer.show()
         app.exec()
@@ -4913,7 +4922,12 @@ def main():
 if __name__ == "__main__":
     if HAS_PYQT:
         _app = QApplication(sys.argv)
-        _pm = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
-        if not _pm.isNull():
-            _app.setWindowIcon(QIcon(_pm))
+        try:
+            from juice_theme import apply_theme
+            apply_theme(_app)
+        except Exception as _e:
+            print(f"[viewer] theme not applied: {_e}")
+            _pm = QPixmap(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JUICE Logo.png"))
+            if not _pm.isNull():
+                _app.setWindowIcon(QIcon(_pm))
     main()
