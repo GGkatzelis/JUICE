@@ -410,6 +410,7 @@ class RunPage(QWidget):
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self.stop); hb.addWidget(self.stop_btn)
         self.view_btn = QPushButton("3. Open results"); self.view_btn.setObjectName("primary"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
+        ob = QPushButton("Open an earlier result …"); ob.clicked.connect(lambda: self.win._open_results_file()); hb.addWidget(ob)
         hb.addStretch(); lay.addLayout(hb)
         self.files = QLabel(""); self.files.setWordWrap(True); lay.addWidget(self.files)
         self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setTextVisible(True); self.bar.setFormat("not started"); lay.addWidget(self.bar)
@@ -557,6 +558,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         m.addAction("Open experiment (.experiment.json) …", self._open)
         m.addAction("Save experiment", self._save)
         m.addSeparator()
+        m.addAction("Open results of an earlier run in the viewer …", self._open_results_file)
         m.addAction("Expert tool (FR_GUI) …", self._expert)
         m.addSeparator()
         m.addAction("Quit", self.close)
@@ -691,6 +693,19 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             self.statusBar().showMessage(f"saved {res['spec_path']}"); self.review.refresh_files()
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
+
+    def _open_results_file(self, path: str = ""):
+        """Any result file (.cs), from this or an earlier experiment, in its own viewer window."""
+        if not path:
+            start = self.out_dir() if os.path.isdir(self.out_dir()) else (self.output_root if os.path.isdir(self.output_root) else self.easy_root)
+            path, _ = QFileDialog.getOpenFileName(self, "Open results", start, "JUICE / FACSIMILE results (*.cs);;All files (*)")
+        if not path:
+            return
+        args = [os.path.join(HERE, "results_viewer.py"), path]
+        if self.toml_path:
+            args += ["--toml", self.toml_path]
+        p = QProcess(self); p.start(sys.executable, args)
+        self._viewers = getattr(self, "_viewers", []) + [p]
 
     def _expert(self):
         p = QProcess(self); args = [os.path.join(HERE, "FR_GUI.py"), "-timeout", "0"]
