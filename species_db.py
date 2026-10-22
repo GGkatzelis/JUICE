@@ -64,6 +64,28 @@ _MCM331 = "E:/Python Code/JUICE archive/EASY/include files/MCM331/mcm_3-3-1_wind
 # MCM-export file with empty padding cells and inconsistent tabs -> read formula from the 5th
 # WHITESPACE-collapsed token only (as the historical budget-plot loader did); it carries no usable
 # RO2 column, so RO2 is never taken from it (that is what caused NO2/CO2/H2O2 to be mis-flagged).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REG = os.path.join(_HERE, "mechanisms")
+
+
+def _registry_sources():
+    """Species tables shipped with the repository (mechanism registry): every machine has these.
+    base/<ID>/*.tsv are MCM exports (positional), addons/<ID>/*.tsv are clean tables."""
+    out = []
+    for kind, mode in (("base", 'positional'), ("addons", 'clean')):
+        d = os.path.join(_REG, kind)
+        if not os.path.isdir(d):
+            continue
+        for mid in sorted(os.listdir(d)):
+            md = os.path.join(d, mid)
+            if not os.path.isdir(md):
+                continue
+            for fn in sorted(os.listdir(md), key=lambda f: f != "mcm_export_species.tsv"):   # the clean export first
+                if fn.lower().endswith(".tsv"):
+                    out.append((os.path.join(md, fn), 'clean' if fn == "mcm_export_species.tsv" else mode))
+    return out
+
+
 DEFAULT_SOURCES = [
     # clean, authoritative (formula + RO2) -- first, so HOM/isoprene formulas are the radical formulas:
     (_MCMd + "/CHANEL.all_mixes_gas_species.tsv",        'clean'),
@@ -79,7 +101,7 @@ DEFAULT_SOURCES = [
     (_SH + "/SIMHOM_volatility.param",                   'volparam'),
     # last-resort fill (messy padding -> only trusted for gaps; clean files already won the radicals):
     (_SH + "/SIMHOM2026_gas_species.tsv",               'positional'),
-]
+] + _registry_sources()   # mechanisms/base + mechanisms/addons of this checkout (the O:/E: drives are Franz's)
 
 _AW = {'C': 12.011, 'H': 1.008, 'O': 15.999, 'N': 14.007, 'Cl': 35.453,
        'Br': 79.904, 'S': 32.06, 'F': 18.998}

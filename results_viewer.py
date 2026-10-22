@@ -80,6 +80,10 @@ try:
     from species_db import load_species_db
     from mcm_species_db import KNOWN_ZERO_CARBON
     MCM_DB = load_species_db()
+    if len(getattr(MCM_DB, "_t", {})) == 0:          # no species table found at all → the MCM export
+        import mcm_species_db as _msd
+        MCM_DB = _msd.MCM_DB
+        print(f"[viewer] species_db empty — using mcm_species_db ({len(MCM_DB)} species)")
 except ImportError:
     MCM_DB = {}
     KNOWN_ZERO_CARBON = frozenset()
@@ -90,7 +94,7 @@ try:
                                  QPushButton, QLabel, QComboBox, QSplitter, QLineEdit,
                                  QTabWidget, QFileDialog, QDialog, QDialogButtonBox,
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
-                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox)
+                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox, QDoubleSpinBox)
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -128,6 +132,24 @@ _PROD_COLORS = ['#2ca02c', '#98df8a', '#17becf', '#9edae5', '#1f77b4',
                 '#aec7e8', '#bcbd22', '#dbdb8d', '#c5b0d5', '#f7b6d2']
 _DEST_COLORS = ['#d62728', '#ff9896', '#ff7f0e', '#ffbb78', '#9467bd',
                 '#c49c94', '#8c564b', '#c7c7c7', '#e377c2', '#7f7f7f']
+
+
+def _distinct_colors(labels):
+    """One clearly different colour per label (up to 60 without repeating: tab10, then the
+    tab20b/tab20c dark members, then their light members); 'Other' is always grey."""
+    import matplotlib.cm as _cm
+    base = [_cm.tab10(i) for i in range(10)]
+    for name in ("tab20b", "tab20c"):
+        base += [_cm.get_cmap(name)(i) for i in range(0, 20, 4)]      # dark members
+    for name in ("tab20b", "tab20c"):
+        base += [_cm.get_cmap(name)(i) for i in range(2, 20, 4)]      # light members
+    out, i = [], 0
+    for lbl in labels:
+        if str(lbl).lower().startswith("other"):
+            out.append("#9a9a9a")
+        else:
+            out.append(base[i % len(base)]); i += 1
+    return out
 
 # ── Nitrogen budget helpers ───────────────────────────────────────────────────
 _NB_CLASS_ORDER = [
@@ -1107,6 +1129,12 @@ class ResultsViewer(QMainWindow):
         rx_btn = QPushButton("Compute Reactivity")
         rx_btn.clicked.connect(self._update_reactivity)
         rx_ctrl.addWidget(rx_btn)
+        rx_ctrl.addWidget(QLabel("group into Other below"))
+        self.rx_thresh = QDoubleSpinBox(); self.rx_thresh.setRange(0.0, 50.0); self.rx_thresh.setDecimals(1)
+        self.rx_thresh.setSingleStep(0.5); self.rx_thresh.setValue(2.0); self.rx_thresh.setSuffix(" %")
+        self.rx_thresh.setToolTip("contributors whose time-average share of the total reactivity is below this are summed into 'Other'")
+        self.rx_thresh.valueChanged.connect(lambda _v: self._update_reactivity())
+        rx_ctrl.addWidget(self.rx_thresh)
         rx_meas_btn = QPushButton("Load k_OH (NC file)")
         rx_meas_btn.clicked.connect(self._load_koh_nc)
         rx_ctrl.addWidget(rx_meas_btn)
@@ -2124,7 +2152,7 @@ class ResultsViewer(QMainWindow):
         self.rx_fig.clear()
         t = self.df.index.values
         n = len(t)
-        THRESH = 0.02
+        THRESH = float(self.rx_thresh.value()) / 100.0 if hasattr(self, "rx_thresh") else 0.02
 
         total_mean = max(sum(np.nanmean(v) for v in contribs.values()), 1e-30)
         major, other = {}, None
@@ -2156,9 +2184,9 @@ class ResultsViewer(QMainWindow):
 
         labels  = list(major.keys())
         arrays  = [major[k] for k in labels]
-        colors  = _PROD_COLORS[:len(arrays)]
+        colors  = _distinct_colors(labels)
         if arrays:
-            ax_ts.stackplot(t, arrays, labels=labels, colors=colors, alpha=0.80)
+            ax_ts.stackplot(t, arrays, labels=labels, colors=colors, alpha=0.85)
 
         k_total = sum(contribs.values()) if contribs else np.zeros(n)
         ax_ts.plot(t, k_total, color='black', lw=1.5, ls='--',
@@ -2213,7 +2241,7 @@ class ResultsViewer(QMainWindow):
         handles, lbls = ax_ts.get_legend_handles_labels()
         if handles:
             ax_ts.legend(handles, lbls, loc='upper center',
-                         bbox_to_anchor=(0.5, -0.14), ncol=3, fontsize=7, framealpha=0.7).set_draggable(True)
+                         bbox_to_anchor=(0.5, -0.14), ncol=min(6, max(3, (len(handles) + 3) // 4)), fontsize=7, framealpha=0.7).set_draggable(True)
 
         bar_labels = list(major.keys())
         bar_vals   = [np.nanmean(major[k]) for k in bar_labels]
