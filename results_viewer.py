@@ -94,7 +94,7 @@ try:
                                  QPushButton, QLabel, QComboBox, QSplitter, QLineEdit,
                                  QTabWidget, QFileDialog, QDialog, QDialogButtonBox,
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
-                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox, QDoubleSpinBox)
+                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox, QDoubleSpinBox, QToolButton)
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -1076,25 +1076,27 @@ class ResultsViewer(QMainWindow):
 
         self._populate_tree()
 
-        # NC data loader button
-        btn_nc = QPushButton("Load SAPHIR NC Data...")
-        btn_nc.clicked.connect(self._load_nc_data)
-        left_layout.addWidget(btn_nc)
-
-        # Config loader
-        cfg_row = QHBoxLayout()
-        btn_cfg = QPushButton("Load Scenario Config (.json)")
+        # Scenario (found automatically next to the result; '…' only to pick another one)
+        cfg_row = QHBoxLayout(); cfg_row.setSpacing(4)
+        self.cfg_status = QLabel(self._config_label_text)
+        self.cfg_status.setWordWrap(True)
+        self.cfg_status.setStyleSheet("color: #555; font-size: 10px;")
+        self.cfg_status.setToolTip("scenario JSON used for the process analysis, reactivity and budgets — loaded automatically next to the result")
+        cfg_row.addWidget(self.cfg_status, stretch=1)
+        btn_cfg = QToolButton(); btn_cfg.setText("…"); btn_cfg.setAutoRaise(True); btn_cfg.setToolTip("choose another scenario JSON")
         btn_cfg.clicked.connect(self._browse_config)
         cfg_row.addWidget(btn_cfg)
         left_layout.addLayout(cfg_row)
 
-        self.cfg_status = QLabel(self._config_label_text)
-        self.cfg_status.setWordWrap(True)
-        self.cfg_status.setStyleSheet("color: #555; font-size: 10px;")
-        left_layout.addWidget(self.cfg_status)
+        btn_exit = QPushButton("✕ Exit")
+        btn_exit.setObjectName("primary")
+        btn_exit.clicked.connect(self.close)
+        left_layout.addWidget(btn_exit)
 
-        # Timeseries controls
-        control_layout = QVBoxLayout()
+        # Legacy single-canvas controls: kept alive (plot_variable & co. still work) but no longer shown —
+        # the Timeseries tab is a panel grid now (timeseries_tab.TimeseriesTab).
+        self._legacy_controls = QWidget(); self._legacy_controls.hide()
+        control_layout = QVBoxLayout(self._legacy_controls)
         control_layout.addWidget(QLabel("Target Axis:"))
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(["Left Axis (Main)", "Right Axis (Main)",
@@ -1124,12 +1126,6 @@ class ResultsViewer(QMainWindow):
         btn_clear.clicked.connect(self.clear_plot)
         control_layout.addWidget(btn_clear)
 
-        btn_exit = QPushButton("✕ Exit")
-        btn_exit.setObjectName("primary")
-        btn_exit.clicked.connect(self.close)
-        control_layout.addWidget(btn_exit)
-
-        left_layout.addLayout(control_layout)
         splitter.addWidget(left_panel)
 
         # ── RIGHT PANEL: tabbed ─────────────────────────────────────────────
@@ -1140,16 +1136,20 @@ class ResultsViewer(QMainWindow):
         self.right_tabs = QTabWidget()
         right_layout.addWidget(self.right_tabs)
 
-        # Tab 0 – Timeseries
-        ts_widget = QWidget()
-        ts_layout = QVBoxLayout(ts_widget)
-        ts_layout.setContentsMargins(0, 0, 0, 0)
-        self.fig = Figure(figsize=(10, 6))
+        # Tab 0 – Timeseries: a grid of linked panels (time series and correlations)
+        self.fig = Figure(figsize=(10, 6))                 # legacy canvas, hidden (plot_variable & co.)
         self.canvas = FigureCanvas(self.fig)
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        ts_layout.addWidget(self.toolbar)
-        ts_layout.addWidget(self.canvas)
-        self.right_tabs.addTab(ts_widget, "Timeseries")
+        self.toolbar = NavigationToolbar(self.canvas, self._legacy_controls)
+        try:
+            from timeseries_tab import TimeseriesTab
+            self.ts_tab = TimeseriesTab(self)
+            self.right_tabs.addTab(self.ts_tab, "Timeseries")
+        except Exception as _e:
+            print(f"[viewer] Timeseries panels not available ({_e}) — legacy canvas shown")
+            self.ts_tab = None
+            ts_widget = QWidget(); ts_layout = QVBoxLayout(ts_widget); ts_layout.setContentsMargins(0, 0, 0, 0)
+            ts_layout.addWidget(self.toolbar); ts_layout.addWidget(self.canvas)
+            self.right_tabs.addTab(ts_widget, "Timeseries")
 
         _progress("Building the tabs: Timeseries, Process analysis, Reactivity", 55)
         # Tab 1 – Process Analysis
@@ -1183,9 +1183,6 @@ class ResultsViewer(QMainWindow):
         self.rx_thresh.setToolTip("contributors whose time-average share of the total reactivity is below this are summed into 'Other'")
         self.rx_thresh.valueChanged.connect(lambda _v: self._update_reactivity())
         rx_ctrl.addWidget(self.rx_thresh)
-        rx_meas_btn = QPushButton("Load k_OH (NC file)")
-        rx_meas_btn.clicked.connect(self._load_koh_nc)
-        rx_ctrl.addWidget(rx_meas_btn)
         self.rx_meas_label = QLabel("No measured k_OH loaded")
         self.rx_meas_label.setStyleSheet("color: #555; font-size: 10px;")
         rx_ctrl.addWidget(self.rx_meas_label)
@@ -1409,6 +1406,10 @@ class ResultsViewer(QMainWindow):
 
     # ── Add / remove / clear ─────────────────────────────────────────────────
     def add_selected(self, *_):
+        if getattr(self, "ts_tab", None) is not None:
+            self.ts_tab.add_selected()
+            self.right_tabs.setCurrentIndex(self._tab("Timeseries"))
+            return
         # Collect all selected leaves (items with a parent and no children)
         selected = [
             item for item in self.var_tree.selectedItems()
@@ -2072,6 +2073,27 @@ class ResultsViewer(QMainWindow):
             leg.set_draggable(True)
 
     # ── Reactivity tab ────────────────────────────────────────────────────────
+    def _auto_load_observations(self):
+        """The day's SAPHIR observations (observation file next to the result, else the archive) as
+        'SAPHIR Instruments' entries of the tree — what the upload button used to do by hand."""
+        try:
+            import experiment_plots as _ep, datetime as _dt
+            spec = _ep.spec_for_run(self.csv_path) if getattr(self, "csv_path", "") else None
+            root = spec.conditions.archive_root if spec else r"Z:\IEK8-SAPHIR\data"
+            date = (spec.conditions.date if spec and spec.conditions.date
+                    else _dt.datetime.fromtimestamp(self._midnight_unix, _dt.timezone.utc).strftime("%Y-%m-%d"))
+            obs = _ep.load_observations(root, date, None, self._midnight_unix,
+                                        cache_dir=os.path.dirname(os.path.abspath(self.csv_path)) if getattr(self, "csv_path", "") else "")
+            rows = []
+            for key, (h, v, label, kind) in obs.items():
+                suffix = _ep.OBS_MAP[key][0] if key in _ep.OBS_MAP else "observations"
+                rows.append(({'nc_file': f"{date}.{suffix}", 'nc_var': key, 't': np.asarray(h, float), 'v': np.asarray(v, float)},
+                             key if key in self.df.columns else ''))
+            if rows:
+                self._add_confirmed_rows(rows)
+        except Exception as e:
+            print(f"[viewer] observations not added to the tree: {e}")
+
     def _auto_load_koh(self):
         """At start-up: the measured k_OH of the experiment day straight from the archive, if it exists."""
         try:
@@ -2587,6 +2609,7 @@ class ResultsViewer(QMainWindow):
         except Exception as _e:
             print(f"[viewer] Overview tab not available: {_e}")
         self._auto_load_koh()
+        self._auto_load_observations()
 
     # ── Reference loading ─────────────────────────────────────────────────────
     def _cmp_easy_scenario_dir(self) -> str:
@@ -4227,7 +4250,19 @@ class ResultsViewer(QMainWindow):
         # The cursor remains fully interactive manually; clicking or dragging
         # on the timeseries in Snapshot mode updates all panels instantly.
         ctrl.addSpacing(10)
-        ctrl.addWidget(QLabel("Video duration:"))
+        ctrl.addWidget(QLabel("Video from"))
+        self._cs_vid_start = QLineEdit(); self._cs_vid_start.setFixedWidth(52); self._cs_vid_start.setPlaceholderText("HH:MM")
+        self._cs_vid_start.setToolTip("first frame of the video (HH:MM UTC); empty = start of the run")
+        ctrl.addWidget(self._cs_vid_start)
+        _b = QToolButton(); _b.setText("⌖"); _b.setAutoRaise(True); _b.setToolTip("take the start from the cursor (snapshot time, or the left edge of the window)")
+        _b.clicked.connect(lambda: self._cs_vid_from_cursor("start")); ctrl.addWidget(_b)
+        ctrl.addWidget(QLabel("to"))
+        self._cs_vid_end = QLineEdit(); self._cs_vid_end.setFixedWidth(52); self._cs_vid_end.setPlaceholderText("HH:MM")
+        self._cs_vid_end.setToolTip("last frame of the video (HH:MM UTC); empty = end of the run")
+        ctrl.addWidget(self._cs_vid_end)
+        _b = QToolButton(); _b.setText("⌖"); _b.setAutoRaise(True); _b.setToolTip("take the end from the cursor (snapshot time, or the right edge of the window)")
+        _b.clicked.connect(lambda: self._cs_vid_from_cursor("end")); ctrl.addWidget(_b)
+        ctrl.addWidget(QLabel("duration:"))
         self._cs_duration_combo = QComboBox()
         self._cs_duration_combo.addItems(["5 s", "10 s", "15 s", "30 s", "45 s", "60 s"])
         self._cs_duration_combo.setCurrentIndex(2)  # 15s default
@@ -4778,6 +4813,34 @@ class ResultsViewer(QMainWindow):
         except ValueError:
             return 15.0
 
+    def _cs_video_range(self):
+        """(start, end) in hours for the video: the 'Video from … to …' fields, each falling back to the
+        run's first/last time; clamped to the run."""
+        t = self.df.index.values.astype(float); lo, hi = float(t[0]), float(t[-1])
+
+        def parse(txt, default):
+            txt = (txt or "").strip()
+            if not txt:
+                return default
+            try:
+                if ":" in txt:
+                    h, m = txt.split(":", 1); v = int(h) + int(m) / 60.0
+                else:
+                    v = float(txt)
+            except ValueError:
+                return default
+            return min(max(v, lo), hi)
+        return parse(self._cs_vid_start.text(), lo), parse(self._cs_vid_end.text(), hi)
+
+    def _cs_vid_from_cursor(self, which: str):
+        """Fill the start or end field from the cursor: the snapshot time, or the window's edge."""
+        if self._cs_mode_combo.currentIndex() == 1:
+            v = self._cs_time_range[0 if which == "start" else 1]
+        else:
+            v = self._cs_time_point
+        txt = f"{int(v):02d}:{int(round((v - int(v)) * 60)) % 60:02d}"
+        (self._cs_vid_start if which == "start" else self._cs_vid_end).setText(txt)
+
     def _cs_save_video(self):
         """Render the full experiment evolution to an MP4 (or GIF) file.
         The tab widget is grabbed off-screen frame by frame; the GUI itself
@@ -4809,8 +4872,10 @@ class ResultsViewer(QMainWindow):
         except Exception:
             fps = self._cs_video_fps
         n_frames = max(int(duration_s * fps), 2)
-        t = self.df.index.values.astype(float)
-        frame_times = np.linspace(float(t[0]), float(t[-1]), n_frames)
+        t0, t1 = self._cs_video_range()
+        if t1 <= t0:
+            QMessageBox.warning(self, "Video range", "The end time must be after the start time."); return
+        frame_times = np.linspace(t0, t1, n_frames)
 
         # Remember state so we can restore after rendering
         saved_mode = self._cs_mode_combo.currentIndex()
@@ -5082,6 +5147,9 @@ class ResultsViewer(QMainWindow):
         except Exception:
             pass
 
+        if getattr(self, "ts_tab", None) is not None:
+            self.ts_tab.apply_defaults(list(_ql), list(_qr))
+            return
         for _sp in _ql:
             if _sp in self.df.columns:
                 self.plot_variable(_sp, "Left Axis (Main)", "Convert to ppb")
