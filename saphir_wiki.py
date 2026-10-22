@@ -53,7 +53,8 @@ _UNITS = [                                   # a stated mixing ratio beats a liq
     (r"(\d+(?:[.,]\d+)?)\s*(?:ml|milliliter)\b", "ml"),
     (r"(\d+(?:[.,]\d+)?)\s*(?:nl|nanoliter)\b", "nl"),
 ]
-_DURATION = re.compile(r"(\d+(?:[.,]\d+)?)\s*(sec|seconds|s|min|minutes)\b")
+_DURATION = re.compile(r"(\d+(?:[.,]\d+)?)\s*(sec|seconds|s|min|minutes)\b(?!\s*-1)")
+_KOH = re.compile(r"(\d+(?:[.,]\d+)?)\s*s\s*-1\b")
 STOP_WORDS = ("stop", "stopp", "end", "ende", "finish", "switch to experiment")
 
 
@@ -133,7 +134,10 @@ def fetch_wiki_text(date: str, user: str = "", password: str = "", timeout: int 
 
     def _raw() -> Tuple[int, str]:
         r = sess.get(url, params={"action": "raw"}, timeout=timeout, verify=False)
-        return r.status_code, r.text
+        try:
+            return r.status_code, r.content.decode("utf-8")
+        except UnicodeDecodeError:
+            return r.status_code, r.text
 
     status, text = _raw()
     needs_login = status == 403 or "not allowed to view" in text.lower()
@@ -165,7 +169,7 @@ def load_wiki_file(path: str) -> str:
 # Parsing
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LINE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s+([A-Za-z$])(?=\s|$)(.*)$")
+_LINE = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s+([A-Za-z$])(?=\s|$)(.*)$")
 
 
 def parse_action_log(text: str) -> List[WikiEvent]:
@@ -176,7 +180,7 @@ def parse_action_log(text: str) -> List[WikiEvent]:
         m = _LINE.match(line)
         if not m:
             continue
-        hh, mm, code, rest = m.groups()
+        hh, mm, _ss, code, rest = m.groups()
         desc = re.sub(r"\s{2,}", " ", rest).strip(" :|")
         events.append(WikiEvent(f"{int(hh):02d}:{mm}", code, desc, line.strip()))
     return events
@@ -193,6 +197,9 @@ def _num(s: str) -> float:
 
 _MULT_VOL = re.compile(r"(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(µl|μl|ul|microliter|mikroliter|ml|milliliter|nl)\b", re.IGNORECASE)
 _FLOW = re.compile(r"(\d+(?:[.,]\d+)?)\s*(sccm|slpm|slm|l/min|ml/min)\b", re.IGNORECASE)
+_FC = re.compile(r"\bFC\s*(\d+(?:[.,]\d+)?)\s*l\b\s*(\d+(?:[.,]\d+)?)\s*%", re.IGNORECASE)      # FC 0.5l 62.5% → 0.5 L/min full scale at 62.5 %
+_BOTTLE = re.compile(r"\((\d+(?:[.,]\d+)?)\s*(ppm|%)\)", re.IGNORECASE)                            # Propene (1%), NO (3835ppm)
+_PPBC = re.compile(r"(\d+(?:[.,]\d+)?)\s*ppbc\b", re.IGNORECASE)
 _PPM_BOTTLE_WORDS = ("bottle", "cylinder", "standard", "flasche", "gas mix")
 
 
@@ -200,16 +207,21 @@ def parse_amounts(desc: str) -> Dict[str, Optional[float]]:
     """Every quantity the operator wrote: stated ppb, liquid µl (all terms summed, '2x3.2 ml' honoured),
     gas ml, MFC flow (sccm), duration (s), bottle ppm.  Missing → None."""
     low = desc.lower()
-    out: Dict[str, Optional[float]] = {"ppb": None, "ul": None, "ml": None, "sccm": None, "duration_s": None, "bottle_ppm": None}
+    out: Dict[str, Optional[float]] = {"ppb": None, "ul": None, "ml": None, "sccm": None, "duration_s": None, "bottle_ppm": None, "ppbc": None}
     m = re.search(r"(\d+(?:[.,]\d+)?)\s*ppbv?\b", low)
     if m:
         out["ppb"] = _num(m.group(1))
+    mb = _BOTTLE.search(desc)
+    if mb:                                      # "(1%)" or "(3835ppm)" right after the compound = bottle concentration
+        v = _num(mb.group(1)); out["bottle_ppm"] = v * 1e4 if mb.group(2) == "%" else v
     m = re.search(r"(\d+(?:[.,]\d+)?)\s*ppmv?\b", low)
-    if m:
+    if m and not mb:
         if any(w in low for w in _PPM_BOTTLE_WORDS):
             out["bottle_ppm"] = _num(m.group(1))
         elif out["ppb"] is None:
             out["ppb"] = _num(m.group(1)) * 1000.0
+    mp = _PPBC.search(desc)
+    out["ppbc"] = _num(mp.group(1)) if mp else None
     ul = ml = 0.0
     for n, v, unit in _MULT_VOL.findall(desc):
         q = (int(n) if n else 1) * _num(v)
@@ -226,6 +238,9 @@ def parse_amounts(desc: str) -> Dict[str, Optional[float]]:
     if m:
         v, u = _num(m.group(1)), m.group(2).lower()
         out["sccm"] = v * (1000.0 if u in ("slpm", "slm", "l/min") else 1.0)
+    mf = _FC.search(desc)
+    if mf:                                      # full scale [L/min] × setting [%]
+        out["sccm"] = _num(mf.group(1)) * 1000.0 * _num(mf.group(2)) / 100.0
     d = parse_duration_min(desc)
     out["duration_s"] = d * 60.0 if d is not None else None
     return out
@@ -273,6 +288,17 @@ def amount_for_compound(desc: str, rc: "ic.ResolvedCompound", T_K: float, P_hPa:
     if calc:
         return calc[0], delivery, calc[1], alerts
     return None, delivery, "no usable amount in the wiki line: enter ppb", alerts + ["no amount found"]
+
+
+def mixture_label(desc: str) -> str:
+    """Name of an unknown mixture from the line: the words between 'Inject' and the first
+    amount/'for', e.g. 'Phenolic + Furanoid Mix 43ul for 234ppbc' → 'Phenolic_Furanoid_Mix'."""
+    txt = desc.split("CHANGE:")[-1]
+    txt = re.sub(r"^\s*[A-ZÄÖÜ][a-z]?\.\s*[A-ZÄÖÜ][a-z]?\.?\s*", "", txt)      # operator initials "R.W." / "Ö.E."
+    txt = re.sub(r"(?i)\binject(?:ion|ed)?\b(?:\s+of)?", " ", txt)
+    txt = re.split(r"\s+for\s+|\d+(?:[.,]\d+)?\s*(?:µl|μl|ul|ml)\b", txt, maxsplit=1)[0]
+    words = re.findall(r"[A-Za-z][A-Za-z0-9]*", txt)
+    return "_".join(words)[:28] if words else ""
 
 
 def identify_mixture_word(desc: str) -> str:
@@ -361,6 +387,15 @@ def events_to_import(events: List[WikiEvent], date: str = "", T_K: float = 298.0
                     imp.checks.append((lvl, f"{t}: {msg}"))
                 if not a["ul"]:
                     imp.checks.append(("warning", f"{t}: mixture {mix.name} without injected volume: recipe amounts used as is"))
+                continue
+            a0 = parse_amounts(desc)
+            if a0["ppbc"] and ("mix" in desc.lower() or "solution" in desc.lower()):
+                label = mixture_label(desc) or identify_mixture_word(desc) or "MIX"
+                mk = _KOH.search(desc)
+                extra = f"; OH reactivity {mk.group(1)} s-1" if mk else ""
+                add_event("mixture", label, "", "", t, dur,
+                          f"wiki: {desc[:60]} | {a0['ppbc']:g} ppbC stated{extra}; no recipe '{label}' in mixtures/ — define it to model the components")
+                imp.checks.append(("warning", f"{t}: '{label}' ({a0['ppbc']:g} ppbC) has no recipe file — recorded only until the mixture is defined"))
                 continue
             rc = ic.resolve_compound(desc)
             if rc.status == "mcm":
