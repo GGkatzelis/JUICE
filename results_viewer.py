@@ -1947,10 +1947,15 @@ class ResultsViewer(QMainWindow):
             root = spec.conditions.archive_root if spec else r"Z:\IEK8-SAPHIR\data"
             date = (spec.conditions.date if spec and spec.conditions.date
                     else _dt.datetime.fromtimestamp(self._midnight_unix, _dt.timezone.utc).strftime("%Y-%m-%d"))
-            day = _ep.archive_day(root, date)
-            path = os.path.join(day, f"{date}.{_ep.OBS_MAP['kOH'][0]}") if day else ""
-            if path and os.path.isfile(path):
-                self._load_koh_nc(path)
+            note: list = []
+            obs = _ep.load_observations(root, date, ["kOH"], self._midnight_unix,
+                                        cache_dir=os.path.dirname(os.path.abspath(self.csv_path)) if getattr(self, "csv_path", "") else "",
+                                        status=note)
+            if "kOH" in obs:
+                h, k, label, _kind = obs["kOH"]
+                self._measured_koh = {'t': np.asarray(h, dtype=float), 'k': np.asarray(k, dtype=float)}
+                self.rx_meas_label.setText(f"k_OH: {label}, {note[0] if note else 'archive'}")
+                self.rx_meas_label.setStyleSheet("color: #1a7a1a; font-size: 10px; font-weight: bold;")
                 for name in ("_update_reactivity", "_plot_reactivity", "_refresh_reactivity", "_rx_update"):
                     fn = getattr(self, name, None)
                     if callable(fn):

@@ -108,3 +108,6 @@ MCM_tested_scenarios/IDL Input/**/* - Kopie.*
 
 # machine-specific shortcut (absolute paths); recreate with: python make_shortcut.py --here
 JUICE.lnk
+
+# per-day observation extracts next to results (regenerated from the archive; keep the reference scene folders clean in git)
+MCM_tested_scenarios/IDL Input/**/*.observations.csv

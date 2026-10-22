@@ -437,6 +437,14 @@ class RunPage(QWidget):
             self.log.append(f"Prepare failed: {e}"); self.bar.setFormat("prepare failed"); return ""
         out = os.path.dirname(self.json_path)
         self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path)))
+        try:                                   # the measurements the results will be compared with, extracted once
+            import experiment_plots as _ep
+            note: list = []
+            obs = _ep.load_observations(spec.conditions.archive_root, spec.conditions.date, cache_dir=out, status=note)
+            if obs:
+                self.log.append(f"observations {note[0] if note else ''}: {', '.join(sorted(obs))}")
+        except Exception as e:
+            self.log.append(f"note: observations not extracted ({e})")
         for n in res.get("notes", []):
             self.log.append("note: " + n)
         self.log.append(f"Inputs ready in {out}")
