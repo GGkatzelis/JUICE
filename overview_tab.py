@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QPushButton,
-                             QScrollArea, QFrame, QLineEdit, QFileDialog, QToolButton)
+                             QScrollArea, QFrame, QLineEdit, QFileDialog, QToolButton, QSizePolicy)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -251,7 +251,9 @@ class OverviewTab(QWidget):
         self.spec = ep.spec_for_run(viewer.csv_path) if getattr(viewer, "csv_path", "") else None
         self.group = PanelGroup()
         lay = QVBoxLayout(self); lay.setContentsMargins(4, 2, 4, 2); lay.setSpacing(2)
-        self.head = QLabel(""); self.head.setWordWrap(True); lay.addWidget(self.head)
+        self.head = QLabel(""); self.head.setWordWrap(True)
+        self.head.setStyleSheet("color: #6a6a6a; font-size: 9pt; font-style: italic;")     # experiment notes: small, grey, italic
+        lay.addWidget(self.head)
         bar = QHBoxLayout(); bar.setSpacing(6)
         self.obs_box = QCheckBox("SAPHIR observations"); self.obs_box.setChecked(True); self.obs_box.toggled.connect(self.rebuild)
         bar.addWidget(self.obs_box)
@@ -264,9 +266,10 @@ class OverviewTab(QWidget):
         bar.addWidget(_small_button("Save image", "save the page as a PNG", self._save_png))
         bar.addStretch()
         hint = QLabel("wheel: zoom time (all panels) · Ctrl+wheel or right-drag up/down: zoom values · left-drag: pan · double-click: reset · click legend: hide")
-        hint.setStyleSheet("color: #888; font-size: 10px;"); bar.addWidget(hint)
+        hint.setStyleSheet("color: #888; font-size: 10px;"); hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); bar.addWidget(hint, stretch=1)
         lay.addLayout(bar)
-        self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;"); lay.addWidget(self.status)
+        self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;")
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); lay.addWidget(self.status)
         self.area = QScrollArea(); self.area.setWidgetResizable(True); self.area.setFrameShape(QFrame.Shape.NoFrame)
         self.inner = QWidget(); self.grid = QGridLayout(self.inner); self.grid.setSpacing(2); self.grid.setContentsMargins(0, 0, 0, 0)
         self.area.setWidget(self.inner)
@@ -340,11 +343,37 @@ class OverviewTab(QWidget):
                             if self.obs_box.isChecked() else "model only")
         n = len(panels); grid_cols = 3 if n >= 5 else 2
         rows = (n + grid_cols - 1) // grid_cols
+        spans = self._hv_spans()
         for i, p in enumerate(panels):
             panel = InteractivePanel(p["title"], self.group, log=p["log"], xlabel=(i // grid_cols == rows - 1))
+            for lo, hi in spans:                               # roof open: the same shading in every panel
+                panel.ax.axvspan(lo, hi, color="#fffacd", alpha=0.35, zorder=0, linewidth=0)
             self._fill(panel, p, obs)
             self.grid.addWidget(panel, i // grid_cols, i % grid_cols)
         self._set_home()
+
+    def _hv_spans(self):
+        """Roof-open periods (hours) from the model's HV column, else from the experiment description."""
+        df = self.v.df
+        col = next((c for c in df.columns if c.upper() in ("SAPHIR_HV", "HV")), None)
+        spans, start = [], None
+        if col is not None:
+            t = df.index.values.astype(float); hv = df[col].values.astype(float) > 0.5
+            for ti, on in zip(t, hv):
+                if on and start is None:
+                    start = ti
+                elif not on and start is not None:
+                    spans.append((start, ti)); start = None
+            if start is not None:
+                spans.append((start, float(t[-1])))
+        elif self.spec is not None:
+            for o, c in self.spec.conditions.roof_open:
+                try:
+                    h = lambda x: int(x.split(":")[0]) + int(x.split(":")[1]) / 60.0
+                    spans.append((h(o), h(c)))
+                except Exception:
+                    pass
+        return spans
 
     def _set_home(self):
         """Full time range = the model run; shared by all panels."""
@@ -367,7 +396,8 @@ class OverviewTab(QWidget):
         if self.spec is None:
             return f"<b>{os.path.basename(self.v.csv_path or '')}</b> — no experiment description next to the file; panels from the model species only."
         s = self.spec; c = s.conditions
-        inj = "; ".join(f"{i.start or '--:--'} {i.name} {i.total_ppb} ppb" for i in s.injections if i.products)
+        items = [f"{i.start or '--:--'} {i.name} {i.total_ppb} ppb" for i in s.injections if i.products]
+        inj = "; ".join(items[:6]) + (f"; … {len(items) - 6} more" if len(items) > 6 else "")
         chem = ", ".join(s.precursors) if s.precursors else s.mechanism_stem
         return (f"<b>{s.name}</b> — {c.date} {c.start}–{c.end} UTC, {'measured' if c.source == 'archive' else 'manual'} conditions, "
                 f"chemistry {s.base_mechanism} ({chem}){' + ' + ', '.join(s.addons) if s.addons else ''}; "
@@ -426,8 +456,6 @@ class OverviewTab(QWidget):
         for name in ("HONO wall source", "HCHO wall source", "dark HONO"):
             if name in src:
                 ax.plot(hours, src[name], color=next(colors), lw=1.2, label=name + " [ppb/h]")
-        if "hv" in cols:
-            ax.fill_between(hours, 0, np.asarray(cols["hv"], float) * (ax.get_ylim()[1] or 1), color="#ffd966", alpha=0.25, step="post", label="roof open")
         if "dilution" in src:
             panel.ax2 = ax.twinx(); panel.ax2.plot(hours, src["dilution"], color="#2e9e4f", lw=1, ls="--", label="dilution [%/h]")
         if "jNO2" in obs:

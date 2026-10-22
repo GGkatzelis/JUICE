@@ -724,7 +724,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
-    theme.taskbar_identity("FZJ.JUICE.GUI")
+    theme.taskbar_identity()                 # same "FZJ.JUICE" identity as the viewer and the expert tools: one taskbar icon for all JUICE windows
     app = QApplication(argv)
     theme.apply_theme(app)
     w = JuiceWindow(pick_toml(argv))

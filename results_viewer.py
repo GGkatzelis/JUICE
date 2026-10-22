@@ -104,7 +104,7 @@ try:
                                  QPushButton, QLabel, QComboBox, QSplitter, QLineEdit,
                                  QTabWidget, QFileDialog, QDialog, QDialogButtonBox,
                                  QTableWidget, QTableWidgetItem, QCheckBox, QHeaderView,
-                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox, QDoubleSpinBox, QToolButton)
+                                 QInputDialog, QMessageBox, QAbstractItemView, QSpinBox, QDoubleSpinBox, QToolButton, QSizePolicy)
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtGui import QColor, QIcon, QPixmap
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -228,7 +228,7 @@ def _nitrogen_class(name):
         return 'HONO'
     if n == 'N2O5':
         return 'N2O5'
-    if n.endswith('CO3NO2') or n in ('PAN', 'MPAN', 'APAN', 'GPAN', 'PBZN'):
+    if re.search(r'PAN\d*$', n) or n.endswith('CO3NO2') or n in ('PPN', 'PBZN', 'PHAN', 'APAN', 'GPAN'):   # MCM peroxyacyl nitrates (…PAN, …PAN5, PPN, PBZN, PHAN); A2PANO/…PANOO are radicals
         return 'PANs'
     if ('NO3' in n and n != 'NO3') or 'ONO2' in n or n.endswith('NO2'):
         return 'Org. Nitrates'
@@ -299,7 +299,7 @@ def _carbon_class(name, parent_voc=None):
     if n == 'CO2':
         return 'Other'          # rarely appears in MCM CSV
     # PAN family: peroxyacyl nitrates (e.g. CH3CO3NO2, MPAN)
-    if n.endswith('CO3NO2') or n in ('PAN', 'MPAN', 'APAN', 'GPAN', 'PBZN'):
+    if re.search(r'PAN\d*$', n) or n.endswith('CO3NO2') or n in ('PPN', 'PBZN', 'PHAN', 'APAN', 'GPAN'):   # MCM peroxyacyl nitrates (…PAN, …PAN5, PPN, PBZN, PHAN); A2PANO/…PANOO are radicals
         return 'PANs'
     # Organic nitrates (RONO2, names carry NO3 or ONO2) and peroxy nitrates (RO2NO2)
     if ('NO3' in n and n != 'NO3') or 'ONO2' in n or n.endswith('O2NO2'):
@@ -1201,6 +1201,7 @@ class ResultsViewer(QMainWindow):
         rx_ctrl.addWidget(self.rx_thresh)
         self.rx_meas_label = QLabel("No measured k_OH loaded")
         self.rx_meas_label.setStyleSheet("color: #555; font-size: 10px;")
+        self.rx_meas_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         rx_ctrl.addWidget(self.rx_meas_label)
         rx_ctrl.addStretch()
         rx_layout.addLayout(rx_ctrl, 0)
@@ -1784,6 +1785,9 @@ class ResultsViewer(QMainWindow):
         try:
             import tomllib as _tl
             p = getattr(self, '_toml_path', None)
+            if not (p and os.path.isfile(p)):                      # started without --toml: the project TOMLs
+                here = os.path.dirname(os.path.abspath(__file__))
+                p = next((q for q in (os.path.join(here, 'GG_GUI.toml'), os.path.join(here, 'FR_GUI.toml')) if os.path.isfile(q)), None)
             if p and os.path.isfile(p):
                 with open(p, 'rb') as fh:
                     t = _tl.load(fh)
@@ -2406,6 +2410,9 @@ class ResultsViewer(QMainWindow):
         btn_slopes = QPushButton("Compute Slopes")
         btn_slopes.clicked.connect(self._cmp_compute_slopes)
         src_row.addWidget(btn_slopes)
+        src_row.addStretch()
+        outer_layout.addLayout(src_row)              # row 1: reference + slopes
+        src_row = QHBoxLayout()                      # row 2: what to compare + status (one row was 2000 px wide)
 
         # 3-state species selector: Favoriten | c-Spezies | Alle
         from PyQt6.QtWidgets import QButtonGroup
@@ -2468,6 +2475,7 @@ class ResultsViewer(QMainWindow):
 
         self._cmp_ref_lbl = QLabel("No reference loaded")
         self._cmp_ref_lbl.setStyleSheet("color: #666; font-style: italic;")
+        self._cmp_ref_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         src_row.addWidget(self._cmp_ref_lbl, stretch=1)
         outer_layout.addLayout(src_row)
 
@@ -3671,8 +3679,13 @@ class ResultsViewer(QMainWindow):
         self._nb_total_chk.setChecked(True)
         ctrl_layout.addWidget(self._nb_total_chk)
 
+        ctrl_layout.addWidget(QLabel("N view:"))
+        self._nb_view = QComboBox(); self._nb_view.addItems(["All nitrogen", "PANs", "Org. Nitrates"])
+        self._nb_view.setToolTip("nitrogen figure: every class, or the species of one class (PANs / organic nitrates) individually")
+        self._nb_view.currentIndexChanged.connect(self._update_nitrogen_budget)
+        ctrl_layout.addWidget(self._nb_view)
         ctrl_layout.addWidget(QLabel("Exclude:"))
-        self._cb_exclude = QLineEdit(); self._cb_exclude.setFixedWidth(220)
+        self._cb_exclude = QLineEdit("CO2"); self._cb_exclude.setFixedWidth(220)
         self._cb_exclude.setPlaceholderText("names or formulas, e.g. CO, CH4, C2H6O")
         self._cb_exclude.setToolTip("Species left out of both budgets: MCM names or chemical formulas, comma-separated. "
                                     "A formula removes every species with that formula (isomers included).")
@@ -3749,13 +3762,6 @@ class ResultsViewer(QMainWindow):
         for col in self.df.columns:
             if col == 'M' or col.upper().startswith('SAPHIR_'):
                 continue
-            # Always exclude CO2 — MCM treats it as a sink, not a tracked tracer
-            if col.upper() == 'CO2':
-                vals = self.df[col].values
-                ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
-                if np.nanmax(np.abs(ppb)) > 1e-3:
-                    co2_present = True
-                continue
             if not self._is_model_species(col) or self._budget_excluded(col):
                 continue
             n_c = _carbon_count(col)
@@ -3821,18 +3827,13 @@ class ResultsViewer(QMainWindow):
             ax.plot(t, total, color='black', lw=1.5, ls='--',
                     label='Total tracked C', zorder=10)
 
-        # ── Exclusion annotation (bottom-left corner) ─────────────────────
-        excl_lines = []
-        if co2_present:
-            excl_lines.append('• CO2  (MCM sink — not a tracked tracer)')
-        for sp in unknown_species:
-            excl_lines.append(f'• {sp}  (not in MCM DB)')
-        if excl_lines:
-            note = 'Excluded from budget:\n' + '\n'.join(excl_lines)
-            ax.text(0.02, 0.02, note, transform=ax.transAxes, fontsize=7.5,
-                    va='bottom', ha='left', family='monospace',
-                    bbox=dict(boxstyle='round,pad=0.4', facecolor='#fff8dc',
-                              alpha=0.88, edgecolor='#ccaa00'))
+        # Species with no resolvable carbon count cannot be budgeted: they go into the Exclude field
+        # (visible and editable there) instead of a note in the figure.
+        if unknown_species and hasattr(self, '_cb_exclude'):
+            have = [x.strip() for x in self._cb_exclude.text().split(',') if x.strip()]
+            new = [sp for sp in unknown_species if sp.upper() not in {h.upper() for h in have}]
+            if new:
+                self._cb_exclude.setText(", ".join(have + new))
 
         # ── Axes formatting ───────────────────────────────────────────────
         ax.set_xlabel('Time of Day (UTC)')
@@ -4035,7 +4036,23 @@ class ResultsViewer(QMainWindow):
 
         names, colors = [], []
         mode = self._cb_mode_combo.currentText()
-        if mode == "All Species":
+        view = self._nb_view.currentText() if hasattr(self, '_nb_view') else "All nitrogen"
+        if view in ("PANs", "Org. Nitrates"):
+            # one class, species by species: the big ones named, the rest summed into Other
+            members = {sp: d for sp, d in species_data.items() if _nitrogen_class(sp) == view}
+            if not members:
+                ax.text(0.5, 0.5, f"No {view} in this run.", ha='center', va='center', transform=ax.transAxes, fontsize=11)
+                self._nb_canvas.draw(); return
+            species_data = members
+            total = sum(np.nan_to_num(d[1]) for d in members.values()); thr = _CB_OTHER_SPLIT * float(np.nanmax(total)) if np.nanmax(total) > 0 else 0.0
+            big = sorted(((sp, np.nan_to_num(d[1])) for sp, d in members.items() if np.nanmax(np.nan_to_num(d[1])) >= thr), key=lambda kv: -float(np.nanmean(kv[1])))
+            rest = [np.nan_to_num(d[1]) for sp, d in members.items() if np.nanmax(np.nan_to_num(d[1])) < thr]
+            names = [sp for sp, _a in big] + ([f"Other {view} ({len(rest)})"] if rest else [])
+            arrays = [a for _sp, a in big] + ([sum(rest)] if rest else [])
+            colors = _distinct_colors(names)
+            ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+            ax.set_title(f"{view}: species contributions (ppb-N)", fontsize=10)
+        elif mode == "All Species":
             sorted_items = sorted(species_data.items(),
                                   key=lambda x: np.nanmean(x[1][1]), reverse=True)
             names  = [item[0] for item in sorted_items]
@@ -4286,7 +4303,8 @@ class ResultsViewer(QMainWindow):
         # Video export controls (no live playback — it crashed the GUI).
         # The cursor remains fully interactive manually; clicking or dragging
         # on the timeseries in Snapshot mode updates all panels instantly.
-        ctrl.addSpacing(10)
+        outer_layout.addLayout(ctrl, 0)                 # row 1: what is shown
+        ctrl = QHBoxLayout(); ctrl.setSpacing(8)         # row 2: video export + readout (one row pushed the tab off-screen)
         ctrl.addWidget(QLabel("Video from"))
         self._cs_vid_start = QLineEdit(); self._cs_vid_start.setFixedWidth(52); self._cs_vid_start.setPlaceholderText("HH:MM")
         self._cs_vid_start.setToolTip("first frame of the video (HH:MM UTC); empty = start of the run")
@@ -4330,6 +4348,10 @@ class ResultsViewer(QMainWindow):
         ctrl.addSpacing(10)
         self._cs_radical_lbl = QLabel("")
         self._cs_radical_lbl.setStyleSheet("color: #333; font-family: monospace; font-size: 10px;")
+        # a QLabel never shrinks below its text: with the long radical readout the control row pushed
+        # the whole tab beyond the screen.  Let the layout clip it instead.
+        self._cs_radical_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._cs_radical_lbl.setMinimumWidth(0)
         ctrl.addWidget(self._cs_radical_lbl, 1)
         outer_layout.addLayout(ctrl, 0)
 

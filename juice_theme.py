@@ -90,6 +90,9 @@ def app_icon() -> QIcon:
     return ico
 
 
+_FIT = None
+
+
 class _ComboFit(QObject):
     """App-wide: every QComboBox is wide enough for its entries and its popup list is at least as
     wide as the longest entry — no more 'p…' in a narrow control row (Georgios 2026-10-22)."""
@@ -120,8 +123,10 @@ class _ComboFit(QObject):
 def apply_theme(app) -> None:
     """Fusion style + white palette + QSS + font + icon on a QApplication."""
     app.setStyle("Fusion")
-    if getattr(app, "_juice_combo_fit", None) is None:
-        app._juice_combo_fit = _ComboFit(app); app.installEventFilter(app._juice_combo_fit)
+    global _FIT
+    if _FIT is None:                       # module-owned, no Qt parent: a filter parented to the app crashes at exit
+        _FIT = _ComboFit(); app.installEventFilter(_FIT)
+        app.aboutToQuit.connect(lambda: app.removeEventFilter(_FIT))
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"), (QPalette.ColorRole.AlternateBase, "#fafafa"),
                       (QPalette.ColorRole.Button, "#f3f3f3"), (QPalette.ColorRole.ToolTipBase, "#ffffff"), (QPalette.ColorRole.Highlight, ACCENT_SOFT)):

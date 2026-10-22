@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QComboBox, QSpinBox, QCheckBox,
-                             QPushButton, QToolButton, QListWidget, QListWidgetItem, QScrollArea, QFrame, QFileDialog)
+                             QPushButton, QToolButton, QListWidget, QListWidgetItem, QScrollArea, QFrame, QFileDialog, QSizePolicy)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -161,21 +161,23 @@ class TimeseriesTab(QWidget):
         bar.addWidget(_tool("Remove", "remove the entries selected in the contents list from the target panel", self.remove_selected))
         bar.addWidget(_tool("Clear panel", "empty the target panel", self.clear_panel))
         bar.addWidget(_tool("Clear all", "empty every panel", self.clear_all))
-        self.obs_box = QCheckBox("observations"); self.obs_box.setChecked(True); self.obs_box.setToolTip("SAPHIR observations of the day as dots, same colour as the model line")
-        self.obs_box.toggled.connect(self.rebuild); bar.addWidget(self.obs_box)
-        bar.addWidget(_tool("Reset view", "full range in all panels (or double-click)", lambda: self.group.reset()))
-        bar.addWidget(_tool("Save image", "save the panels as a PNG", self._save_png))
         bar.addStretch()
-        hint = QLabel("wheel: zoom time · Ctrl+wheel / right-drag: zoom values · left-drag: pan · double-click: reset · click legend: hide")
-        hint.setStyleSheet("color: #888; font-size: 10px;"); bar.addWidget(hint)
         lay.addLayout(bar)
 
-        row2 = QHBoxLayout(); row2.setSpacing(6)
+        row2 = QHBoxLayout(); row2.setSpacing(6)         # second row: view actions + the target panel's contents
+        self.obs_box = QCheckBox("observations"); self.obs_box.setChecked(True); self.obs_box.setToolTip("SAPHIR observations of the day as dots, same colour as the model line")
+        self.obs_box.toggled.connect(self.rebuild); row2.addWidget(self.obs_box)
+        row2.addWidget(_tool("Reset view", "full range in all panels (or double-click)", lambda: self.group.reset()))
+        row2.addWidget(_tool("Save image", "save the panels as a PNG", self._save_png))
+        hint = QLabel("wheel: zoom time · Ctrl+wheel / right-drag: zoom values · left-drag: pan · double-click: reset · click legend: hide")
+        hint.setStyleSheet("color: #888; font-size: 10px;"); hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); row2.addWidget(hint, stretch=1)
         self.contents_label = QLabel("panel 1:"); row2.addWidget(self.contents_label)
         self.contents = QListWidget(); self.contents.setFlow(QListWidget.Flow.LeftToRight); self.contents.setFixedHeight(26)
         self.contents.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection); self.contents.itemDoubleClicked.connect(lambda _i: self.remove_selected())
         self.contents.setToolTip("entries of the target panel — double-click one to remove it"); row2.addWidget(self.contents, stretch=1)
-        self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;"); row2.addWidget(self.status)
+        self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;")
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); row2.addWidget(self.status, stretch=1)
+        self.contents.setMinimumWidth(200)
         lay.addLayout(row2)
 
         self.area = QScrollArea(); self.area.setWidgetResizable(True); self.area.setFrameShape(QFrame.Shape.NoFrame)
