@@ -151,6 +151,17 @@ def _distinct_colors(labels):
             out.append(base[i % len(base)]); i += 1
     return out
 
+_HATCHES = ['', '//', '\\\\', 'xx', '..', '++', 'oo', '--']
+
+
+def _shade(color, k: int, n: int):
+    """Member k of n in the same colour family: the base colour, then progressively lighter."""
+    import matplotlib.colors as _mcolors
+    r, g, b = _mcolors.to_rgb(color)
+    f = 0.0 if n <= 1 else 0.55 * k / max(1, n - 1)
+    return (r + (1 - r) * f, g + (1 - g) * f, b + (1 - b) * f)
+
+
 # ── Nitrogen budget helpers ───────────────────────────────────────────────────
 _NB_CLASS_ORDER = [
     'NOx', 'HNO3', 'HONO', 'N2O5', 'PANs', 'Org. Nitrates', 'Other N',
@@ -375,6 +386,13 @@ class BudgetEngine:
                     except Exception:
                         pass
 
+        # ELOG mode (every run written by the step window / IDL import): the canonical elog IS the
+        # whole mechanism.  The JSON's custom_reactions, chamber_source_reactions, injection_reactions
+        # and artifacts are the parser's informational copies of the same EASY statements — the runner
+        # skips them in this mode (scenario_runner: `elif not _using_elog`, `_add_artifacts`), so the
+        # budget engine must too, or every reaction is counted twice (kOH stack 2× the .pd kOH).
+        _using_elog = bool(elog_path) and os.path.exists(elog_path)
+
         # Blocked parameters
         blocked = {p.upper() for p in self.cfg.get('blocked_parameters', [])}
         if blocked:
@@ -389,7 +407,7 @@ class BudgetEngine:
                 pass
 
         # Artifact reactions (same as ScenarioRunner._add_artifacts)
-        arts = self.cfg.get('artifacts', {})
+        arts = self.cfg.get('artifacts', {}) if not _using_elog else {}
         if arts.get('active'):
             scale = eval(str(arts.get('scale', '1.0')))
             if arts.get('hono_active'):
@@ -406,7 +424,7 @@ class BudgetEngine:
                     Reaction([], ['HONO'], str(arts['dark_hono'])))
 
         # Custom reactions
-        for r in self.cfg.get('custom_reactions', []):
+        for r in (self.cfg.get('custom_reactions', []) if not _using_elog else []):
             if not r.get('reactants') or not r.get('products') or not r.get('rate'):
                 continue
             reacs = [x.strip().upper() for x in r['reactants'].split('+') if x.strip()]
@@ -414,7 +432,7 @@ class BudgetEngine:
             self.mechanism.reactions.append(Reaction(reacs, prods, r['rate']))
 
         # IDL chamber_source_reactions (SHONO/SHCHO/H2O)
-        for r in self.cfg.get('chamber_source_reactions', []):
+        for r in (self.cfg.get('chamber_source_reactions', []) if not _using_elog else []):
             if not r.get('products') or not r.get('rate'):
                 continue
             reacts_str = r.get('reactants', '')
@@ -438,7 +456,7 @@ class BudgetEngine:
                             break
             except Exception:
                 pass
-        for r in self.cfg.get('injection_reactions', []):
+        for r in (self.cfg.get('injection_reactions', []) if not _using_elog else []):
             if not r.get('products') or not r.get('rate'):
                 continue
             reacts_str = r.get('reactants', '')
@@ -459,17 +477,23 @@ class BudgetEngine:
                     if name and not name.replace('.', '').isdigit():
                         s.add(name)
                 return frozenset(s)
-            excl_keys = set()
+            excl_keys = set(); overrides = []
             for e in excl:
-                if e.get('action', 'Remove') != 'Modify Rate':
-                    excl_keys.add((
-                        _canon([x.strip() for x in e['reactants'].split('+') if x.strip()]),
-                        _canon([x.strip() for x in e['products'].split('+') if x.strip()])
-                    ))
+                key = (_canon([x.strip() for x in e['reactants'].split('+') if x.strip()]),
+                       _canon([x.strip() for x in e['products'].split('+') if x.strip()]))
+                if e.get('action', 'Remove') == 'Modify Rate' and e.get('rate', '').strip():
+                    overrides.append((key, e['rate'].strip()))      # as the runner: patch the rate
+                else:
+                    excl_keys.add(key)
             self.mechanism.reactions = [
                 rxn for rxn in self.mechanism.reactions
                 if (_canon(rxn.reactants), _canon(rxn.products)) not in excl_keys
             ]
+            for rxn in self.mechanism.reactions:
+                rk = (_canon(rxn.reactants), _canon(rxn.products))
+                for key, new_rate in overrides:
+                    if rk == key:
+                        rxn.rate_expression = new_rate
 
         # Compile safe_expr for every reaction
         for rxn in self.mechanism.reactions:
@@ -3630,23 +3654,7 @@ class ResultsViewer(QMainWindow):
         t = self.df.index.values          # hours since midnight
         M = self.df['M'].values if 'M' in self.df.columns else None
 
-        # ── Parent VOC set from config (burst injections only) ────────────
-        parent_voc = set()
-        if self.budget_engine and self.budget_engine.cfg:
-            for inj in self.budget_engine.cfg.get('burst_injections', []):
-                sp = inj.get('species', '')
-                if sp and _carbon_count(sp) > 0:
-                    parent_voc.add(sp.upper())
-        # … and from the experiment description next to the result (injected products + chosen compounds)
-        try:
-            import experiment_plots as _ep
-            _spec = _ep.spec_for_run(self.csv_path) if getattr(self, "csv_path", "") else None
-            if _spec is not None:
-                for sp in list(_ep.injected_species(_spec)) + [p.upper() for p in _spec.precursors]:
-                    if _carbon_count(sp) > 0:
-                        parent_voc.add(sp)
-        except Exception:
-            pass
+        parent_voc = [sp for sp in self._parent_species(_carbon_count) if sp not in ('CO', 'CO2', 'CH4')]   # tracers are not VOCs: CO keeps its own class
 
         # ── Collect carbon-containing MCM species ─────────────────────────
         species_data = {}    # name → (n_carbons, ppb_C array)
@@ -3662,6 +3670,8 @@ class ResultsViewer(QMainWindow):
                 ppb  = (vals / M) * 1e9 if M is not None else vals.copy()
                 if np.nanmax(np.abs(ppb)) > 1e-3:
                     co2_present = True
+                continue
+            if not self._is_model_species(col):
                 continue
             n_c = _carbon_count(col)
             vals = self.df[col].values
@@ -3757,6 +3767,65 @@ class ResultsViewer(QMainWindow):
         self._cb_fig.tight_layout()
         self._cb_canvas.draw()
 
+    def _is_model_species(self, col: str) -> bool:
+        """A result column that is a chemical species: in the species table, or an ODE species of
+        the mechanism the run used.  Everything else in a .cs (ENZ switch columns, J values, rate
+        constants, diagnostic sums such as XNOY/NOx/Ox) must not enter an element budget."""
+        u = col.upper()
+        if u in ('XNOY', 'NOX', 'NOY', 'OX'):          # bookkeeping tracers of the EASY script (injected NOy, sums), not molecules
+            return False
+        if MCM_DB.get(u) is not None:
+            return True
+        c_names = getattr(self, '_easy_c_names', None)
+        if c_names:
+            return u.lower() in c_names
+        return not (u.startswith('Q') or u.startswith('J') or u.startswith('K') or u in ('XNOY', 'NOX', 'NOY', 'OX', 'Y', 'QY'))
+
+    def _parent_species(self, count_fn):
+        """Injected precursors that carry the budget's element (count_fn > 0): from the scenario's
+        burst injections and from the experiment description next to the result (injected products
+        and chosen compounds).  Ordered as injected."""
+        out = []
+        if self.budget_engine and self.budget_engine.cfg:
+            for inj in self.budget_engine.cfg.get('burst_injections', []):
+                sp = (inj.get('species', '') or '').upper()
+                if sp and count_fn(sp) > 0 and sp not in out:
+                    out.append(sp)
+        try:
+            import experiment_plots as _ep
+            _spec = _ep.spec_for_run(self.csv_path) if getattr(self, "csv_path", "") else None
+            if _spec is not None:
+                for sp in list(_ep.injected_species(_spec)) + [p.upper() for p in _spec.precursors]:
+                    if count_fn(sp) > 0 and sp not in out:
+                        out.append(sp)
+        except Exception:
+            pass
+        return out
+
+    @staticmethod
+    def _parent_bands(species_data, parents, base_color, prefix):
+        """One band per injected precursor present in the data, in the family of `base_color`:
+        shades + hatches so the precursors can be told apart.  Precursors whose peak is below
+        _CB_OTHER_SPLIT of the summed parent peak share one band '<prefix> (minor)' — a mixture of
+        30 compounds would otherwise drown the plot.  Returns (names, arrays, colors, hatches)."""
+        present = [(sp, np.nan_to_num(species_data[sp][1])) for sp in parents
+                   if sp in species_data and np.nanmax(np.nan_to_num(species_data[sp][1])) > 1e-9]
+        names, arrays, colors, hatches = [], [], [], []
+        if not present:
+            return names, arrays, colors, hatches
+        peak = float(np.nanmax(sum(a for _, a in present)))
+        big = [(sp, a) for sp, a in present if np.nanmax(a) >= _CB_OTHER_SPLIT * peak]
+        minor = [a for sp, a in present if np.nanmax(a) < _CB_OTHER_SPLIT * peak]
+        big.sort(key=lambda kv: -float(np.nanmean(kv[1])))
+        n = len(big) + (1 if minor else 0)
+        for i, (sp, a) in enumerate(big):
+            names.append(f"{prefix}: {sp}"); arrays.append(a)
+            colors.append(_shade(base_color, i, n)); hatches.append(_HATCHES[i % len(_HATCHES)])
+        if minor:
+            names.append(f"{prefix} (minor, {len(minor)} compounds)"); arrays.append(sum(minor))
+            colors.append(_shade(base_color, n - 1, n)); hatches.append('')
+        return names, arrays, colors, hatches
+
     def _cb_draw_all_species(self, ax, t, species_data):
         """Stacked area with one band per species, sorted by mean contribution.
         Returns (names, colors) for legend building."""
@@ -3772,9 +3841,13 @@ class ResultsViewer(QMainWindow):
     def _cb_draw_grouped(self, ax, t, species_data, parent_voc):
         """Stacked area with one band per chemical class using fixed class colours.
         Returns (names, colors) for legend building."""
+        parent_voc = list(parent_voc)
+        p_names, p_arrays, p_colors, p_hatches = self._parent_bands(species_data, parent_voc, _CB_CLASS_COLORS['Parent VOC'], "Parent VOC")
         class_totals = {}
         for sp, (_, ppb_c) in species_data.items():
             cls = _carbon_class(sp, parent_voc)
+            if cls == 'Parent VOC':
+                continue                                   # drawn as its own band below
             if cls not in class_totals:
                 class_totals[cls] = np.zeros(len(t))
             class_totals[cls] += np.nan_to_num(ppb_c)
@@ -3791,24 +3864,27 @@ class ResultsViewer(QMainWindow):
                     (split.append((sp, arr)) if np.nanmax(arr) >= thr else rest.__iadd__(arr))
             split.sort(key=lambda kv: -float(np.nanmean(kv[1])))
             class_totals['Other'] = rest
-        names, arrays, colors = [], [], []
+        names, arrays, colors, hatches = [], [], [], []
         _split_cmap = _mcm.get_cmap('Dark2')
         for cls in _CB_CLASS_ORDER:
+            if cls == 'Parent VOC':
+                names += p_names; arrays += p_arrays; colors += p_colors; hatches += p_hatches
+                continue
             if cls == 'Other':
                 for i, (sp, arr) in enumerate(split):          # just below the remaining "Other"
-                    names.append(f"{sp} (from Other)"); arrays.append(arr); colors.append(_split_cmap(i % 8))
+                    names.append(f"{sp} (from Other)"); arrays.append(arr); colors.append(_split_cmap(i % 8)); hatches.append('')
             if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
                 names.append(cls)
                 arrays.append(class_totals[cls])
-                colors.append(_CB_CLASS_COLORS.get(cls, '#aaaaaa'))
+                colors.append(_CB_CLASS_COLORS.get(cls, '#aaaaaa')); hatches.append('')
         for cls, arr in class_totals.items():
             if cls not in _CB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
                 names.append(cls)
                 arrays.append(arr)
-                colors.append('#aaaaaa')
+                colors.append('#aaaaaa'); hatches.append('')
 
         if arrays:
-            ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+            ax.stackplot(t, *arrays, labels=names, colors=colors, hatch=hatches, alpha=0.85)
         return names, colors
 
     # ── Nitrogen budget ───────────────────────────────────────────────────────
@@ -3825,6 +3901,8 @@ class ResultsViewer(QMainWindow):
         for col in self.df.columns:
             if col == 'M' or col.upper().startswith('SAPHIR_'):
                 continue
+            if not self._is_model_species(col):
+                continue  # ENZ switches (QNO), J values (JNO2), rate constants (KRO2NO), sums (XNOY) are not species
             n_n = _nitrogen_count(col)
             if n_n == 0:
                 continue  # known zero-N (CO, C2H5OH, etc.) — silently skip
@@ -3868,25 +3946,32 @@ class ResultsViewer(QMainWindow):
             colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
             ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
         else:
+            parents = self._parent_species(_nitrogen_count)          # injected NO, NO2, … as own bands
             class_totals = {}
             for sp, (_, ppb_n) in species_data.items():
+                if sp in parents:
+                    continue
                 cls = _nitrogen_class(sp)
                 if cls not in class_totals:
                     class_totals[cls] = np.zeros(len(t))
                 class_totals[cls] += np.nan_to_num(ppb_n)
-            names, arrays, colors = [], [], []
+            names, arrays, colors, hatches = [], [], [], []
             for cls in _NB_CLASS_ORDER:
+                p_in_cls = [sp for sp in parents if _nitrogen_class(sp) == cls]
+                if p_in_cls:                                            # injected members first, in the class colour family
+                    pn, pa, pc, ph = self._parent_bands(species_data, p_in_cls, _NB_CLASS_COLORS.get(cls, '#aaaaaa'), "Injected")
+                    names += pn; arrays += pa; colors += pc; hatches += ph
                 if cls in class_totals and np.nanmax(class_totals[cls]) > 1e-9:
-                    names.append(cls)
+                    names.append(cls + (" (other)" if p_in_cls else ""))
                     arrays.append(class_totals[cls])
-                    colors.append(_NB_CLASS_COLORS.get(cls, '#aaaaaa'))
+                    colors.append(_shade(_NB_CLASS_COLORS.get(cls, '#aaaaaa'), 1, 2) if p_in_cls else _NB_CLASS_COLORS.get(cls, '#aaaaaa')); hatches.append('')
             for cls, arr in class_totals.items():
                 if cls not in _NB_CLASS_ORDER and np.nanmax(arr) > 1e-9:
                     names.append(cls)
                     arrays.append(arr)
-                    colors.append('#aaaaaa')
+                    colors.append('#aaaaaa'); hatches.append('')
             if arrays:
-                ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
+                ax.stackplot(t, *arrays, labels=names, colors=colors, hatch=hatches, alpha=0.85)
 
         if self._nb_total_chk.isChecked():
             total = sum(np.nan_to_num(ppb_n) for _, ppb_n in species_data.values())
@@ -4084,6 +4169,15 @@ class ResultsViewer(QMainWindow):
         self._cs_units_combo = QComboBox()
         self._cs_units_combo.addItems(["ppb", "µg/m³"])
         ctrl.addWidget(self._cs_units_combo)
+
+        ctrl.addWidget(QLabel("Exclude:"))
+        self._cs_exclude = QLineEdit()
+        self._cs_exclude.setPlaceholderText("names or formulas, e.g. CH4, CO, C2H6O")
+        self._cs_exclude.setToolTip("Species to leave out of every chemical-space panel: MCM names or chemical formulas, comma-separated. "
+                                    "A formula removes every species with that formula (isomers included).")
+        self._cs_exclude.setFixedWidth(220)
+        self._cs_exclude.editingFinished.connect(lambda: self._cs_redraw_all() if hasattr(self, '_cs_redraw_all') else None)
+        ctrl.addWidget(self._cs_exclude)
 
         ctrl.addWidget(QLabel("VBS size scale:"))
         self._cs_size_combo = QComboBox()
@@ -4374,11 +4468,16 @@ class ResultsViewer(QMainWindow):
             lo, hi = self._cs_current_window()
             time_key = (round(float(lo), 6), round(float(hi), 6))
         unit_idx = self._cs_units_combo.currentIndex() if hasattr(self, '_cs_units_combo') else 0
-        cache_key = (mode_idx, time_key, unit_idx)
+        excl_txt = self._cs_exclude.text() if hasattr(self, '_cs_exclude') else ''
+        cache_key = (mode_idx, time_key, unit_idx, excl_txt)
         if getattr(self, '_cs_spc_cache_key', None) == cache_key:
             return self._cs_spc_cache
 
         spc = self._cs_build_species_table()
+        excl = {x.strip().upper() for x in excl_txt.replace(';', ',').split(',') if x.strip()}
+        if excl and not spc.empty:
+            drop = spc['name'].str.upper().isin(excl) | spc['formula'].str.upper().isin(excl)
+            spc = spc[~drop].copy()
         if spc.empty:
             self._cs_spc_cache_key = cache_key
             self._cs_spc_cache = spc
