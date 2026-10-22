@@ -1207,7 +1207,7 @@ class ResultsViewer(QMainWindow):
             return  # folder node — ignore
 
         display_key = item.data(0, Qt.ItemDataRole.UserRole)
-        self.right_tabs.setCurrentIndex(1)
+        self.right_tabs.setCurrentIndex(self._tab("Process Analysis"))
 
         if display_key and display_key in self._inst_data:
             data = self._inst_data[display_key]
@@ -1226,6 +1226,13 @@ class ResultsViewer(QMainWindow):
         else:
             self._update_budget(item.text(0))
 
+    def _tab(self, name: str) -> int:
+        """Index of a right-hand tab by its title (tabs may be inserted in front, e.g. Overview)."""
+        for i in range(self.right_tabs.count()):
+            if self.right_tabs.tabText(i) == name:
+                return i
+        return 0
+
     def _on_tree_double_click(self, item, _column):
         """Double-click: context-aware action based on the active right tab.
         - Timeseries tab  → plot the species on the timeseries canvas.
@@ -1234,10 +1241,11 @@ class ResultsViewer(QMainWindow):
         """
         if item.childCount() != 0:
             return  # folder node
-        active = self.right_tabs.currentIndex()
-        if active == 0:          # Timeseries
+        active = self.right_tabs.tabText(self.right_tabs.currentIndex())
+        if active in ("Timeseries", "Overview"):      # plot it (the Overview is only a landing page)
+            self.right_tabs.setCurrentIndex(self._tab("Timeseries"))
             self.add_selected()
-        elif active == 1:        # Process Analysis
+        elif active == "Process Analysis":
             self._update_budget(item.text(0))
 
     # ── Search / filter ───────────────────────────────────────────────────────
@@ -1292,7 +1300,7 @@ class ResultsViewer(QMainWindow):
         self._update_ylabels()
         self.canvas.draw()
         self.var_tree.clearSelection()
-        self.right_tabs.setCurrentIndex(0)
+        self.right_tabs.setCurrentIndex(self._tab("Timeseries"))
 
     def remove_selected(self, item=None):
         items = [item] if item is not None else self.active_list.selectedItems()
