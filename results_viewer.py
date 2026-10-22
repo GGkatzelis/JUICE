@@ -1929,18 +1929,43 @@ class ResultsViewer(QMainWindow):
             leg.set_draggable(True)
 
     # ── Reactivity tab ────────────────────────────────────────────────────────
-    def _load_koh_nc(self):
-        """Load measured k_OH from a SAPHIR NC file."""
+    def _auto_load_koh(self):
+        """At start-up: the measured k_OH of the experiment day straight from the archive, if it exists."""
+        try:
+            import datetime as _dt
+            import experiment_plots as _ep
+            spec = _ep.spec_for_run(self.csv_path) if getattr(self, "csv_path", "") else None
+            root = spec.conditions.archive_root if spec else r"Z:\IEK8-SAPHIR\data"
+            date = (spec.conditions.date if spec and spec.conditions.date
+                    else _dt.datetime.fromtimestamp(self._midnight_unix, _dt.timezone.utc).strftime("%Y-%m-%d"))
+            day = _ep.archive_day(root, date)
+            path = os.path.join(day, f"{date}.{_ep.OBS_MAP['kOH'][0]}") if day else ""
+            if path and os.path.isfile(path):
+                self._load_koh_nc(path)
+                for name in ("_update_reactivity", "_plot_reactivity", "_refresh_reactivity", "_rx_update"):
+                    fn = getattr(self, name, None)
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception:
+                            pass
+                        break
+        except Exception as e:
+            print(f"[Reactivity] auto-load skipped: {e}")
+
+    def _load_koh_nc(self, path: str = ""):
+        """Load measured k_OH from a SAPHIR NC file (dialog when no path is given)."""
         if not HAS_NC4:
             self.rx_meas_label.setText("netCDF4 not available")
             self.rx_meas_label.setStyleSheet("color: #cc0000; font-size: 10px;")
             return
 
-        start_dir = self._last_nc_dir or r"Z:\IEK8-SAPHIR\data"
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load k_OH from NC File", start_dir,
-            "NetCDF Files (*.nc);;All Files (*)"
-        )
+        if not path:
+            start_dir = self._last_nc_dir or r"Z:\IEK8-SAPHIR\data"
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load k_OH from NC File", start_dir,
+                "NetCDF Files (*.nc);;All Files (*)"
+            )
         if not path:
             return
 
@@ -2413,6 +2438,7 @@ class ResultsViewer(QMainWindow):
             self.right_tabs.setCurrentIndex(0)
         except Exception as _e:
             print(f"[viewer] Overview tab not available: {_e}")
+        self._auto_load_koh()
 
     # ── Reference loading ─────────────────────────────────────────────────────
     def _cmp_easy_scenario_dir(self) -> str:
