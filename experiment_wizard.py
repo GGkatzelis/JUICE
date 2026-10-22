@@ -34,6 +34,7 @@ from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, Chamber
 from easy_builder import scan_mechanisms, EasyBuilderDialog
 import saphir_wiki
 import injection_calc as ic
+import mechanism_registry as mreg
 
 try:
     from mcm_species_db import MCM_DB, reactions_of, search_species
@@ -331,6 +332,21 @@ class ChemistryPage(QWizardPage):
         self.setSubTitle("Which compounds take part? The matching part of the MCM is extracted in the background, "
                          "or pick an existing mechanism include set.")
         lay = QVBoxLayout(self)
+        # which chemistry: the MCM download (unmodified) and the add-ons loaded on top of it
+        mg = QGridLayout()
+        mg.addWidget(QLabel("Base mechanism"), 0, 0)
+        self.base_combo = QComboBox()
+        self._bases = mreg.load_bases()
+        for b in self._bases.values():
+            self.base_combo.addItem(f"{b.name}  [{b.status}]", b.id)
+        self.base_combo.currentIndexChanged.connect(self._base_changed); mg.addWidget(self.base_combo, 0, 1)
+        self.base_info = _info(""); mg.addWidget(self.base_info, 0, 2)
+        mg.addWidget(QLabel("Add-ons"), 1, 0)
+        self.addon_box = QWidget(); self.addon_lay = QVBoxLayout(self.addon_box); self.addon_lay.setContentsMargins(0, 0, 0, 0)
+        self.addon_checks: Dict[str, QCheckBox] = {}
+        mg.addWidget(self.addon_box, 1, 1, 1, 2)
+        lay.addLayout(mg)
+        self._base_changed()
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
         self.mode_existing = QRadioButton("Existing mechanism include set")
         self.mode_compounds.setChecked(True)
@@ -385,10 +401,37 @@ class ChemistryPage(QWizardPage):
         lay.addWidget(ab)
         self._filter("")
 
+    # ── base / add-ons ──
+    def base_id(self) -> str:
+        return self.base_combo.currentData() or mreg.DEFAULT_BASE
+
+    def addon_ids(self) -> List[str]:
+        return [i for i, cb in self.addon_checks.items() if cb.isChecked()]
+
+    def _base_changed(self, _i: int = 0):
+        b = self._bases.get(self.base_id())
+        if b is not None:
+            probs = b.verify()
+            self.base_info.setText((f"v{b.version}, downloaded {b.source.get('downloaded', '?')[:60]}" if not probs
+                                    else "⚠ " + "; ".join(probs)[:120]))
+        keep = self.addon_ids()
+        while self.addon_lay.count():
+            w = self.addon_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self.addon_checks = {}
+        addons = mreg.addons_for(self.base_id())
+        if not addons:
+            self.addon_lay.addWidget(_info("none installed for this base (mechanisms/addons/<id>/manifest.json)"))
+        for a in addons:
+            cb = QCheckBox(f"{a.name}  v{a.version} [{a.status}]"); cb.setToolTip(a.description)
+            cb.setChecked(a.id in keep); self.addon_checks[a.id] = cb
+            self.addon_lay.addWidget(cb); self.addon_lay.addWidget(_info("      " + a.description[:160]))
+
     # ── first-generation tree / adjustments ──
     def _fac(self) -> str:
-        from experiment_spec import FULL_MCM_FAC
-        return FULL_MCM_FAC
+        from experiment_spec import base_fac
+        return base_fac(self.base_id())
 
     def _toggle_tree(self, on: bool):
         for w in self._tree_widgets:
@@ -472,6 +515,11 @@ class ChemistryPage(QWizardPage):
         self.update_tree()
 
     def set_from(self, spec: ExperimentSpec):
+        i = self.base_combo.findData(spec.base_mechanism)
+        self.base_combo.setCurrentIndex(i if i >= 0 else 0)
+        self._base_changed()
+        for aid, cb in self.addon_checks.items():
+            cb.setChecked(aid in spec.addons)
         self.chosen.clear()
         for p in spec.precursors:
             self.chosen.addItem(p)
@@ -486,6 +534,8 @@ class ChemistryPage(QWizardPage):
         else:
             spec.mechanism_stem = ""; spec.precursors = [self.chosen.item(i).text() for i in range(self.chosen.count())]
         spec.reaction_adjustments = [(a, b, c) for a, b, c in _rows(self.adjust) if a.strip()]
+        spec.base_mechanism = self.base_id()
+        spec.addons = self.addon_ids()
 
     def validatePage(self) -> bool:
         if self.mode_existing.isChecked() and not self.mech_combo.currentText().strip():

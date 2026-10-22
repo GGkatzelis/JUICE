@@ -1,0 +1,31 @@
+{
+ "kind": "base",
+ "id": "MCM_v3.3.1",
+ "name": "Master Chemical Mechanism v3.3.1, complete",
+ "version": "3.3.1",
+ "files": {
+  "fac": "mcm_3-3-1_facsimile_complete.fac",
+  "species_tsv": "mcm_3-3-1_species_complete.tsv",
+  "kpp": "mcm_3-3-1_kpp_complete.eqn",
+  "kpp_constants": "mcm_3-3-1_kpp_constants_mcm.f90",
+  "fortran": "mcm_3-3-1_fortran_complete.txt",
+  "species_export_tsv": "mcm_export_species.tsv"
+ },
+ "checksums": {
+  "mcm_3-3-1_facsimile_complete.fac": "7f995a5100a54bb3d4c691ab16ecc5c82e12f2fbd1b8ef7556fa645e1550ed26",
+  "mcm_3-3-1_species_complete.tsv": "9ab4217231532645ae2b2d8b6e0ef25542b9fe7bf25bbdad1ac90b60b548dfb3",
+  "mcm_3-3-1_kpp_complete.eqn": "57638851109b9d38ecfbadb707736a92aa62eabe678509769b3ce0b99c32f684",
+  "mcm_3-3-1_kpp_constants_mcm.f90": "d98b98ebfc168de798ecdcd2da947438a440d9e0edf95d568436387fc68aa31f",
+  "mcm_3-3-1_fortran_complete.txt": "a4983afdd178288a190ea06504379a576b221a460c4f7115c3099a991d52da64",
+  "mcm_export_species.tsv": "6b9784c43ee005dc4e0059fc40d39e5a424925f46a13188c295e6d32e4513e84"
+ },
+ "source": {
+  "url": "https://mcm.york.ac.uk/MCM/export",
+  "selection": "complete mechanism (all 143 primary VOC), FACSIMILE format; KPP and Fortran exports of the same selection; species export with SMILES",
+  "downloaded": "file dates: mcm_3-3-1_facsimile_complete.fac 2024-01-19, mcm_3-3-1_species_complete.tsv 2025-07-03, mcm_3-3-1_kpp_complete.eqn 2024-07-08, mcm_3-3-1_kpp_constants_mcm.f90 2024-01-02, mcm_3-3-1_fortran_complete.txt 2023-09-08, mcm_export_species.tsv 2026-02-12",
+  "notes": "Files are the website downloads, unmodified. mcm_export_species.tsv is the species export used by mcm_species_db (name, formula, SMILES, mass)."
+ },
+ "citation": "Jenkin et al., Atmos. Environ. 31, 81 (1997); Saunders et al., ACP 3, 161 (2003); Jenkin et al., ACP 3, 181 (2003); Bloss et al., ACP 5, 641 (2005); Jenkin et al., ACP 15, 11433 (2015) — MCM v3.3.1 via http://mcm.york.ac.uk/",
+ "status": "reviewed",
+ "notes": "Reference base for all JUICE scenarios (scene_01..09, mcm_full). Never edit these files; add chemistry as add-ons."
+}

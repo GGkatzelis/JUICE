@@ -22,8 +22,11 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Path to the TSV (same directory as this file)
 # ---------------------------------------------------------------------------
-_DB_DIR = os.path.join(os.path.dirname(__file__), "MCM_database")
+_DB_DIR = os.path.join(os.path.dirname(__file__), "mechanisms", "base", "MCM_v3.3.1")
 _TSV_FILE = os.path.join(_DB_DIR, "mcm_export_species.tsv")
+if not os.path.isfile(_TSV_FILE):                               # pre-registry layout
+    _DB_DIR = os.path.join(os.path.dirname(__file__), "MCM_database")
+    _TSV_FILE = os.path.join(_DB_DIR, "mcm_export_species.tsv")
 
 
 # ---------------------------------------------------------------------------

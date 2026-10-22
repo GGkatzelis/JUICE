@@ -42,6 +42,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
+import mechanism_registry as mreg
+
 import numpy as np
 
 from easy_builder import (EasyForm, MeasuredRow, InjectionRow, default_form, render_form,
@@ -212,6 +214,8 @@ class ExperimentSpec:
     title: str = ""
     conditions: Conditions = field(default_factory=Conditions)
     precursors: List[str] = field(default_factory=list)      # MCM names → mechanism subset (backend)
+    base_mechanism: str = mreg.DEFAULT_BASE                   # mechanism_registry base id (MCM download, unmodified)
+    addons: List[str] = field(default_factory=list)          # mechanism_registry add-on ids, loaded after the base
     mechanism_stem: str = ""                                  # existing include set, e.g. "ethanol.fac"
     mech_incl_suffix: str = ".saphir.incl"
     use_anorg: bool = True
@@ -413,6 +417,10 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
             f.injections.append(InjectionRow(sw, col, prod, str(ppb)))
         f.chain_reactions.extend(inj.chain)
     f.extra_statements = []
+    try:                                               # every generated EASY states its chemistry
+        f.extra_statements += mreg.provenance_lines(spec.base_mechanism, list(spec.addons))
+    except Exception as e:
+        f.extra_statements.append(f"; CHEMISTRY: provenance unavailable ({e})")
     for sp in c.constrain_species:
         f.extra_statements += [f"{sp}_in=input({sp})", f"{sp}=CONST({sp}_in*1e-9*M)"]
     for rxn, rate, cmt in spec.reaction_adjustments:
@@ -430,26 +438,46 @@ def render_easy(spec: ExperimentSpec) -> str:
 # Backend: mechanism subset + file writing
 # ─────────────────────────────────────────────────────────────────────────────
 
-FULL_MCM_FAC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+
+def base_fac(base_id: str = "") -> str:
+    """Path of the base mechanism's .fac (registry; falls back to the old MCM_database layout)."""
+    try:
+        return mreg.base(base_id).fac
+    except KeyError:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "MCM_database", "MCM_3.3.1", "mcm_3-3-1_facsimile_complete.fac")
 
 
-def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = FULL_MCM_FAC) -> dict:
-    """Extract the MCM subset for spec.precursors into <out_dir>/chemistry and point
-    the spec at it.  No-op when spec.mechanism_stem is already set."""
+FULL_MCM_FAC = base_fac()
+
+
+def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> dict:
+    """Extract the base-mechanism subset for spec.precursors into <out_dir>/chemistry, copy the
+    chosen add-ons next to it and register them as includes, and point the spec at it.
+    No-op when spec.mechanism_stem is already set (existing include set)."""
     if spec.mechanism_stem or not spec.precursors:
         return {}
-    import io, contextlib
+    import io, contextlib, shutil
     from mcm_converter import convert_mcm_file
     chem = os.path.join(out_dir, "chemistry")
+    addons = mreg.addons_for(spec.base_mechanism, list(spec.addons)) if spec.addons else []
+    seed = list(spec.precursors)
+    for a in addons:                                   # what the add-on consumes must be in the subset
+        seed += [sp for sp in a.needs_base_species if sp not in seed]
     with contextlib.redirect_stdout(io.StringIO()):
-        res = convert_mcm_file(full_fac, chem, saphir=True,
+        res = convert_mcm_file(full_fac or base_fac(spec.base_mechanism), chem, saphir=True,
                                measured=(spec.conditions.j_source == "measured"),
-                               precursors=list(spec.precursors))
+                               precursors=seed)
     spec.mechanism_stem = os.path.basename(str(res["mech"]))[:-len(".mech")]
     spec.mech_incl_suffix = ".incl"
     spec.use_anorg = False               # inorganic core is inlined in init mode
     _ensure_comprc(os.path.join(chem, spec.mechanism_stem + ".incl"))
+    for a in addons:                                   # add-ons after the base: last definition wins
+        for p in a.paths():
+            shutil.copy2(p, os.path.join(chem, os.path.basename(p)))
+            if os.path.basename(p) not in spec.extra_includes:
+                spec.extra_includes.append(os.path.basename(p))
+    res["addons"] = [a.id for a in addons]
     return res
 
 

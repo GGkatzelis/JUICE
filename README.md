@@ -65,7 +65,8 @@ Runs all test scenarios (`scene_01`, `scene_02`, `ethanol`, `mcm_full`) in both 
 ├── mcm_species_db.py          # MCM species catalogue + formula lookup
 ├── enz_builder.py             # ENZ file builder dialog (GUI component)
 ├── architecture.md            # Internal design notes
-├── MCM_database/              # MCM v3.3.1 reference chemistry
+├── mechanisms/                # base/<MCM download, unmodified, manifest+checksums>  addons/<EASY include sets, manifest>
+├── MCM_database/              # legacy test subsets (the MCM v3.3.1 download moved to mechanisms/base/MCM_v3.3.1)
 └── MCM_tested_scenarios/      # Reference scenarios + FACSIMILE .cs outputs
     └── IDL Input/
         ├── scene_01/  scene_02/  scene_03/   # Minimal validation cases

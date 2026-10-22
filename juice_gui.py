@@ -197,7 +197,8 @@ def spec_bullets(spec: ExperimentSpec) -> List[str]:
     ch = ic.chamber(c.chamber_name)
     out = []
     if spec.precursors:
-        out.append(f"Chemistry: MCM v3.3.1 subset for {', '.join(spec.precursors)} + the complete inorganic core and photolysis")
+        out.append(f"Chemistry: {spec.base_mechanism} subset for {', '.join(spec.precursors)} + the complete inorganic core and photolysis"
+                   + (f"; add-ons: {', '.join(spec.addons)}" if spec.addons else ""))
     elif spec.mechanism_stem:
         out.append(f"Chemistry: mechanism include set '{spec.mechanism_stem}' + inorganic core and photolysis")
     else:

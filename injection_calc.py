@@ -290,13 +290,29 @@ class ResolvedCompound:
     formula: str = ""
 
 
-def resolve_compound(text: str) -> ResolvedCompound:
-    """Common name, MCM name or formula → ResolvedCompound.  Never raises."""
+def resolve_compound(text: str, extra_species: Optional[Dict[str, str]] = None) -> ResolvedCompound:
+    """Common name, MCM name or formula → ResolvedCompound.  Never raises.
+    `extra_species` (NAME → formula) are the species of the chosen add-ons: they resolve
+    like MCM species (a guaiacol injection becomes GUAIACOL when its add-on is on)."""
     q = (text or "").strip()
     low = q.lower()
     rc = ResolvedCompound(q)
     if not q:
         rc.note = "empty"; return rc
+    extra = {k.upper(): v for k, v in (extra_species or {}).items()}
+    if extra:
+        for key in _COMPOUND_KEYS:                   # common name whose add-on species exists
+            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", low):
+                cand = key.replace("-", "").replace(" ", "").upper()
+                hit = next((n for n in extra if n == cand or n == key.upper()), "")
+                if hit:
+                    mcm, mw, dens = COMPOUNDS[key]
+                    rc.mcm, rc.mw, rc.density, rc.status = hit, mw, dens, "mcm"
+                    rc.note = f"'{key}' → {hit} (add-on species)"; rc.formula = extra[hit]
+                    return rc
+        if q.upper() in extra:
+            rc.mcm, rc.status, rc.note, rc.formula = q.upper(), "mcm", f"add-on species {q.upper()}", extra[q.upper()]
+            return rc
     # 1) name table (longest keyword first; whole-word match only — 'octadecane' must not hit 'decane')
     for key in _COMPOUND_KEYS:
         if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", low):

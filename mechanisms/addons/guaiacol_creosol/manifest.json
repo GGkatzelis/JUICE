@@ -1,0 +1,48 @@
+{
+ "kind": "addon",
+ "id": "guaiacol_creosol",
+ "name": "Guaiacol / creosol explicit sub-block (SAPHFIRE)",
+ "version": "0.1",
+ "status": "draft",
+ "compatible_with": [
+  "MCM_v3.3.1"
+ ],
+ "files": [
+  "guaiacol_creosol_block.draft.incl"
+ ],
+ "description": "Explicit OH/NO3 chemistry of guaiacol and creosol with methoxy-catechols and nitro products, replacing the crude CATECHOL surrogate. Draft with flagged estimates [EST-1..4] in the file header; not yet reviewed.",
+ "adds_species": {
+  "GUAIACOL": "C7H8O2",
+  "CREOSOL": "C8H10O2",
+  "OMCATECHOL": "C7H8O3",
+  "OMCATEC1O": "C7H7O3",
+  "OMNCATECHOL": "C7H7NO5",
+  "NGUAIACOL": "C7H7NO4",
+  "OMPBZQONE": "C7H6O3",
+  "GUAIAOXMUC": "C7H8O4",
+  "GUAIAO2": "C7H9O5",
+  "OMMCATECHOL": "C8H10O3",
+  "NCREOSOL": "C8H9NO4"
+ },
+ "needs_base_species": [
+  "CATECHOL",
+  "MCATECHOL",
+  "GLYOX",
+  "MGLYOX",
+  "MALDIAL",
+  "NCATECHOL",
+  "MNCATECH"
+ ],
+ "precursors": [
+  "GUAIACOL",
+  "CREOSOL"
+ ],
+ "overrides": [],
+ "references": [
+  "Evans/Nienhouse et al., ACS ES&T Air 2026 (guaiacol+OH branching)",
+  "Finewax, de Gouw & Ziemann, ES&T 52, 1981 (2018) (nitrocatechol yields)",
+  "Yang et al., Atmos. Environ. 2016 (k_NO3)",
+  "Lauraguais et al. 2014 (k_OH guaiacol)"
+ ],
+ "notes": "Volatility (C*) of the new condensers must be set in make_volatility_tsv.py before use with the SOA scheme."
+}
