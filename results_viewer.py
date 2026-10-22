@@ -333,14 +333,15 @@ class BudgetEngine:
         self._ready = False
 
     # ── public ────────────────────────────────────────────────────────────────
-    def load(self, config_path):
+    def load(self, config_path, include_dirs=None):
         if not HAS_BUDGET:
             raise ImportError("easy_parser / mechanism / mcm_kinetics not importable")
+        self._include_dirs = list(include_dirs or [])
 
         with open(config_path) as f:
             self.cfg = json.load(f)
 
-        self.root = self.cfg.get('folder', os.path.dirname(config_path))
+        self.root = self.cfg.get('folder') or os.path.dirname(os.path.abspath(config_path))   # IDL-imported JSONs carry folder=''
         chem_path = os.path.join(self.root, 'chemistry')
         parser = EasyParser(base_path=chem_path)
         self.mechanism = Mechanism()
@@ -371,6 +372,8 @@ class BudgetEngine:
         if elog_path:
             if not os.path.isabs(elog_path):
                 elog_path = os.path.join(self.root, elog_path)
+            if not os.path.exists(elog_path):
+                elog_path = self._regenerate_elog(config_path, elog_path) or elog_path
             if os.path.exists(elog_path):
                 m_part = _parse_easy_cached(parser, elog_path)
                 self.mechanism.species.extend(m_part.species)
@@ -666,6 +669,27 @@ class BudgetEngine:
             contributions[label] = contributions.get(label, np.zeros(n)) + v
 
         return contributions
+
+    def _regenerate_elog(self, config_path: str, wanted: str) -> str:
+        """The JSON names a JUICE elog that is not on disk (FACSIMILE reference folders: the elog is a
+        derived file the GUI writes at run time).  Rebuild it from the .easy next to the JSON into the
+        user's temp folder — never into the scenario folder — and return its path ('' if impossible)."""
+        try:
+            import tempfile
+            from elog_generator import generate_both
+            stem = os.path.splitext(os.path.basename(config_path))[0]
+            easy = os.path.join(self.root, stem + '.easy')
+            if not os.path.isfile(easy):
+                return ''
+            out = os.path.join(tempfile.gettempdir(), 'JUICE_elog', stem)
+            os.makedirs(out, exist_ok=True)
+            dirs = [self.root, os.path.join(self.root, 'chemistry')] + [d for d in self._include_dirs if d and os.path.isdir(d)]
+            _raw, canon = generate_both(easy, search_dirs=dirs, output_dir=out)
+            print(f"[BudgetEngine] {os.path.basename(wanted)} not found — rebuilt from {os.path.basename(easy)} in {out}")
+            return canon
+        except Exception as e:
+            print(f"[BudgetEngine] could not rebuild the elog: {e}")
+            return ''
 
     # ── private helpers ───────────────────────────────────────────────────────
     @staticmethod
@@ -1738,6 +1762,20 @@ class ResultsViewer(QMainWindow):
         if candidates:
             self._load_config(candidates[0], silent=True)
 
+    def _toml_include_dirs(self):
+        """[paths] include_dir of the active TOML (where the EASY #include files live), if any."""
+        try:
+            import tomllib as _tl
+            p = getattr(self, '_toml_path', None)
+            if p and os.path.isfile(p):
+                with open(p, 'rb') as fh:
+                    t = _tl.load(fh)
+                d = (t.get('paths', {}) or {}).get('include_dir') or t.get('include_dir')
+                return [d] if d else []
+        except Exception:
+            pass
+        return []
+
     def _browse_config(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Scenario Config", "", "JSON Files (*.json)"
@@ -1750,7 +1788,7 @@ class ResultsViewer(QMainWindow):
             self.cfg_status.setText("Budget engine unavailable (missing easy_parser)")
             return
         try:
-            self.budget_engine.load(path)
+            self.budget_engine.load(path, include_dirs=self._toml_include_dirs())
             name = os.path.basename(path)
             self._config_label_text = f"✓ {name}"
             self.cfg_status.setText(self._config_label_text)
