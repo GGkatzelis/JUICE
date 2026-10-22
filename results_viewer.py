@@ -3560,6 +3560,16 @@ class ResultsViewer(QMainWindow):
                 sp = inj.get('species', '')
                 if sp and _carbon_count(sp) > 0:
                     parent_voc.add(sp.upper())
+        # … and from the experiment description next to the result (injected products + chosen compounds)
+        try:
+            import experiment_plots as _ep
+            _spec = _ep.spec_for_run(self.csv_path) if getattr(self, "csv_path", "") else None
+            if _spec is not None:
+                for sp in list(_ep.injected_species(_spec)) + [p.upper() for p in _spec.precursors]:
+                    if _carbon_count(sp) > 0:
+                        parent_voc.add(sp)
+        except Exception:
+            pass
 
         # ── Collect carbon-containing MCM species ─────────────────────────
         species_data = {}    # name → (n_carbons, ppb_C array)
