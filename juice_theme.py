@@ -13,7 +13,9 @@ from __future__ import annotations
 import os
 import sys
 
+from PyQt6.QtCore import QObject, QEvent
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPixmap
+from PyQt6.QtWidgets import QComboBox
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO = os.path.join(HERE, "JUICE Logo.png")
@@ -88,9 +90,38 @@ def app_icon() -> QIcon:
     return ico
 
 
+class _ComboFit(QObject):
+    """App-wide: every QComboBox is wide enough for its entries and its popup list is at least as
+    wide as the longest entry — no more 'p…' in a narrow control row (Georgios 2026-10-22)."""
+    MAX_CLOSED = 340            # px: wider entries only widen the popup, not the closed box
+
+    def eventFilter(self, obj, ev):
+        try:
+            if isinstance(obj, QComboBox):
+                t = ev.type()
+                if t == QEvent.Type.Show and not obj.property("juice_fit"):
+                    obj.setProperty("juice_fit", True)
+                    if self._longest(obj) <= self.MAX_CLOSED and obj.minimumWidth() == 0 and obj.maximumWidth() >= 16777215:
+                        obj.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                elif t in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
+                    w = self._longest(obj) + 48
+                    if obj.view() is not None and w > obj.view().minimumWidth():
+                        obj.view().setMinimumWidth(w)
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _longest(combo) -> int:
+        fm = combo.fontMetrics()
+        return max((fm.horizontalAdvance(combo.itemText(i)) for i in range(min(combo.count(), 2000))), default=0)
+
+
 def apply_theme(app) -> None:
     """Fusion style + white palette + QSS + font + icon on a QApplication."""
     app.setStyle("Fusion")
+    if getattr(app, "_juice_combo_fit", None) is None:
+        app._juice_combo_fit = _ComboFit(app); app.installEventFilter(app._juice_combo_fit)
     pal = QPalette()
     for role, col in ((QPalette.ColorRole.Window, "#ffffff"), (QPalette.ColorRole.Base, "#ffffff"), (QPalette.ColorRole.AlternateBase, "#fafafa"),
                       (QPalette.ColorRole.Button, "#f3f3f3"), (QPalette.ColorRole.ToolTipBase, "#ffffff"), (QPalette.ColorRole.Highlight, ACCENT_SOFT)):

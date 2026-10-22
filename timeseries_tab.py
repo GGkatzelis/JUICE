@@ -3,7 +3,8 @@ timeseries_tab.py — the Timeseries tab of the results viewer as a grid of link
 
 One to six panels (1, 2 or 3 stacked, 2×2, 3×2).  Each panel is either
 
-  • a time series: any model species (ppb or native units, linear or log) with the matching
+  • a time series: any model species (ppb or native units, linear or log, on the left or the
+    right y axis — right-axis lines are dashed and marked "(right)") with the matching
     SAPHIR observation of that day drawn as dots in the same colour (from the day's
     observation file next to the result, see experiment_plots.load_observations), or
   • a correlation: X species against one or more Y species, coloured by hour of day when
@@ -149,6 +150,9 @@ class TimeseriesTab(QWidget):
         self.target.valueChanged.connect(self._refresh_contents); bar.addWidget(self.target)
         bar.addWidget(QLabel("unit"))
         self.unit = QComboBox(); self.unit.addItems(["ppb", "native"]); bar.addWidget(self.unit)
+        bar.addWidget(QLabel("axis"))
+        self.side = QComboBox(); self.side.addItems(["left", "right"]); self.side.setToolTip("y axis the next added species go to; the right axis is drawn when a panel has such entries")
+        bar.addWidget(self.side)
         self.log = QCheckBox("log"); self.log.toggled.connect(self._log_toggled); bar.addWidget(self.log)
         add = QPushButton("Add to panel"); add.setToolTip("add the species selected in the tree to the target panel"); add.clicked.connect(self.add_selected)
         bar.addWidget(add)
@@ -181,7 +185,7 @@ class TimeseriesTab(QWidget):
     # ── model of the panels ──
     @staticmethod
     def _blank() -> dict:
-        return dict(kind="time", entries=[], log=False, x=None)      # entries: [(name, unit)]; x: name for correlations
+        return dict(kind="time", entries=[], log=False, x=None)      # entries: [(name, unit, side)]; x: name for correlations
 
     def _target(self) -> dict:
         return self.specs[self.target.value() - 1]
@@ -194,16 +198,17 @@ class TimeseriesTab(QWidget):
         self._target()["log"] = on; self.rebuild()
 
     # ── public API (tree, defaults, other tabs) ──
-    def add_species(self, names: List[str], unit: Optional[str] = None, panel: Optional[int] = None, log: Optional[bool] = None):
-        """Add model species to a panel (1-based; default the target panel)."""
+    def add_species(self, names: List[str], unit: Optional[str] = None, panel: Optional[int] = None, log: Optional[bool] = None,
+                    side: Optional[str] = None):
+        """Add model species to a panel (1-based; default the target panel), on the left or right y axis."""
         idx = (panel or self.target.value()) - 1
         spec = self.specs[idx]
         if spec["kind"] != "time":
             spec.update(self._blank())
-        u = unit or self.unit.currentText()
+        u = unit or self.unit.currentText(); sd = side or self.side.currentText()
         for n in names:
-            if n in self.v.df.columns and (n, u) not in spec["entries"]:
-                spec["entries"].append((n, u))
+            if n in self.v.df.columns and not any(e[0] == n and e[1] == u for e in spec["entries"]):
+                spec["entries"].append((n, u, sd))
         if log is not None:
             spec["log"] = log
         self.rebuild()
@@ -211,7 +216,7 @@ class TimeseriesTab(QWidget):
     def set_correlation(self, x: str, ys: List[str], panel: Optional[int] = None):
         idx = (panel or self.target.value()) - 1
         u = self.unit.currentText()
-        self.specs[idx] = dict(kind="corr", entries=[(y, u) for y in ys if y in self.v.df.columns], log=False, x=x if x in self.v.df.columns else None)
+        self.specs[idx] = dict(kind="corr", entries=[(y, u, "left") for y in ys if y in self.v.df.columns], log=False, x=x if x in self.v.df.columns else None)
         self.rebuild()
 
     def _selected_names(self) -> List[str]:
@@ -270,8 +275,8 @@ class TimeseriesTab(QWidget):
     def apply_defaults(self, left: List[str], right: List[str]):
         """Quick-plot defaults of the TOML: panel 1 = left list in ppb, panel 2 = right list native, log."""
         self.specs = [self._blank() for _ in range(6)]
-        self.specs[0]["entries"] = [(s, "ppb") for s in left if s in self.v.df.columns]
-        self.specs[1]["entries"] = [(s, "native") for s in right if s in self.v.df.columns]
+        self.specs[0]["entries"] = [(s, "ppb", "left") for s in left if s in self.v.df.columns]
+        self.specs[1]["entries"] = [(s, "native", "left") for s in right if s in self.v.df.columns]
         self.specs[1]["log"] = bool(self.specs[1]["entries"])
         self.layout_combo.setCurrentText("2" if self.specs[1]["entries"] else "1")
         self.rebuild()
@@ -311,11 +316,11 @@ class TimeseriesTab(QWidget):
         self.contents_label.setText(f"panel {self.target.value()}:")
         if spec["kind"] == "corr":
             self.contents.addItem(QListWidgetItem(f"X = {spec['x'] or '?'}"))
-            for n, u in spec["entries"]:
+            for n, u, _sd in spec["entries"]:
                 self.contents.addItem(QListWidgetItem(f"Y = {n} [{u}]"))
         else:
-            for n, u in spec["entries"]:
-                self.contents.addItem(QListWidgetItem(f"{n} [{u}]"))
+            for n, u, sd in spec["entries"]:
+                self.contents.addItem(QListWidgetItem(f"{n} [{u}]" + (" (right)" if sd == "right" else "")))
         self.log.blockSignals(True); self.log.setChecked(spec["log"]); self.log.blockSignals(False)
 
     def rebuild(self):
@@ -346,7 +351,7 @@ class TimeseriesTab(QWidget):
         self.status.setText(("observations " + self._obs_note) if self.obs_box.isChecked() and self._obs_note else "")
 
     def _title(self, i: int, spec: dict) -> str:
-        names = [n for n, _u in spec["entries"]]
+        names = [e[0] for e in spec["entries"]]
         s = ", ".join(names[:6]) + (" …" if len(names) > 6 else "")
         return f"{i + 1}  {s}" if s else f"{i + 1}  (empty — select species in the tree and press 'Add to panel')"
 
@@ -368,27 +373,38 @@ class TimeseriesTab(QWidget):
 
     def _fill_time(self, panel: InteractivePanel, spec: dict, obs: Dict, hv_spans):
         ax = panel.ax
-        units = {u for _n, u in spec["entries"]}
         for lo, hi in hv_spans:
             ax.axvspan(lo, hi, color="#fffacd", alpha=0.35, zorder=0, linewidth=0)
-        for i, (name, unit) in enumerate(spec["entries"]):
+        if any(e[2] == "right" for e in spec["entries"]):
+            panel.ax2 = ax.twinx()
+            if spec["log"]:
+                panel.ax2.set_yscale("log")
+        for i, (name, unit, side) in enumerate(spec["entries"]):
+            target = panel.ax2 if (side == "right" and panel.ax2 is not None) else ax
             t, y = self._series(name, unit); color = PALETTE[i % len(PALETTE)]
             if spec["log"]:
                 y = np.where(y > 0, y, np.nan)
-            ax.plot(t, y, color=color, lw=1.3, label=f"{name} [{'ppb' if unit == 'ppb' else 'native'}]")
+            target.plot(t, y, color=color, lw=1.3, ls="-" if target is ax else "--",
+                        label=f"{name} [{'ppb' if unit == 'ppb' else 'native'}]" + (" (right)" if target is not ax else ""))
             key = name.upper()
             if key in obs:
                 h, v, lab, kind = obs[key]
                 if (unit == "ppb") == (kind == "ppb"):               # only when the units agree
                     if spec["log"]:
                         v = np.where(v > 0, v, np.nan)
-                    ax.plot(h, v, ".", ms=2.5, color=color, alpha=0.5, label=lab)
-        ylabel = "ppb" if units == {"ppb"} else ("native units" if units == {"native"} else "mixed units")
+                    target.plot(h, v, ".", ms=2.5, color=color, alpha=0.5, label=lab)
+
+        def ylabel_for(side):
+            units = {e[1] for e in spec["entries"] if e[2] == side}
+            return "ppb" if units == {"ppb"} else ("native units" if units == {"native"} else ("mixed units" if units else ""))
         if spec["log"] and spec["entries"]:                       # hide the floor of the flushed chamber (1e-7 …)
-            top = max((np.nanmax(self._series(n, u)[1]) for n, u in spec["entries"]), default=0.0)
-            if top > 0:
-                ax.set_ylim(bottom=top * 1e-5)
-        panel.finish(ylabel)
+            for a, side in ((ax, "left"), (panel.ax2, "right")):
+                if a is None:
+                    continue
+                top = max((np.nanmax(self._series(n, u)[1]) for n, u, sd in spec["entries"] if sd == side), default=0.0)
+                if top > 0:
+                    a.set_ylim(bottom=top * 1e-5)
+        panel.finish(ylabel_for("left"), ("right: " + ylabel_for("right")) if panel.ax2 is not None else "")
 
     def _build_corr(self, i: int, spec: dict) -> QWidget:
         w = CorrelationPanel()
@@ -398,8 +414,8 @@ class TimeseriesTab(QWidget):
             w.canvas.draw_idle(); return w
         u = spec["entries"][0][1]
         t, xv = self._series(x, u)
-        ys = [(f"{n} [{un}]", self._series(n, un)[1]) for n, un in spec["entries"]]
-        w.plot(f"{x} [{u}]", xv, ys, t, f"{i + 1}  {x} vs " + ", ".join(n for n, _u in spec["entries"]))
+        ys = [(f"{e[0]} [{e[1]}]", self._series(e[0], e[1])[1]) for e in spec["entries"]]
+        w.plot(f"{x} [{u}]", xv, ys, t, f"{i + 1}  {x} vs " + ", ".join(e[0] for e in spec["entries"]))
         return w
 
     def _save_png(self):
