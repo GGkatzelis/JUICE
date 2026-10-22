@@ -58,7 +58,17 @@ QScrollBar:vertical {{ background: #f4f4f4; width: 12px; }} QScrollBar::handle:v
 QScrollBar:horizontal {{ background: #f4f4f4; height: 12px; }} QScrollBar::handle:horizontal {{ background: #cccccc; border-radius: 4px; min-width: 20px; }}
 QSplitter::handle {{ background: #e6e6e6; }}
 QToolTip {{ background: #ffffff; color: #222222; border: 1px solid #c8c8c8; }}
+QLineEdit[missing="true"], QListWidget[missing="true"], QComboBox[missing="true"] {{ background: #fff4cc; border: 1px solid #e0b84a; }}
+QRadioButton[missing="true"], QLabel[missing="true"] {{ color: #9a6b00; font-weight: bold; }}
 """
+
+
+def mark_missing(widget, missing: bool) -> None:
+    """Soft yellow on a field that still needs input; plain again once filled."""
+    if widget is None or widget.property("missing") == missing:
+        return
+    widget.setProperty("missing", missing)
+    widget.style().unpolish(widget); widget.style().polish(widget); widget.update()
 
 
 def taskbar_identity(name: str = "FZJ.JUICE") -> None:

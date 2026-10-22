@@ -38,7 +38,7 @@ import tomllib
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment
+from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
@@ -336,6 +336,9 @@ class ReviewPanel(QWidget):
         super().__init__()
         self.win = win
         lay = QVBoxLayout(self); lay.setContentsMargins(4, 4, 4, 4)
+        hb0 = QHBoxLayout(); hb0.addWidget(QLabel("<b>Review</b> — follows your entries; press Refresh if a plot looks stale"))
+        hb0.addStretch(); rb = QPushButton("Refresh"); rb.clicked.connect(lambda: self.win.refresh_all(force_plot=True)); hb0.addWidget(rb)
+        lay.addLayout(hb0)
         self.tabs = QTabWidget(); lay.addWidget(self.tabs, stretch=1)
         st = QWidget(); sl = QVBoxLayout(st)
         self.summary = QLabel(""); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -579,16 +582,64 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.load_spec(blank_spec())
         self.page_start.name_edit.setPlaceholderText("e.g. isoprene_2024-07-09")
         self.steps.setCurrentRow(0)
+        self._wire_live_refresh()
+
+    # ── live refresh: every edit updates review, step marks, missing-field marks and the plot ──
+    def _wire_live_refresh(self):
+        self._refresh_timer = QTimer(self); self._refresh_timer.setSingleShot(True); self._refresh_timer.setInterval(500)
+        self._refresh_timer.timeout.connect(self.refresh_all)
+        c, s0, ch, inj, cb = self.page_cond, self.page_start, self.page_chem, self.page_inj, self.page_chamber
+        for w in (c.date, c.start, c.end, c.archive, c.temp, c.press, c.h2o, c.flow, c.constrain, s0.name_edit, s0.out_edit,
+                  cb.hono_factor, cb.y_inline, cb.dark_factor):
+            w.textChanged.connect(self._schedule_refresh)
+        for w in (c.src_archive, c.src_manual):
+            w.toggled.connect(self._schedule_refresh)
+        for w in (c.step,):
+            w.valueChanged.connect(self._schedule_refresh)
+        for w in (c.jsrc, c.temp_mode, c.chamber, ch.base_combo, ch.mech_combo):
+            w.currentIndexChanged.connect(self._schedule_refresh)
+        for t in (c.roof, inj.table, inj.chain, ch.adjust, self.page_init.table):
+            t.itemChanged.connect(self._schedule_refresh); t.model().rowsRemoved.connect(self._schedule_refresh); t.model().rowsInserted.connect(self._schedule_refresh)
+        ch.chosen.model().rowsInserted.connect(self._schedule_refresh); ch.chosen.model().rowsRemoved.connect(self._schedule_refresh)
+        for w in (ch.mode_compounds, ch.mode_existing):
+            w.toggled.connect(self._schedule_refresh)
+        for w in list(cb.checks.values()):
+            w.toggled.connect(self._schedule_refresh)
+        for w in ch.addon_checks.values():
+            w.toggled.connect(self._schedule_refresh)
+
+    def _schedule_refresh(self, *_a):
+        self._refresh_timer.start()
+
+    def refresh_all(self, force_plot: bool = False):
+        msgs = self.review.refresh()
+        self._update_states(msgs or [])
+        self._mark_missing()
+        plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(self.steps.currentRow())
+        if plot is not None and not is_blank(self.collect_spec()):
+            plot.plot()
+        if force_plot:
+            self.review.plot.plot()
+
+    def _mark_missing(self):
+        """Soft yellow on what the experiment still needs: name, date, time window, conditions source, chemistry."""
+        c, s0, ch = self.page_cond, self.page_start, self.page_chem
+        theme.mark_missing(s0.name_edit, not s0.name_edit.text().strip())
+        theme.mark_missing(c.date, not c.date.text().strip())
+        theme.mark_missing(c.start, not c.start.text().strip())
+        theme.mark_missing(c.end, not c.end.text().strip())
+        no_src = not (c.src_archive.isChecked() or c.src_manual.isChecked())
+        theme.mark_missing(c.src_archive, no_src); theme.mark_missing(c.src_manual, no_src)
+        no_chem = (ch.mode_compounds.isChecked() and ch.chosen.count() == 0) or (ch.mode_existing.isChecked() and not ch.mech_combo.currentText().strip())
+        theme.mark_missing(ch.chosen, no_chem and ch.mode_compounds.isChecked())
+        theme.mark_missing(ch.mech_combo, no_chem and ch.mode_existing.isChecked())
 
     def load_spec(self, spec: ExperimentSpec, keep_name: bool = False):
         """A template, an import or an opened file arrived: fill the pages, then redraw
         the review and the plot of the step on screen."""
         super().load_spec(spec, keep_name)
         if hasattr(self, "review"):
-            msgs = self.review.refresh(); self._update_states(msgs or [])
-            plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(self.steps.currentRow())
-            if plot is not None and not is_blank(spec):
-                plot.plot()
+            self.refresh_all()
 
     # ── inputs cache for the plots (archive reads are slow) ──
     def inputs_for(self, spec: ExperimentSpec):
@@ -606,11 +657,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.back_btn.setEnabled(row > 0); self.next_btn.setEnabled(row < RUN_STEP)
         if row == RUN_STEP:
             self.page_run.refresh()
-        msgs = self.review.refresh()
-        self._update_states(msgs or [])
-        plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(row)
-        if plot is not None and not is_blank(self.collect_spec()):
-            plot.plot()
+        self.refresh_all()
 
     def _step(self, d: int):
         row = self.steps.currentRow()
