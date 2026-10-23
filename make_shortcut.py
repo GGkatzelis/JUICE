@@ -34,6 +34,28 @@ $s.Save()
     if r.returncode != 0:
         raise SystemExit(f"could not create {link_path}: {r.stderr.strip()}")
     print("created", link_path)
+    set_app_id(link_path)
+
+
+APP_ID = "FZJ.JUICE"      # the AppUserModelID every JUICE window sets (juice_theme.taskbar_identity)
+
+
+def set_app_id(link_path: str, app_id: str = APP_ID) -> bool:
+    """Stamp the AppUserModelID into the shortcut: Windows then matches the running JUICE windows
+    to this shortcut and shows its JUICE icon on the taskbar (pinned or not) instead of python's.
+    Needs pywin32; silently skipped without it."""
+    try:
+        import pythoncom
+        from win32com.propsys import propsys, pscon
+        GPS_READWRITE = 2
+        ps = propsys.SHGetPropertyStoreFromParsingName(link_path, None, GPS_READWRITE, propsys.IID_IPropertyStore)
+        ps.SetValue(pscon.PKEY_AppUserModel_ID, propsys.PROPVARIANTType(app_id, pythoncom.VT_LPWSTR))
+        ps.Commit()
+        print("  AppUserModelID", app_id, "written")
+        return True
+    except Exception as e:
+        print("  (AppUserModelID not written:", e, ")")
+        return False
 
 
 if __name__ == "__main__":

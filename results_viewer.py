@@ -5276,6 +5276,11 @@ def show_results(out_path, toml_path=None):
         _progress("Building the viewer", 20)
         viewer = ResultsViewer(df, csv_path=out_path, toml_path=toml_path)
         viewer.show()
+        try:
+            from juice_theme import force_taskbar_icon
+            force_taskbar_icon(viewer)
+        except Exception:
+            pass
         if _LOADER is not None:
             _LOADER.done(); _LOADER = None
         app.exec()

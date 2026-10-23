@@ -83,6 +83,43 @@ def taskbar_identity(name: str = "FZJ.JUICE") -> None:
             pass
 
 
+def force_taskbar_icon(widget) -> bool:
+    """Windows: hand the .ico to the native window itself (WM_SETICON big + small, and the window
+    class), independent of Qt's icon handling — the taskbar reads the icon from there.  Call after
+    show().  Returns True when it was applied."""
+    if not sys.platform.startswith("win") or not os.path.isfile(ICON):
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        IMAGE_ICON, LR_LOADFROMFILE, LR_DEFAULTSIZE = 1, 0x10, 0x40
+        WM_SETICON, ICON_SMALL, ICON_BIG, GCLP_HICON, GCLP_HICONSM = 0x80, 0, 1, -14, -34
+        u32.LoadImageW.restype = wintypes.HANDLE
+        u32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        big = u32.LoadImageW(None, ICON, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        small = u32.LoadImageW(None, ICON, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+        if not big and not small:
+            return False
+        u32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        if big:
+            u32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
+        if small:
+            u32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+        setcl = getattr(u32, "SetClassLongPtrW", None) or u32.SetClassLongW
+        setcl.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]; setcl.restype = ctypes.c_ssize_t
+        if big:
+            setcl(hwnd, GCLP_HICON, big)
+        if small:
+            setcl(hwnd, GCLP_HICONSM, small)
+        return True
+    except Exception:
+        return False
+
+
 def app_icon() -> QIcon:
     ico = QIcon(ICON) if os.path.isfile(ICON) else QIcon()
     if ico.isNull() and os.path.isfile(LOGO):

@@ -729,6 +729,7 @@ def main(argv=None):
     theme.apply_theme(app)
     w = JuiceWindow(pick_toml(argv))
     w.show()
+    theme.force_taskbar_icon(w)              # the taskbar reads the icon from the native window
     return app.exec()
 
 
