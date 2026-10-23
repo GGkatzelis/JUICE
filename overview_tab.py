@@ -39,7 +39,7 @@ PAGES = {
     "5  Chamber conditions": "page_conditions",
 }
 MODEL_COLORS = ["#6b3e85", "#3b6fc4", "#2e9e4f", "#d9822b", "#c0392b", "#8e6c3a", "#1aa3a3", "#7f7f7f"]
-PANEL_MIN_H = 240
+PANEL_MIN_H = 270
 try:
     from juice_theme import PLOT_FONT as F
 except Exception:
@@ -123,7 +123,7 @@ class InteractivePanel(QWidget):
                             labelspacing=0.2, handlelength=1.5, borderaxespad=0.2)
             for lh, art in zip(leg.get_lines(), handles):
                 lh.set_picker(True); lh.set_pickradius(6); self._lines[lh] = art
-        self.fig.subplots_adjust(left=0.13, right=0.985 if self.ax2 is None else 0.88, top=0.88, bottom=0.2 if self.xlabel else 0.1)
+        self.fig.subplots_adjust(left=0.13, right=0.985 if self.ax2 is None else 0.88, top=0.86, bottom=0.2 if self.xlabel else 0.1)
         self.canvas.draw_idle()
 
     # ── interaction ──
@@ -362,6 +362,9 @@ class OverviewTab(QWidget):
         n = len(panels); grid_cols = next((p["cols"] for p in panels if p.get("cols")), 3 if n >= 5 else 2)
         rows = (n + grid_cols - 1) // grid_cols
         self.last_grid = (rows, grid_cols)               # QGridLayout never forgets old columns; this is the real arrangement
+        pairs = any(p.get("scatter11") for p in panels) and grid_cols == 2
+        for c in range(max(3, grid_cols)):               # time series wide, the square correlation narrow
+            self.grid.setColumnStretch(c, (5 if c == 0 else 2) if pairs else 1)
         spans = self._hv_spans()
         for i, p in enumerate(panels):
             if p.get("scatter11"):

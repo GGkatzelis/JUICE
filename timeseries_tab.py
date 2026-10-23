@@ -47,7 +47,7 @@ class CorrelationPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
-        self.fig = Figure(figsize=(5.0, 2.6)); self.canvas = FigureCanvas(self.fig); self.canvas.setMinimumHeight(240)
+        self.fig = Figure(figsize=(5.0, 2.6)); self.canvas = FigureCanvas(self.fig); self.canvas.setMinimumHeight(270)
         self.ax = self.fig.add_subplot(111); lay.addWidget(self.canvas)
         self._pts: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []    # (label, x, y, hours)
         self._text = None; self._home = None
@@ -63,9 +63,15 @@ class CorrelationPanel(QWidget):
         if len(ys) == 1:
             lab, y = ys[0]
             ok = np.isfinite(x) & np.isfinite(y)
-            sc = ax.scatter(x[ok], y[ok], c=hours[ok], cmap="viridis", s=9, alpha=0.8, label=lab)
-            cb = self.fig.colorbar(sc, ax=ax, pad=0.01); cb.set_label("hour (UTC)", fontsize=F["small"]); cb.ax.tick_params(labelsize=F["small"])
-            self._pts.append((lab, x[ok], y[ok], hours[ok])); self._fit(ax, x[ok], y[ok], lab, "#c0392b")
+            sc = ax.scatter(x[ok], y[ok], c=hours[ok], cmap="viridis", s=9, alpha=0.8, label=None if one_to_one else lab)
+            cb = self.fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.05); cb.set_label("hour (UTC)", fontsize=F["small"]); cb.ax.tick_params(labelsize=F["small"])
+            self._pts.append((lab, x[ok], y[ok], hours[ok]))
+            fit = self._fit(ax, x[ok], y[ok], lab, "#c0392b", legend=not one_to_one)
+            if one_to_one and fit is not None:          # 1:1 mode: the numbers in a corner, no legend over the points
+                a, b, r = fit
+                txt = f"slope {a:.2f}" + chr(10) + f"r² {r * r:.2f}" + chr(10) + f"n = {int(ok.sum())}"
+                ax.text(0.03, 0.97, txt, transform=ax.transAxes, va="top", ha="left",
+                        fontsize=F["small"], bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#bbb", alpha=0.9))
             ax.set_ylabel(lab, fontsize=F["label"], labelpad=3)
         else:
             for i, (lab, y) in enumerate(ys):
@@ -79,23 +85,24 @@ class CorrelationPanel(QWidget):
             if allv.size:
                 lo, hi = float(np.nanmin(allv)), float(np.nanmax(allv)); pad = 0.04 * (hi - lo or 1.0)
                 ax.set_xlim(lo - pad, hi + pad); ax.set_ylim(lo - pad, hi + pad)
-                ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="#444", lw=0.9, ls=":", label="1:1")
+                ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="#444", lw=0.9, ls=":", label="_1:1")
             ax.set_aspect("equal", adjustable="box")
         ax.set_title(title, loc="left", fontsize=F["title"], color=ACCENT, fontweight="bold", pad=4)
         ax.tick_params(labelsize=F["tick"], pad=2, length=3); ax.grid(True, alpha=0.25)
         if ax.get_legend_handles_labels()[0]:
             ax.legend(fontsize=F["legend"], loc="lower right", framealpha=0.85, borderpad=0.3, labelspacing=0.2)
-        self.fig.subplots_adjust(left=0.14, right=0.98 if len(ys) != 1 else 0.9, top=0.88, bottom=0.2)
+        self.fig.subplots_adjust(left=0.16, right=0.98 if len(ys) != 1 else 0.9, top=0.86, bottom=0.2)
         self._home = (ax.get_xlim(), ax.get_ylim()); self.canvas.draw_idle()
 
     @staticmethod
-    def _fit(ax, x, y, lab, color):
+    def _fit(ax, x, y, lab, color, legend=True):
         if len(x) < 3 or np.ptp(x) == 0:
-            return
+            return None
         a, b = np.polyfit(x, y, 1)
         r = np.corrcoef(x, y)[0, 1]
         xx = np.array([np.nanmin(x), np.nanmax(x)])
-        ax.plot(xx, a * xx + b, color=color, lw=1, ls="--", label=f"{lab}: slope {a:.3g}, r² {r * r:.2f}")
+        ax.plot(xx, a * xx + b, color=color, lw=1.2, ls="--", label=(f"{lab}: slope {a:.3g}, r² {r * r:.2f}" if legend else "_fit"))
+        return a, b, r
 
     # ── interaction ──
     def _hover(self, event):
