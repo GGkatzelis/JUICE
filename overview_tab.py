@@ -23,13 +23,21 @@ from typing import Dict, List, Optional
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QPushButton,
-                             QScrollArea, QFrame, QLineEdit, QFileDialog, QToolButton, QSizePolicy)
+                             QScrollArea, QFrame, QLineEdit, QFileDialog, QToolButton, QSizePolicy, QComboBox)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 import experiment_plots as ep
 
 ACCENT = "#6b3e85"
+# pages of the Overview: name → builder(self) returning panel dicts (see experiment_plots.landing_panels for the keys)
+PAGES = {
+    "1  Experiment overview": "page_overview",
+    "2  Model vs measurements (1:1)": "page_one_to_one",
+    "3  Model − measurement residuals": "page_residuals",
+    "4  Products and reservoirs": "page_products",
+    "5  Chamber conditions": "page_conditions",
+}
 MODEL_COLORS = ["#6b3e85", "#3b6fc4", "#2e9e4f", "#d9822b", "#c0392b", "#8e6c3a", "#1aa3a3", "#7f7f7f"]
 PANEL_MIN_H = 190
 
@@ -255,6 +263,9 @@ class OverviewTab(QWidget):
         self.head.setStyleSheet("color: #6a6a6a; font-size: 9pt; font-style: italic;")     # experiment notes: small, grey, italic
         lay.addWidget(self.head)
         bar = QHBoxLayout(); bar.setSpacing(6)
+        bar.addWidget(QLabel("Page"))
+        self.page = QComboBox(); self.page.addItems(list(PAGES)); self.page.setToolTip("which set of panels to show; every page can be added to the figure list")
+        self.page.currentIndexChanged.connect(self.rebuild); bar.addWidget(self.page)
         self.obs_box = QCheckBox("SAPHIR observations"); self.obs_box.setChecked(True); self.obs_box.toggled.connect(self.rebuild)
         bar.addWidget(self.obs_box)
         self.archive = QLineEdit(self.spec.conditions.archive_root if self.spec else r"Z:\IEK8-SAPHIR\data")
@@ -332,12 +343,15 @@ class OverviewTab(QWidget):
                 w.deleteLater()
         self.group = PanelGroup()
         date = self._date()
-        panels = ep.landing_panels(self.spec, list(self.v.df.columns))
+        panels = getattr(self, PAGES[self.page.currentText()])()
         obs: Dict = {}; note: List[str] = []
-        if self.obs_box.isChecked() and date:
+        if (self.obs_box.isChecked() or any(p.get("needs_obs") for p in panels)) and date:
             keys = sorted({k for p in panels for k in p["obs"]})
             obs = ep.load_observations(self.archive.text().strip(), date, keys, self.v._midnight_unix,
                                        cache_dir=self._run_dir(), status=note)
+        if any(p.get("needs_obs") for p in panels):
+            panels = [p for p in panels if not p.get("needs_obs") or any(k in obs for k in p["obs"])] or \
+                     [dict(title="no measurements for this day", species=[], kind="ppb", obs=[], log=False, empty=True)]
         self.head.setText(self._headline(date))
         self.status.setText(("observations " + (note[0] if note else "") + ": " + (", ".join(sorted(obs)) or "none of the mapped series present"))
                             if self.obs_box.isChecked() else "model only")
@@ -345,6 +359,8 @@ class OverviewTab(QWidget):
         rows = (n + grid_cols - 1) // grid_cols
         spans = self._hv_spans()
         for i, p in enumerate(panels):
+            if p.get("scatter11"):
+                self.grid.addWidget(self._scatter_panel(p, obs), i // grid_cols, i % grid_cols); continue
             panel = InteractivePanel(p["title"], self.group, log=p["log"], xlabel=(i // grid_cols == rows - 1))
             for lo, hi in spans:                               # roof open: the same shading in every panel
                 panel.ax.axvspan(lo, hi, color="#fffacd", alpha=0.35, zorder=0, linewidth=0)
@@ -392,6 +408,85 @@ class OverviewTab(QWidget):
             self.inner.grab().save(path)
             self.status.setText(f"saved {path}")
 
+    # ── pages ──
+    def page_overview(self):
+        return ep.landing_panels(self.spec, list(self.v.df.columns))
+
+    def _measured_species(self):
+        cols = set(self.v.df.columns)
+        return [k for k in ("NO", "NO2", "O3", "CO", "HONO", "OH", "HO2", "RO2") if k in cols]
+
+    def page_one_to_one(self):
+        out = [dict(title=f"{k}: model vs {ep.OBS_MAP[k][4]}", species=[k], kind=ep.OBS_MAP[k][5], obs=[k], log=False, scatter11=True, needs_obs=True)
+               for k in self._measured_species()]
+        if os.path.isfile(os.path.splitext(self.v.csv_path)[0] + ".pd"):
+            out.append(dict(title="kOH: model vs LP-LIF", species=[], kind="s-1", obs=["kOH"], log=False, scatter11=True, koh=True, needs_obs=True))
+        return out
+
+    def page_residuals(self):
+        out = [dict(title=f"{k}: model − measurement", species=[k], kind=ep.OBS_MAP[k][5], obs=[k], log=False, residual=True, needs_obs=True)
+               for k in self._measured_species()]
+        if os.path.isfile(os.path.splitext(self.v.csv_path)[0] + ".pd"):
+            out.append(dict(title="kOH: model − measurement", species=[], kind="s-1", obs=["kOH"], log=False, residual=True, koh=True, needs_obs=True))
+        return out
+
+    def page_products(self):
+        df = self.v.df; cols = set(df.columns)
+        inj = set(ep.injected_species(self.spec)) if self.spec else set()
+        inorg = {"NO", "NO2", "O3", "CO", "CO2", "HONO", "HNO3", "H2O2", "OH", "HO2", "RO2", "H2", "H2O", "SO2", "N2O5", "NO3", "O", "O1D", "CH4", "M"}
+        try:
+            from mcm_species_db import MCM_DB
+            def closed_shell(n):           # no peroxy (…O2) or alkoxy (…O after a non-H letter/digit) radicals; aldehydes (…CHO) stay
+                u = n.upper()
+                return not u.endswith("O2") and not (u.endswith("O") and not u.endswith("HO"))
+            org = [c for c in cols if c.upper() not in inorg and c.upper() not in inj and c in MCM_DB and MCM_DB[c].n_C > 0
+                   and closed_shell(c) and not c.upper().startswith("SAPHIR_")]
+        except Exception:
+            org = [c for c in cols if c.upper() not in inorg and c.upper() not in inj and c.isupper()]
+        M = df["M"].values.astype(float) if "M" in cols else None
+        def peak(c):
+            v = df[c].values.astype(float)
+            return float(np.nanmax(v / M * 1e9)) if M is not None else float(np.nanmax(v))
+        top = sorted(org, key=peak, reverse=True)[:8]
+        have = lambda names: [s for s in names if s in cols]
+        return [dict(title="Main products (largest peak)", species=top, kind="ppb", obs=[], log=False),
+                dict(title="Carbonyls", species=have(["HCHO", "CH3CHO", "CH3COCH3", "MEK", "GLYOX", "MGLYOX", "MACR", "MVK"]), kind="ppb", obs=[], log=False),
+                dict(title="Peroxides and acids", species=have(["H2O2", "CH3OOH", "HCOOH", "CH3CO2H", "CH3CO3H"]), kind="ppb", obs=[], log=False),
+                dict(title="Nitrogen reservoirs", species=have(["PAN", "HNO3", "HONO", "N2O5", "HNO4"]), kind="ppb", obs=["HONO"], log=False)]
+
+    def page_conditions(self):
+        cols = set(self.v.df.columns); have = lambda names: [s for s in names if s in cols]
+        return [dict(title="Temperature and humidity", species=have(["T"]) + have(["RH"]), kind="native", obs=[], log=False, twin="RH", units=("K", "RH [%]")),
+                dict(title="Photolysis: jNO2 and jO1D", species=have(["JNO2", "J4"])[:1] + have(["JO1D", "J1"])[:1], kind="native", obs=["jNO2"], log=False,
+                     twin=have(["JO1D", "J1"])[:1][0] if have(["JO1D", "J1"]) else None, units=("jNO2 [1/s]", "jO1D [1/s]")),
+                dict(title="Chamber sources and conditions", species=[], kind="sources", obs=["jNO2"], log=False, sources=True),
+                dict(title="NOx and ozone", species=have(["NO", "NO2", "O3"]), kind="ppb", obs=["NO", "NO2", "O3"], log=False)]
+
+    def _model_at(self, species: str, kind: str, hours: np.ndarray):
+        t, y = self._model(species, kind)
+        if t is None:
+            return None
+        ok = np.isfinite(y)
+        return np.interp(hours, t[ok], y[ok], left=np.nan, right=np.nan)
+
+    def _scatter_panel(self, p: dict, obs: Dict):
+        from timeseries_tab import CorrelationPanel
+        w = CorrelationPanel()
+        key = p["obs"][0]
+        if key not in obs:
+            w.ax.text(0.5, 0.5, "no measurement", ha="center", va="center", color="#888", transform=w.ax.transAxes); w.canvas.draw_idle(); return w
+        h, v, lab, kind = obs[key]
+        if p.get("koh"):
+            t, k = self._koh_model()
+            if t is None:
+                w.ax.text(0.5, 0.5, "no kOH in the .pd file", ha="center", va="center", color="#888", transform=w.ax.transAxes); w.canvas.draw_idle(); return w
+            ok = np.isfinite(k); ym = np.interp(h, t[ok], k[ok], left=np.nan, right=np.nan)
+        else:
+            ym = self._model_at(key, kind, h)
+        unit = {"ppb": "ppb", "cm-3": "cm⁻³", "s-1": "1/s"}.get(kind, "")
+        w.plot(f"{lab} [{unit}]", np.asarray(v, float), [(f"{key} model [{unit}]", ym)], np.asarray(h, float), p["title"], one_to_one=True)
+        return w
+
     def _headline(self, date: str) -> str:
         if self.spec is None:
             return f"<b>{os.path.basename(self.v.csv_path or '')}</b> — no experiment description next to the file; panels from the model species only."
@@ -405,8 +500,27 @@ class OverviewTab(QWidget):
 
     def _fill(self, panel: InteractivePanel, p: dict, obs: Dict):
         ax = panel.ax
+        if p.get("empty"):
+            ax.text(0.5, 0.5, p["title"], ha="center", va="center", color="#888", transform=ax.transAxes); panel.finish(""); return
         if p.get("sources"):
             self._fill_sources(panel, obs); return
+        if p.get("residual"):
+            key = p["obs"][0]
+            if key in obs:
+                h, v, lab, kind = obs[key]
+                if p.get("koh"):
+                    t, k = self._koh_model(); ym = None if t is None else np.interp(h, t[np.isfinite(k)], k[np.isfinite(k)], left=np.nan, right=np.nan)
+                else:
+                    ym = self._model_at(key, kind, h)
+                if ym is not None:
+                    d = ym - np.asarray(v, float)
+                    ax.axhline(0, color="#444", lw=0.8, ls=":")
+                    ax.plot(h, d, ".", ms=2.5, color=MODEL_COLORS[0], alpha=0.6, label=f"{key} model − {lab}")
+                    ok = np.isfinite(d)
+                    if ok.sum() > 2:
+                        ax.text(0.99, 0.03, f"mean {np.nanmean(d):.3g}, σ {np.nanstd(d):.3g}", transform=ax.transAxes, ha="right", va="bottom", fontsize=7, color="#444")
+            unit = {"ppb": "ppb", "cm-3": "molecules cm⁻³", "s-1": "1/s"}.get(p["kind"], "")
+            panel.finish(f"Δ [{unit}]"); return
         if p.get("koh"):
             t, k = self._koh_model()
             if t is not None:
@@ -434,6 +548,8 @@ class OverviewTab(QWidget):
         unit = {"ppb": "ppb", "cm-3": "molecules cm⁻³", "s-1": "1/s"}.get(p["kind"], "")
         if p["log"]:
             ax.set_ylim(bottom=1e4)                       # hide the floor value of the flushed chamber
+        if p.get("units"):
+            panel.finish(p["units"][0], p["units"][1] if twin else ""); return
         panel.finish((f"HO2, RO2 [{unit}]" if twin == "OH" else unit), f"{twin} [{unit}]" if twin else "")
 
     def _fill_sources(self, panel: InteractivePanel, obs: Dict):

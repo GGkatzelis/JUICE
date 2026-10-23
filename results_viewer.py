@@ -1851,6 +1851,9 @@ class ResultsViewer(QMainWindow):
         if self.figure_dock is None:
             return
         name = self.right_tabs.tabText(self.right_tabs.currentIndex())
+        page = getattr(self.right_tabs.currentWidget(), "page", None)
+        if page is not None:                                             # Overview pages: name the entry after the page
+            name = f"{name}: {page.currentText().split('  ', 1)[-1]}"
         figs = self._report_figures()
         if not figs:
             self.statusBar().showMessage("nothing drawn on this tab yet", 4000); return

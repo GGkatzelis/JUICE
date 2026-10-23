@@ -52,8 +52,10 @@ class CorrelationPanel(QWidget):
         self.canvas.mpl_connect("scroll_event", self._scroll)
         self.canvas.mpl_connect("button_press_event", self._press)
 
-    def plot(self, x_label: str, x: np.ndarray, ys: List[Tuple[str, np.ndarray]], hours: np.ndarray, title: str):
+    def plot(self, x_label: str, x: np.ndarray, ys: List[Tuple[str, np.ndarray]], hours: np.ndarray, title: str,
+             one_to_one: bool = False):
         ax = self.ax; ax.clear(); self._pts = []
+        self.title = title
         if len(ys) == 1:
             lab, y = ys[0]
             ok = np.isfinite(x) & np.isfinite(y)
@@ -68,6 +70,13 @@ class CorrelationPanel(QWidget):
                 self._pts.append((lab, x[ok], y[ok], hours[ok])); self._fit(ax, x[ok], y[ok], lab, c)
             ax.set_ylabel("y", fontsize=7.5, labelpad=2)
         ax.set_xlabel(x_label, fontsize=7.5, labelpad=1)
+        if one_to_one:                                   # same range on both axes + the 1:1 line
+            allv = np.concatenate([np.asarray(x, float)] + [np.asarray(y, float) for _l, y in ys]); allv = allv[np.isfinite(allv)]
+            if allv.size:
+                lo, hi = float(np.nanmin(allv)), float(np.nanmax(allv)); pad = 0.04 * (hi - lo or 1.0)
+                ax.set_xlim(lo - pad, hi + pad); ax.set_ylim(lo - pad, hi + pad)
+                ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="#444", lw=0.9, ls=":", label="1:1")
+            ax.set_aspect("equal", adjustable="box")
         ax.text(0.01, 0.97, title, transform=ax.transAxes, fontsize=8.5, color=ACCENT, fontweight="bold", va="top", ha="left")
         ax.tick_params(labelsize=7, pad=2, length=2); ax.grid(True, alpha=0.25)
         if ax.get_legend_handles_labels()[0]:
