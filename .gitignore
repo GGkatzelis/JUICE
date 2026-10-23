@@ -111,3 +111,6 @@ JUICE.lnk
 
 # per-day observation extracts next to results (regenerated from the archive; keep the reference scene folders clean in git)
 MCM_tested_scenarios/IDL Input/**/*.observations.csv
+
+# figure lists of the results viewer next to reference results (regenerated on demand)
+MCM_tested_scenarios/IDL Input/**/*.figures/

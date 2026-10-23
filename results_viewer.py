@@ -1151,6 +1151,7 @@ class ResultsViewer(QMainWindow):
 
         self.right_tabs = QTabWidget()
         right_layout.addWidget(self.right_tabs)
+        self._init_figure_list()                      # "Add to figure list" / "Figure list (n)" in the tab-bar corner
 
         # Tab 0 – Timeseries: a grid of linked panels (time series and correlations)
         self.fig = Figure(figsize=(10, 6))                 # legacy canvas, hidden (plot_variable & co.)
@@ -1779,6 +1780,76 @@ class ResultsViewer(QMainWindow):
                 candidates.append(legacy)
         if candidates:
             self._load_config(candidates[0], silent=True)
+
+    # ── figure list (report_basket / report_dock) ─────────────────────────────
+    def _init_figure_list(self):
+        """Corner buttons of the tab bar + the dock; the list lives next to the result file."""
+        self.figure_list = None; self.figure_dock = None
+        try:
+            from report_basket import FigureList
+            from report_dock import FigureListDock
+            if getattr(self, "csv_path", ""):
+                self.figure_list = FigureList.for_result(self.csv_path)
+            else:
+                import tempfile
+                self.figure_list = FigureList(os.path.join(tempfile.gettempdir(), "juice_figures"), "results")
+            corner = QWidget(); cl = QHBoxLayout(corner); cl.setContentsMargins(0, 0, 4, 0); cl.setSpacing(4)
+            add = QToolButton(); add.setText("➕ Add to figure list"); add.setAutoRaise(True)
+            add.setToolTip("snapshot the figures of this tab (SVG + PNG) into the figure list for the document")
+            add.clicked.connect(self.add_current_to_figure_list); cl.addWidget(add)
+            self._figlist_btn = QToolButton(); self._figlist_btn.setText("Figure list (0)"); self._figlist_btn.setAutoRaise(True)
+            self._figlist_btn.setToolTip("show the collected figures; reorder, caption, create the document")
+            self._figlist_btn.clicked.connect(self._toggle_figure_dock); cl.addWidget(self._figlist_btn)
+            self.right_tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+            self.figure_dock = FigureListDock(self, self.figure_list, self)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.figure_dock)
+            self.figure_dock.hide()
+        except Exception as e:
+            print(f"[viewer] figure list not available: {e}")
+
+    def _toggle_figure_dock(self):
+        if self.figure_dock is not None:
+            self.figure_dock.setVisible(not self.figure_dock.isVisible())
+
+    def _report_figures(self):
+        """[(title, Figure)] of the tab currently shown — what 'Add to figure list' snapshots."""
+        name = self.right_tabs.tabText(self.right_tabs.currentIndex()); tab = self.right_tabs.currentWidget()
+        figs = []
+        grid = getattr(tab, "grid", None)
+        if grid is not None:                                           # Overview / Timeseries panel grids
+            for i in range(grid.count()):
+                w = grid.itemAt(i).widget()
+                if w is not None and getattr(w, "fig", None) is not None:
+                    title = getattr(w, "title", "") or f"{name} panel {i + 1}"
+                    figs.append((title, w.fig))
+        elif name == "Process Analysis":
+            figs.append((self.pa_fig.axes[0].get_title() if self.pa_fig.axes else "Process analysis", self.pa_fig))
+        elif name == "Reactivity":
+            figs.append((f"{self.rx_combo.currentText()} reactivity", self.rx_fig))
+        elif name == "Budgets":
+            figs.append(("Carbon budget", self._cb_fig))
+            figs.append(((self._nb_view.currentText() if hasattr(self, "_nb_view") else "Nitrogen") + " budget", self._nb_fig))
+        elif name == "Chemical Space":
+            for title, fig in (("Injections and roof status", self._cs_ts_fig), ("Volatility basis set", self._cs_vbs_fig),
+                               ("Composition by carbon number", self._cs_co_fig), ("Mass defect", self._cs_fam_fig)):
+                figs.append((title, fig))
+        elif name == "Comparison":
+            figs.append(("Comparison slopes", self._cmp_slope_fig))
+            for i, f in enumerate(getattr(self, "_cmp_ts_figs", [])):
+                figs.append((f"Comparison timeseries {i + 1}", f))
+        return [(t, f) for t, f in figs if f is not None and f.axes]
+
+    def add_current_to_figure_list(self):
+        if self.figure_dock is None:
+            return
+        name = self.right_tabs.tabText(self.right_tabs.currentIndex())
+        figs = self._report_figures()
+        if not figs:
+            self.statusBar().showMessage("nothing drawn on this tab yet", 4000); return
+        n = self.figure_dock.add_figures(figs, source=name)
+        self.statusBar().showMessage(f"{n} figure(s) from {name} added to the list ({len(self.figure_list.items)} in total)", 5000)
+        if not self.figure_dock.isVisible():
+            self.figure_dock.show()
 
     def _toml_include_dirs(self):
         """[paths] include_dir of the active TOML (where the EASY #include files live), if any."""
