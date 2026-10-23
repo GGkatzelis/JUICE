@@ -120,6 +120,28 @@ def force_taskbar_icon(widget) -> bool:
         return False
 
 
+# ── figure text: presentation-friendly sizes for every figure JUICE draws (points) ──
+PLOT_FONT = dict(base=13, title=14, label=13, tick=11, legend=11, small=10, readout=11)
+
+
+def apply_plot_defaults() -> None:
+    """matplotlib rcParams so that figures are readable on a slide without any change:
+    larger text everywhere, thicker lines, no title/label clutter."""
+    try:
+        import matplotlib as mpl
+        mpl.rcParams.update({
+            "font.size": PLOT_FONT["base"], "axes.titlesize": PLOT_FONT["title"], "axes.labelsize": PLOT_FONT["label"],
+            "xtick.labelsize": PLOT_FONT["tick"], "ytick.labelsize": PLOT_FONT["tick"], "legend.fontsize": PLOT_FONT["legend"],
+            "figure.titlesize": PLOT_FONT["title"] + 1, "lines.linewidth": 1.8, "axes.linewidth": 0.9,
+            "legend.framealpha": 0.85, "legend.borderpad": 0.3, "legend.labelspacing": 0.25, "legend.handlelength": 1.6,
+            "savefig.facecolor": "white", "figure.facecolor": "white", "axes.facecolor": "white",
+            "font.family": "sans-serif", "font.sans-serif": ["Segoe UI", "Arial", "DejaVu Sans"],
+            "svg.fonttype": "none",                       # text stays text in SVG (editable in Inkscape / PowerPoint)
+        })
+    except Exception:
+        pass
+
+
 def app_icon() -> QIcon:
     ico = QIcon(ICON) if os.path.isfile(ICON) else QIcon()
     if ico.isNull() and os.path.isfile(LOGO):
@@ -175,3 +197,4 @@ def apply_theme(app) -> None:
     app.setStyleSheet(QSS)
     app.setFont(QFont("Segoe UI", 10))
     app.setWindowIcon(app_icon())
+    apply_plot_defaults()

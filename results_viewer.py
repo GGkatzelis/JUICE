@@ -1364,7 +1364,7 @@ class ResultsViewer(QMainWindow):
                     f"MCM match:  {data['mcm_match'] or '—'}\n\n"
                     f"No mechanism budget for instrument data.",
                     ha='center', va='center', transform=ax.transAxes,
-                    fontsize=11, family='monospace')
+                    fontsize=13, family='monospace')
             ax.axis('off')
             self.pa_canvas.draw()
         else:
@@ -1823,9 +1823,11 @@ class ResultsViewer(QMainWindow):
                     title = getattr(w, "title", "") or f"{name} panel {i + 1}"
                     figs.append((title, w.fig))
             try:
-                self._report_grid = (grid.rowCount(), grid.columnCount())      # same arrangement as on screen
-                if grid.columnCount() == 1:
+                self._report_grid = getattr(tab, "last_grid", None) or (grid.rowCount(), grid.columnCount())   # as on screen
+                if self._report_grid[1] == 1:
                     self._report_panel = (10.0, 3.6)                            # stacked panels: wide
+                elif self._report_grid[1] == 2:
+                    self._report_panel = (7.5, 4.0)
             except Exception:
                 pass
         elif name == "Process Analysis":
@@ -1859,10 +1861,19 @@ class ResultsViewer(QMainWindow):
             self.statusBar().showMessage("nothing drawn on this tab yet", 4000); return
         if len(figs) > 1:                       # several figures on the tab → one figure with sub-panels, as on screen
             try:
-                cap = f"{self.figure_list.run_name}: {name} — " + "; ".join(t for t, _f in figs)
-                self.figure_list.add_composite([f for _t, f in figs], name, source=name, caption=cap, grid=getattr(self, "_report_grid", None),
-                                               panel_size=getattr(self, "_report_panel", (6.4, 3.8)))
-                self.figure_dock.refresh(); n = 1
+                grid = getattr(self, "_report_grid", None); psize = getattr(self, "_report_panel", (6.4, 3.8))
+                MAX_ROWS = 3                      # taller pages become several figures (slides) of ≤ 3 rows
+                if grid and grid[0] > MAX_ROWS:
+                    per = grid[1] * MAX_ROWS; chunks = [figs[i:i + per] for i in range(0, len(figs), per)]
+                else:
+                    chunks = [figs]
+                for ci, chunk in enumerate(chunks, 1):
+                    rows = -(-len(chunk) // (grid[1] if grid else 2)) if grid else None
+                    g = (rows, grid[1]) if grid else None
+                    title = name if len(chunks) == 1 else f"{name} ({ci}/{len(chunks)})"
+                    cap = f"{self.figure_list.run_name}: {title} — " + "; ".join(t for t, _f in chunk)
+                    self.figure_list.add_composite([f for _t, f in chunk], title, source=name, caption=cap, grid=g, panel_size=psize)
+                self.figure_dock.refresh(); n = len(chunks)
             except Exception as e:
                 print(f"[figure list] composite failed ({e}); adding the panels separately")
                 n = self.figure_dock.add_figures(figs, source=name)
@@ -1918,7 +1929,7 @@ class ResultsViewer(QMainWindow):
 
         if not HAS_BUDGET:
             ax_msg.text(0.5, 0.5, "Budget engine unavailable\n(install easy_parser)",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=12)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=14)
             self.pa_canvas.draw()
             return
 
@@ -1926,7 +1937,7 @@ class ResultsViewer(QMainWindow):
             ax_msg.text(0.5, 0.5,
                         "No scenario config loaded.\n"
                         "Use 'Load Scenario Config (.json)' in the left panel.",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=12)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=14)
             self.pa_canvas.draw()
             return
 
@@ -1934,7 +1945,7 @@ class ResultsViewer(QMainWindow):
             prod, dest = self.budget_engine.compute(species, self.df)
         except Exception as e:
             ax_msg.text(0.5, 0.5, f"Budget compute failed:\n{e}",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=10)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=12)
             self.pa_canvas.draw()
             return
 
@@ -1942,7 +1953,7 @@ class ResultsViewer(QMainWindow):
             ax_msg.text(0.5, 0.5,
                         f"'{species}' not found in mechanism reactions.\n"
                         f"(It may be an env/SAPHIR variable, not a modelled species.)",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=11)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=13)
             self.pa_canvas.draw()
             return
 
@@ -2028,7 +2039,7 @@ class ResultsViewer(QMainWindow):
         handles, labels = ax_ts.get_legend_handles_labels()
         if handles:
             ax_ts.legend(handles, labels, loc='upper left',
-                         fontsize=7, framealpha=0.75, ncol=1,
+                         fontsize=11, framealpha=0.75, ncol=1,
                          handlelength=1.2, handleheight=0.8,
                          borderpad=0.5, labelspacing=0.3).set_draggable(True)
 
@@ -2067,15 +2078,15 @@ class ResultsViewer(QMainWindow):
             ax_bar.barh(y_pos, bar_vals, color=bar_colors, alpha=0.85,
                         edgecolor='white', linewidth=0.5)
             ax_bar.set_yticks(y_pos)
-            ax_bar.set_yticklabels(bar_labels, fontsize=7)
+            ax_bar.set_yticklabels(bar_labels, fontsize=11)
 
             # Divider line between destruction and production blocks
             if n_dest > 0 and len(prod_sorted) > 0:
                 ax_bar.axhline(n_dest - 0.5, color='#888888', linewidth=1.2,
                                linestyle='-', zorder=3)
 
-            ax_bar.set_xlabel("|Mean flux|\n(ppb hr⁻¹)", fontsize=8)
-            ax_bar.set_title("Time-average", fontsize=9)
+            ax_bar.set_xlabel("|Mean flux|\n(ppb hr⁻¹)", fontsize=12)
+            ax_bar.set_title("Time-average", fontsize=13)
             ax_bar.grid(True, axis='x', linestyle='--', alpha=0.35)
 
             # Section labels outside the axes box, centred on each block.
@@ -2087,14 +2098,14 @@ class ResultsViewer(QMainWindow):
                 dest_frac = n_dest / (2.0 * n_total)
                 ax_bar.annotate("DEST", xy=(1.04, dest_frac),
                                 xycoords='axes fraction',
-                                fontsize=7.5, color='#c0392b', fontweight='bold',
+                                fontsize=11.5, color='#c0392b', fontweight='bold',
                                 ha='center', va='center', rotation=90,
                                 clip_on=False)
             if n_prod > 0:
                 prod_frac = (n_dest + n_prod / 2.0) / n_total
                 ax_bar.annotate("PROD", xy=(1.04, prod_frac),
                                 xycoords='axes fraction',
-                                fontsize=7.5, color='#27ae60', fontweight='bold',
+                                fontsize=11.5, color='#27ae60', fontweight='bold',
                                 ha='center', va='center', rotation=90,
                                 clip_on=False)
 
@@ -2321,7 +2332,7 @@ class ResultsViewer(QMainWindow):
         if not (self.budget_engine and self.budget_engine._ready):
             ax_msg.text(0.5, 0.5,
                         "No scenario config loaded.\nUse 'Load Scenario Config (.json)'.",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=12)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=14)
             self.rx_canvas.draw()
             return
 
@@ -2329,7 +2340,7 @@ class ResultsViewer(QMainWindow):
             contribs = self.budget_engine.compute_reactivity(radical, self.df)
         except Exception as e:
             ax_msg.text(0.5, 0.5, f"Reactivity compute failed:\n{e}",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=10)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=12)
             self.rx_canvas.draw()
             return
 
@@ -2337,7 +2348,7 @@ class ResultsViewer(QMainWindow):
             ax_msg.text(0.5, 0.5,
                         f"No reactions found consuming {radical}.\n"
                         f"Check that {radical} is present in the loaded mechanism.",
-                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=11)
+                        ha='center', va='center', transform=ax_msg.transAxes, fontsize=13)
             self.rx_canvas.draw()
             return
 
@@ -2437,7 +2448,7 @@ class ResultsViewer(QMainWindow):
         handles, lbls = ax_ts.get_legend_handles_labels()
         if handles:
             ax_ts.legend(handles, lbls, loc='upper center',
-                         bbox_to_anchor=(0.5, -0.14), ncol=min(6, max(3, (len(handles) + 3) // 4)), fontsize=7, framealpha=0.7).set_draggable(True)
+                         bbox_to_anchor=(0.5, -0.14), ncol=min(6, max(3, (len(handles) + 3) // 4)), fontsize=11, framealpha=0.7).set_draggable(True)
 
         bar_labels = list(major.keys())
         bar_vals   = [np.nanmean(major[k]) for k in bar_labels]
@@ -2447,10 +2458,10 @@ class ResultsViewer(QMainWindow):
             ax_bar.barh(y_pos, bar_vals, color=bar_colors, alpha=0.85,
                         edgecolor='white', linewidth=0.5)
             ax_bar.set_yticks(y_pos)
-            ax_bar.set_yticklabels(bar_labels, fontsize=7)
+            ax_bar.set_yticklabels(bar_labels, fontsize=11)
             ax_bar.axvline(0, color='black', linewidth=0.8)
-            ax_bar.set_xlabel("Mean k\n(s⁻¹)", fontsize=8)
-            ax_bar.set_title("Time-average", fontsize=9)
+            ax_bar.set_xlabel("Mean k\n(s⁻¹)", fontsize=12)
+            ax_bar.set_title("Time-average", fontsize=13)
             ax_bar.grid(True, axis='x', linestyle='--', alpha=0.35)
 
         self.rx_canvas.draw()
@@ -3323,7 +3334,7 @@ class ResultsViewer(QMainWindow):
                    if total_n > 0 else
                    "No significant species found.\nTry lowering the noise threshold.")
             ax.text(0.5, 0.5, msg,
-                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+                    ha='center', va='center', transform=ax.transAxes, fontsize=13)
             self._cmp_slope_canvas.draw()
             return
 
@@ -3342,7 +3353,7 @@ class ResultsViewer(QMainWindow):
             count_str += f"  ·  search: '{search_q}'"
         if limit_val < total_n and n == limit_val:
             count_str += f"  ·  capped at {limit_val}"
-        ax.set_title(count_str, fontsize=8, color='#444', pad=2)
+        ax.set_title(count_str, fontsize=12, color='#444', pad=2)
 
         # Choose a column count that gives a compact grid close to the canvas aspect.
         # Prefer slightly more columns than rows so the grid fills a landscape panel.
@@ -3491,13 +3502,13 @@ class ResultsViewer(QMainWindow):
                 ax.plot(t_ref, rv, lw=1.5, color='darkorange', ls='--',
                         label=f"{sp} {self._cmp_ref_label}")
                 ref_vals_raw = np.interp(t_arr, t_ref, rv)
-            ax.set_ylabel(f"[{unit_lbl}]", fontsize=9)
-            ax.set_title(sp, fontweight='bold', fontsize=10, loc='left')
+            ax.set_ylabel(f"[{unit_lbl}]", fontsize=13)
+            ax.set_title(sp, fontweight='bold', fontsize=12, loc='left')
             ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
             ax.set_xlabel("Time of Day (UTC)")
             ax.yaxis.get_major_formatter().set_useOffset(False)
             ax.legend(loc='lower right', bbox_to_anchor=(1, 1.01), ncol=1,
-                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+                      fontsize=11, borderaxespad=0, framealpha=0.85).set_draggable(True)
             ax.grid(True, ls='--', alpha=0.35)
             fig.tight_layout(pad=0.8)
             fig.subplots_adjust(left=0.18)
@@ -3609,11 +3620,11 @@ class ResultsViewer(QMainWindow):
             ax.plot(common_t, ref_plot, label=f"{sp} {self._cmp_ref_label}",
                     lw=1.5, color='darkorange', ls='--', zorder=2)
         ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
-        ax.set_xlabel("Time of Day (UTC)", fontsize=9)
-        ax.set_ylabel(lax_lbl, fontsize=9)
+        ax.set_xlabel("Time of Day (UTC)", fontsize=13)
+        ax.set_ylabel(lax_lbl, fontsize=13)
         _sig_str = f"   σ={sigma*100:.3g}%" if np.isfinite(sigma) else ""
         ax.set_title(f"{sp}   m={slope:.3f}{_sig_str}",
-                     fontweight='bold', fontsize=10, loc='left')
+                     fontweight='bold', fontsize=12, loc='left')
         # Prevent matplotlib from adding its own "+offset" to the tick exponent area.
         # Our lax_lbl already carries the only scale/offset information shown.
         # Use a fresh ScalarFormatter with useOffset=False — more reliable than
@@ -3629,17 +3640,17 @@ class ResultsViewer(QMainWindow):
             ax2.plot(common_t, diff_plot, lw=1.2, color='green', ls=':', zorder=3,
                      label="Δ (JUICE − Ref)")
             ax2.axhline(0, color='green', lw=0.5, ls='--', alpha=0.5)
-            ax2.set_ylabel(diff_lbl, fontsize=9, color='green')
+            ax2.set_ylabel(diff_lbl, fontsize=13, color='green')
             ax2.tick_params(axis='y', labelcolor='green')
             ax2.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
             h1, l1 = ax.get_legend_handles_labels()
             h2, l2 = ax2.get_legend_handles_labels()
             ax.legend(h1 + h2, l1 + l2, loc='lower right',
                       bbox_to_anchor=(1, 1.01), ncol=1,
-                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+                      fontsize=11, borderaxespad=0, framealpha=0.85).set_draggable(True)
         else:
             ax.legend(loc='lower right', bbox_to_anchor=(1, 1.01), ncol=1,
-                      fontsize=7, borderaxespad=0, framealpha=0.85).set_draggable(True)
+                      fontsize=11, borderaxespad=0, framealpha=0.85).set_draggable(True)
 
         self._cmp_ts_data[slot] = (py_vals, ref_vals, common_t, sp)
         ax.grid(True, ls='--', alpha=0.35)
@@ -3690,7 +3701,7 @@ class ResultsViewer(QMainWindow):
             else:
                 txt = f"{h:02d}:{m:02d}   {py_at:.3g}"
             return ax_ref.text(0.0, 1.01, txt, transform=ax_ref.transAxes,
-                               va='bottom', ha='left', fontsize=8,
+                               va='bottom', ha='left', fontsize=12,
                                bbox=dict(boxstyle='round,pad=0.2',
                                          facecolor='white', alpha=0.9),
                                zorder=11, clip_on=False)
@@ -3886,7 +3897,7 @@ class ResultsViewer(QMainWindow):
 
         if not species_data:
             ax.text(0.5, 0.5, "No carbon-containing species found in simulation output.",
-                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+                    ha='center', va='center', transform=ax.transAxes, fontsize=13)
             self._cb_canvas.draw()
             return
 
@@ -3937,9 +3948,9 @@ class ResultsViewer(QMainWindow):
 
         handles, labels = ax.get_legend_handles_labels()
         if handles:
-            ncol = max(1, len(handles) // 20 + 1) if len(handles) > 15 else 1
-            ax.legend(handles, labels, loc='upper right',
-                      fontsize=6 if len(handles) > 15 else 8,
+            ncol = min(6, max(3, -(-len(handles) // 5)))          # below the axes in up to 6 columns: full-width plot, never over the stack
+            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.14), borderaxespad=0.0,
+                      fontsize=10 if len(handles) > 15 else 11,
                       ncol=ncol, framealpha=0.85).set_draggable(True)
 
         self._cb_fig.tight_layout()
@@ -4122,7 +4133,7 @@ class ResultsViewer(QMainWindow):
 
         if not species_data:
             ax.text(0.5, 0.5, "No nitrogen-containing species found in simulation output.",
-                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+                    ha='center', va='center', transform=ax.transAxes, fontsize=13)
             self._nb_canvas.draw()
             return
 
@@ -4133,7 +4144,7 @@ class ResultsViewer(QMainWindow):
             # one class, species by species: the big ones named, the rest summed into Other
             members = {sp: d for sp, d in species_data.items() if _nitrogen_class(sp) == view}
             if not members:
-                ax.text(0.5, 0.5, f"No {view} in this run.", ha='center', va='center', transform=ax.transAxes, fontsize=11)
+                ax.text(0.5, 0.5, f"No {view} in this run.", ha='center', va='center', transform=ax.transAxes, fontsize=13)
                 self._nb_canvas.draw(); return
             species_data = members
             total = sum(np.nan_to_num(d[1]) for d in members.values()); thr = _CB_OTHER_SPLIT * float(np.nanmax(total)) if np.nanmax(total) > 0 else 0.0
@@ -4143,7 +4154,7 @@ class ResultsViewer(QMainWindow):
             arrays = [a for _sp, a in big] + ([sum(rest)] if rest else [])
             colors = _distinct_colors(names)
             ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
-            ax.set_title(f"{view}: species contributions (ppb-N)", fontsize=10)
+            ax.set_title(f"{view}: species contributions (ppb-N)", fontsize=12)
         elif mode == "All Species":
             sorted_items = sorted(species_data.items(),
                                   key=lambda x: np.nanmean(x[1][1]), reverse=True)
@@ -4194,9 +4205,9 @@ class ResultsViewer(QMainWindow):
 
         handles, labels = ax.get_legend_handles_labels()
         if handles:
-            ncol = max(1, len(handles) // 20 + 1) if len(handles) > 15 else 1
-            ax.legend(handles, labels, loc='upper right',
-                      fontsize=6 if len(handles) > 15 else 8,
+            ncol = min(6, max(3, -(-len(handles) // 5)))          # below the axes in up to 6 columns: full-width plot, never over the stack
+            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.14), borderaxespad=0.0,
+                      fontsize=10 if len(handles) > 15 else 11,
                       ncol=ncol, framealpha=0.85).set_draggable(True)
 
         self._nb_fig.tight_layout()
@@ -4582,11 +4593,11 @@ class ResultsViewer(QMainWindow):
                 for sp in inj_species:
                     ppb = self.df[sp].values / M * 1e9
                     ax.plot(t, ppb, lw=1.3, label=sp, zorder=2)
-            ax.set_ylabel("ppb", fontsize=9)
+            ax.set_ylabel("ppb", fontsize=13)
         else:
             ax.text(0.5, 0.5, "No burst_injections in config.\n"
                     "Drag on the x-axis to select a time window.",
-                    transform=ax.transAxes, ha='center', va='center', fontsize=9, color='grey')
+                    transform=ax.transAxes, ha='center', va='center', fontsize=13, color='grey')
 
         # Time selector overlay (current window or point)
         t_lo, t_hi = self._cs_time_range
@@ -4601,11 +4612,11 @@ class ResultsViewer(QMainWindow):
                        label='Selected time')
 
         ax.xaxis.set_major_formatter(FuncFormatter(_fmt_hhmm))
-        ax.set_xlabel("Time of day (UTC)", fontsize=9)
-        ax.set_title("Injections & roof status   (drag to select time)", fontsize=10, fontweight='bold')
+        ax.set_xlabel("Time of day (UTC)", fontsize=13)
+        ax.set_title("Injections & roof status   (drag to select time)", fontsize=12, fontweight='bold')
         ax.grid(True, ls='--', alpha=0.35)
         if ax.get_legend_handles_labels()[0]:
-            ax.legend(loc='upper right', fontsize=7, framealpha=0.85).set_draggable(True)
+            ax.legend(loc='upper right', fontsize=11, framealpha=0.85).set_draggable(True)
         # Fixed margins (faster than tight_layout, which re-computes every call)
         self._cs_ts_fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.18)
         self._cs_ts_canvas.draw()
@@ -4740,7 +4751,7 @@ class ResultsViewer(QMainWindow):
         ]:
             ax.axvspan(lo, hi, color=color, alpha=0.18, zorder=0)
         for x, label in [(-2, 'LVOC'), (1, 'SVOC'), (4.5, 'IVOC'), (8.5, 'VOC')]:
-            ax.text(x, 2.25, label, ha='center', va='bottom', fontsize=9, color='#444')
+            ax.text(x, 2.25, label, ha='center', va='bottom', fontsize=13, color='#444')
 
         # Size scaling — global (across all species, all times) so markers
         # shrink visibly as concentrations decay instead of staying pinned
@@ -4758,11 +4769,11 @@ class ResultsViewer(QMainWindow):
         ax.set_ylim(-2.5, 2.5)
         ax.set_xticks(range(-3, 12))
         ax.set_xticklabels([str(x) if x % 2 == 0 else '' for x in range(-3, 12)])
-        ax.set_xlabel(r"Volatility  $\log_{10}(C^*)$  [µg m$^{-3}$]", fontsize=9)
-        ax.set_ylabel(r"Carbon Oxidation State  $\overline{\mathrm{OS}}_\mathrm{C}$", fontsize=9)
+        ax.set_xlabel(r"Volatility  $\log_{10}(C^*)$  [µg m$^{-3}$]", fontsize=13)
+        ax.set_ylabel(r"Carbon Oxidation State  $\overline{\mathrm{OS}}_\mathrm{C}$", fontsize=13)
         unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
         ax.set_title(f"Volatility basis set  (N={len(spc)} species, sized by {unit_lbl})",
-                     fontsize=10, fontweight='bold')
+                     fontsize=12, fontweight='bold')
 
         # Legend for classes
         from matplotlib.lines import Line2D
@@ -4771,12 +4782,12 @@ class ResultsViewer(QMainWindow):
                                  markersize=8, label=c)
                           for c in self._CS_CLASS_ORDER if c in spc['class'].values]
         if legend_handles:
-            ax.legend(handles=legend_handles, loc='lower right', fontsize=8,
+            ax.legend(handles=legend_handles, loc='lower right', fontsize=12,
                       framealpha=0.85).set_draggable(True)
 
         ax.grid(True, ls='--', alpha=0.3)
         ax.text(0.01, -0.14, "Li et al., ACP 16, 3327 (2016) · Kroll et al., Nat. Chem. 3, 133 (2011)",
-                transform=ax.transAxes, fontsize=6, color='#666', style='italic')
+                transform=ax.transAxes, fontsize=10, color='#666', style='italic')
 
         self._cs_vbs_fig.subplots_adjust(left=0.10, right=0.96, top=0.90, bottom=0.14)
         self._cs_vbs_canvas.draw()
@@ -4815,13 +4826,13 @@ class ResultsViewer(QMainWindow):
             ax_no.bar(x_all, vals, bottom=bottoms, color=color,
                       edgecolor='k', linewidth=0.3, label=f"nO={int(no)}")
             bottoms = bottoms + vals
-        ax_no.set_xlabel("Number of carbon atoms (nC)", fontsize=9)
-        ax_no.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=9)
-        ax_no.set_title("Stacked by oxygen number", fontsize=9)
+        ax_no.set_xlabel("Number of carbon atoms (nC)", fontsize=13)
+        ax_no.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=13)
+        ax_no.set_title("Stacked by oxygen number", fontsize=13)
         ax_no.set_xticks(x_all)
         ax_no.grid(True, axis='y', ls='--', alpha=0.35)
         if n_levels:
-            ax_no.legend(fontsize=6, loc='upper right', ncol=2, framealpha=0.85,
+            ax_no.legend(fontsize=10, loc='upper right', ncol=2, framealpha=0.85,
                          title='nO', title_fontsize=7).set_draggable(True)
 
         # ── RIGHT: nC vs Σconc, stacked by CHO family class ──────────
@@ -4836,16 +4847,16 @@ class ResultsViewer(QMainWindow):
                       color=self._CS_CLASS_COLORS[cls],
                       edgecolor='k', linewidth=0.3, label=cls)
             bottoms = bottoms + vals
-        ax_cl.set_xlabel("Number of carbon atoms (nC)", fontsize=9)
-        ax_cl.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=9)
-        ax_cl.set_title("Stacked by CHO family", fontsize=9)
+        ax_cl.set_xlabel("Number of carbon atoms (nC)", fontsize=13)
+        ax_cl.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=13)
+        ax_cl.set_title("Stacked by CHO family", fontsize=13)
         ax_cl.set_xticks(x_all)
         ax_cl.grid(True, axis='y', ls='--', alpha=0.35)
         if ax_cl.get_legend_handles_labels()[0]:
-            ax_cl.legend(fontsize=7, loc='upper right', framealpha=0.85).set_draggable(True)
+            ax_cl.legend(fontsize=11, loc='upper right', framealpha=0.85).set_draggable(True)
 
         self._cs_co_fig.suptitle("Composition by carbon number",
-                                  fontsize=10, fontweight='bold', y=0.99)
+                                  fontsize=12, fontweight='bold', y=0.99)
         self._cs_co_fig.subplots_adjust(left=0.07, right=0.98, top=0.88, bottom=0.16, wspace=0.28)
         self._cs_co_canvas.draw()
 
@@ -4885,10 +4896,10 @@ class ResultsViewer(QMainWindow):
         ax.axhline(0.0, color='k', lw=0.6, ls='--', alpha=0.5, zorder=1)
 
         unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
-        ax.set_xlabel("Molecular mass  (g/mol)", fontsize=9)
-        ax.set_ylabel("Mass defect  (m − round(m))", fontsize=9)
+        ax.set_xlabel("Molecular mass  (g/mol)", fontsize=13)
+        ax.set_ylabel("Mass defect  (m − round(m))", fontsize=13)
         ax.set_title(f"Mass defect plot  (N={len(spc)} species, sized by {unit_lbl})",
-                     fontsize=10, fontweight='bold')
+                     fontsize=12, fontweight='bold')
         ax.grid(True, ls='--', alpha=0.3)
 
         from matplotlib.lines import Line2D
@@ -4897,7 +4908,7 @@ class ResultsViewer(QMainWindow):
                                  markersize=8, label=c)
                           for c in self._CS_CLASS_ORDER if c in spc['class'].values]
         if legend_handles:
-            ax.legend(handles=legend_handles, loc='lower right', fontsize=8,
+            ax.legend(handles=legend_handles, loc='lower right', fontsize=12,
                       framealpha=0.85).set_draggable(True)
 
         self._cs_fam_fig.subplots_adjust(left=0.10, right=0.96, top=0.90, bottom=0.14)
@@ -5274,7 +5285,7 @@ class ResultsViewer(QMainWindow):
                 annot = ax.annotate(
                     txt, xy=xy_from(row),
                     xytext=(10, 10), textcoords='offset points',
-                    fontsize=8, bbox=dict(boxstyle='round,pad=0.4',
+                    fontsize=12, bbox=dict(boxstyle='round,pad=0.4',
                                           fc='lightyellow', ec='k', alpha=0.9))
                 setattr(self, annot_attr, annot)
         canvas.draw_idle()

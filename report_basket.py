@@ -128,31 +128,35 @@ class FigureList:
         key = f"{self._next:03d}"; self._next += 1
         base = f"{key}_{_slug(title)}"; svg, png = base + ".svg", base + ".png"
         pw, ph = panel_size
+        pad = 0.06                                     # inches of white around each cropped panel
         svgs, pngs = [], []
         for fig in figs:
             orig = tuple(float(x) for x in fig.get_size_inches())
             fig.set_size_inches(pw, ph, forward=False)
-            try:
-                b = io.BytesIO(); fig.savefig(b, format="svg", facecolor="white"); svgs.append(b.getvalue().decode("utf-8"))
-                b = io.BytesIO(); fig.savefig(b, format="png", dpi=dpi, facecolor="white"); pngs.append(b.getvalue())
+            try:                                       # tight crops: the composite has no dead space between panels
+                b = io.BytesIO(); fig.savefig(b, format="svg", facecolor="white", bbox_inches="tight", pad_inches=pad); svgs.append(b.getvalue().decode("utf-8"))
+                b = io.BytesIO(); fig.savefig(b, format="png", dpi=dpi, facecolor="white", bbox_inches="tight", pad_inches=pad); pngs.append(b.getvalue())
             finally:
                 fig.set_size_inches(*orig, forward=False)
                 try:
                     fig.canvas.draw_idle()
                 except Exception:
                     pass
-        # PNG: paste the panels on a white sheet
+        # PNG: paste the cropped panels on a white sheet, column widths / row heights from the crops
         from PIL import Image
         ims = [Image.open(io.BytesIO(b)).convert("RGB") for b in pngs]
-        cw, ch = max(i.size[0] for i in ims), max(i.size[1] for i in ims)
-        sheet = Image.new("RGB", (cols * cw, rows * ch), "white")
+        col_w = [max((im.size[0] for k, im in enumerate(ims) if k % cols == c), default=0) for c in range(cols)]
+        row_h = [max((im.size[1] for k, im in enumerate(ims) if k // cols == r), default=0) for r in range(rows)]
+        xs = [sum(col_w[:c]) for c in range(cols)]; ys = [sum(row_h[:r]) for r in range(rows)]
+        sheet = Image.new("RGB", (max(1, sum(col_w)), max(1, sum(row_h))), "white")
         for k, im in enumerate(ims):
-            r, c = divmod(k, cols); sheet.paste(im, (c * cw + (cw - im.size[0]) // 2, r * ch + (ch - im.size[1]) // 2))
+            r, c = divmod(k, cols); sheet.paste(im, (xs[c] + (col_w[c] - im.size[0]) // 2, ys[r] + (row_h[r] - im.size[1]) // 2))
         sheet.save(os.path.join(self.store_dir, png))
-        # SVG: nest each panel's document, ids prefixed per panel
+        # SVG: nest each panel's (cropped) document at the same places, in points; ids prefixed per panel
         NS = "http://www.w3.org/2000/svg"; ET.register_namespace("", NS); ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
-        root = ET.Element(f"{{{NS}}}svg", {"width": f"{cols * pw:g}in", "height": f"{rows * ph:g}in",
-                                          "viewBox": f"0 0 {cols * pw * 72:g} {rows * ph * 72:g}", "version": "1.1"})
+        px2pt = 72.0 / dpi
+        W, H = sum(col_w) * px2pt, sum(row_h) * px2pt
+        root = ET.Element(f"{{{NS}}}svg", {"width": f"{W / 72:.3f}in", "height": f"{H / 72:.3f}in", "viewBox": f"0 0 {W:.1f} {H:.1f}", "version": "1.1"})
         ET.SubElement(root, f"{{{NS}}}rect", {"width": "100%", "height": "100%", "fill": "white"})
         for k, text in enumerate(svgs):
             text = re.sub(r'id="([^"]+)"', lambda m: f'id="p{k}_{m.group(1)}"', text)
@@ -160,14 +164,16 @@ class FigureList:
             text = re.sub(r'href="#([^"]+)"', lambda m: f'href="#p{k}_{m.group(1)}"', text)
             el = ET.fromstring(text)
             r, c = divmod(k, cols)
-            nested = ET.SubElement(root, f"{{{NS}}}svg", {"x": f"{c * pw * 72:g}", "y": f"{r * ph * 72:g}", "width": f"{pw * 72:g}", "height": f"{ph * 72:g}",
-                                                        "viewBox": el.get("viewBox", f"0 0 {pw * 72:g} {ph * 72:g}")})
+            w_pt, h_pt = ims[k].size[0] * px2pt, ims[k].size[1] * px2pt
+            x = (xs[c] + (col_w[c] - ims[k].size[0]) / 2) * px2pt; y = (ys[r] + (row_h[r] - ims[k].size[1]) / 2) * px2pt
+            nested = ET.SubElement(root, f"{{{NS}}}svg", {"x": f"{x:.1f}", "y": f"{y:.1f}", "width": f"{w_pt:.1f}", "height": f"{h_pt:.1f}",
+                                                        "viewBox": el.get("viewBox", f"0 0 {w_pt:.1f} {h_pt:.1f}"), "preserveAspectRatio": "xMidYMid meet"})
             for child in list(el):
                 nested.append(child)
         ET.ElementTree(root).write(os.path.join(self.store_dir, svg), encoding="utf-8", xml_declaration=True)
         it = FigureItem(key=key, title=title, caption=caption if caption is not None else f"{self.run_name}: {title}",
                         source=source, svg=svg, png=png, added=_dt.datetime.now().isoformat(timespec="seconds"),
-                        width_in=cols * pw, height_in=rows * ph)
+                        width_in=W / 72, height_in=H / 72)
         self.items.append(it); self.save()
         return it
 

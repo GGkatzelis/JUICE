@@ -39,7 +39,11 @@ PAGES = {
     "5  Chamber conditions": "page_conditions",
 }
 MODEL_COLORS = ["#6b3e85", "#3b6fc4", "#2e9e4f", "#d9822b", "#c0392b", "#8e6c3a", "#1aa3a3", "#7f7f7f"]
-PANEL_MIN_H = 190
+PANEL_MIN_H = 240
+try:
+    from juice_theme import PLOT_FONT as F
+except Exception:
+    F = dict(base=13, title=14, label=13, tick=11, legend=11, small=10, readout=11)
 
 
 class PanelGroup:
@@ -104,22 +108,22 @@ class InteractivePanel(QWidget):
     # ── layout ──
     def finish(self, ylabel: str, ylabel2: str = ""):
         ax = self.ax
-        ax.text(0.01, 0.97, self.title, transform=ax.transAxes, fontsize=8.5, color=ACCENT, fontweight="bold", va="top", ha="left")
-        ax.set_ylabel(ylabel, fontsize=7.5, labelpad=2)
+        ax.set_title(self.title, loc="left", fontsize=F["title"], color=ACCENT, fontweight="bold", pad=4)   # above the axes: never under a legend
+        ax.set_ylabel(ylabel, fontsize=F["label"], labelpad=3)
         if self.xlabel:
-            ax.set_xlabel("hour of day (UTC)", fontsize=7.5, labelpad=1)
-        ax.tick_params(labelsize=7, pad=2, length=2); ax.grid(True, alpha=0.25)
+            ax.set_xlabel("hour of day (UTC)", fontsize=F["label"], labelpad=2)
+        ax.tick_params(labelsize=F["tick"], pad=2, length=3); ax.grid(True, alpha=0.25)
         if self.ax2 is not None:
-            self.ax2.set_ylabel(ylabel2, fontsize=7.5, labelpad=2); self.ax2.tick_params(labelsize=7, pad=2, length=2)
+            self.ax2.set_ylabel(ylabel2, fontsize=F["label"], labelpad=3); self.ax2.tick_params(labelsize=F["tick"], pad=2, length=3)
         handles, labels = ax.get_legend_handles_labels()
         if self.ax2 is not None:
             h2, l2 = self.ax2.get_legend_handles_labels(); handles += h2; labels += l2
         if handles:
-            leg = ax.legend(handles, labels, fontsize=6.5, loc="best", framealpha=0.8, borderpad=0.3, ncol=2 if len(handles) > 4 else 1,
+            leg = ax.legend(handles, labels, fontsize=F["legend"], loc="best", framealpha=0.85, borderpad=0.3, ncol=2 if len(handles) > 4 else 1,
                             labelspacing=0.2, handlelength=1.5, borderaxespad=0.2)
             for lh, art in zip(leg.get_lines(), handles):
                 lh.set_picker(True); lh.set_pickradius(6); self._lines[lh] = art
-        self.fig.subplots_adjust(left=0.11, right=0.99 if self.ax2 is None else 0.9, top=0.97, bottom=0.17 if self.xlabel else 0.1)
+        self.fig.subplots_adjust(left=0.13, right=0.985 if self.ax2 is None else 0.88, top=0.88, bottom=0.2 if self.xlabel else 0.1)
         self.canvas.draw_idle()
 
     # ── interaction ──
@@ -229,7 +233,7 @@ class InteractivePanel(QWidget):
         self._vline = self.ax.axvline(x, color="#888", lw=0.8, ls=":")
         h, m = int(x), int(round((x - int(x)) * 60))
         self._text = self.ax.annotate(f"{h:02d}:{m:02d}\n" + "\n".join(rows), xy=(x, 0.02), xycoords=("data", "axes fraction"),
-                                      va="bottom", ha="left", fontsize=6.5, xytext=(4, 0), textcoords="offset points",
+                                      va="bottom", ha="left", fontsize=F["readout"], xytext=(4, 0), textcoords="offset points",
                                       bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#aaa", alpha=0.9))
         self.canvas.draw_idle()
 
@@ -355,8 +359,9 @@ class OverviewTab(QWidget):
         self.head.setText(self._headline(date))
         self.status.setText(("observations " + (note[0] if note else "") + ": " + (", ".join(sorted(obs)) or "none of the mapped series present"))
                             if self.obs_box.isChecked() else "model only")
-        n = len(panels); grid_cols = 3 if n >= 5 else 2
+        n = len(panels); grid_cols = next((p["cols"] for p in panels if p.get("cols")), 3 if n >= 5 else 2)
         rows = (n + grid_cols - 1) // grid_cols
+        self.last_grid = (rows, grid_cols)               # QGridLayout never forgets old columns; this is the real arrangement
         spans = self._hv_spans()
         for i, p in enumerate(panels):
             if p.get("scatter11"):
@@ -417,10 +422,16 @@ class OverviewTab(QWidget):
         return [k for k in ("NO", "NO2", "O3", "CO", "HONO", "OH", "HO2", "RO2") if k in cols]
 
     def page_one_to_one(self):
-        out = [dict(title=f"{k}: model vs {ep.OBS_MAP[k][4]}", species=[k], kind=ep.OBS_MAP[k][5], obs=[k], log=False, scatter11=True, needs_obs=True)
-               for k in self._measured_species()]
+        """One row per measured species: the time series (model line, measurement dots) on the left,
+        the model-vs-measurement correlation on the right."""
+        out = []
+        for k in self._measured_species():
+            kind = ep.OBS_MAP[k][5]
+            out.append(dict(title=k, species=[k], kind=kind, obs=[k], log=False, needs_obs=True, cols=2))
+            out.append(dict(title=f"{k}: model vs {ep.OBS_MAP[k][4]}", species=[k], kind=kind, obs=[k], log=False, scatter11=True, needs_obs=True, cols=2))
         if os.path.isfile(os.path.splitext(self.v.csv_path)[0] + ".pd"):
-            out.append(dict(title="kOH: model vs LP-LIF", species=[], kind="s-1", obs=["kOH"], log=False, scatter11=True, koh=True, needs_obs=True))
+            out.append(dict(title="OH reactivity", species=[], kind="s-1", obs=["kOH"], log=False, koh=True, needs_obs=True, cols=2))
+            out.append(dict(title="kOH: model vs LP-LIF", species=[], kind="s-1", obs=["kOH"], log=False, scatter11=True, koh=True, needs_obs=True, cols=2))
         return out
 
     def page_residuals(self):

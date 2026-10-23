@@ -33,6 +33,10 @@ from overview_tab import InteractivePanel, PanelGroup, ACCENT
 PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
            "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5", "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5"]
 LAYOUTS = {1: (1, 1), 2: (2, 1), 3: (3, 1), 4: (2, 2), 6: (2, 3)}      # panels → (rows, cols)
+try:
+    from juice_theme import PLOT_FONT as F
+except Exception:
+    F = dict(base=13, title=14, label=13, tick=11, legend=11, small=10, readout=11)
 OBS_SPECIES = {"NO", "NO2", "O3", "CO", "HONO", "OH", "HO2", "RO2"}      # keys of OBS_MAP that are model species
 
 
@@ -43,7 +47,7 @@ class CorrelationPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
-        self.fig = Figure(figsize=(5.0, 2.6)); self.canvas = FigureCanvas(self.fig); self.canvas.setMinimumHeight(190)
+        self.fig = Figure(figsize=(5.0, 2.6)); self.canvas = FigureCanvas(self.fig); self.canvas.setMinimumHeight(240)
         self.ax = self.fig.add_subplot(111); lay.addWidget(self.canvas)
         self._pts: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []    # (label, x, y, hours)
         self._text = None; self._home = None
@@ -60,16 +64,16 @@ class CorrelationPanel(QWidget):
             lab, y = ys[0]
             ok = np.isfinite(x) & np.isfinite(y)
             sc = ax.scatter(x[ok], y[ok], c=hours[ok], cmap="viridis", s=9, alpha=0.8, label=lab)
-            cb = self.fig.colorbar(sc, ax=ax, pad=0.01); cb.set_label("hour (UTC)", fontsize=7); cb.ax.tick_params(labelsize=6.5)
+            cb = self.fig.colorbar(sc, ax=ax, pad=0.01); cb.set_label("hour (UTC)", fontsize=F["small"]); cb.ax.tick_params(labelsize=F["small"])
             self._pts.append((lab, x[ok], y[ok], hours[ok])); self._fit(ax, x[ok], y[ok], lab, "#c0392b")
-            ax.set_ylabel(lab, fontsize=7.5, labelpad=2)
+            ax.set_ylabel(lab, fontsize=F["label"], labelpad=3)
         else:
             for i, (lab, y) in enumerate(ys):
                 ok = np.isfinite(x) & np.isfinite(y); c = PALETTE[i % len(PALETTE)]
                 ax.scatter(x[ok], y[ok], color=c, s=8, alpha=0.7, label=lab)
                 self._pts.append((lab, x[ok], y[ok], hours[ok])); self._fit(ax, x[ok], y[ok], lab, c)
-            ax.set_ylabel("y", fontsize=7.5, labelpad=2)
-        ax.set_xlabel(x_label, fontsize=7.5, labelpad=1)
+            ax.set_ylabel("y", fontsize=F["label"], labelpad=3)
+        ax.set_xlabel(x_label, fontsize=F["label"], labelpad=2)
         if one_to_one:                                   # same range on both axes + the 1:1 line
             allv = np.concatenate([np.asarray(x, float)] + [np.asarray(y, float) for _l, y in ys]); allv = allv[np.isfinite(allv)]
             if allv.size:
@@ -77,11 +81,11 @@ class CorrelationPanel(QWidget):
                 ax.set_xlim(lo - pad, hi + pad); ax.set_ylim(lo - pad, hi + pad)
                 ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="#444", lw=0.9, ls=":", label="1:1")
             ax.set_aspect("equal", adjustable="box")
-        ax.text(0.01, 0.97, title, transform=ax.transAxes, fontsize=8.5, color=ACCENT, fontweight="bold", va="top", ha="left")
-        ax.tick_params(labelsize=7, pad=2, length=2); ax.grid(True, alpha=0.25)
+        ax.set_title(title, loc="left", fontsize=F["title"], color=ACCENT, fontweight="bold", pad=4)
+        ax.tick_params(labelsize=F["tick"], pad=2, length=3); ax.grid(True, alpha=0.25)
         if ax.get_legend_handles_labels()[0]:
-            ax.legend(fontsize=6.5, loc="lower right", framealpha=0.8, borderpad=0.3, labelspacing=0.2)
-        self.fig.subplots_adjust(left=0.12, right=0.98 if len(ys) != 1 else 0.9, top=0.97, bottom=0.17)
+            ax.legend(fontsize=F["legend"], loc="lower right", framealpha=0.85, borderpad=0.3, labelspacing=0.2)
+        self.fig.subplots_adjust(left=0.14, right=0.98 if len(ys) != 1 else 0.9, top=0.88, bottom=0.2)
         self._home = (ax.get_xlim(), ax.get_ylim()); self.canvas.draw_idle()
 
     @staticmethod
@@ -111,7 +115,7 @@ class CorrelationPanel(QWidget):
             _d, lab, xv, yv, hv = best
             hh, mm = int(hv), int(round((hv - int(hv)) * 60))
             self._text = self.ax.annotate(f"{hh:02d}:{mm:02d}  {lab}\nx {xv:.3g}, y {yv:.3g}", xy=(xv, yv), xytext=(6, 6), textcoords="offset points",
-                                          fontsize=6.5, bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#aaa", alpha=0.9))
+                                          fontsize=F["readout"], bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#aaa", alpha=0.9))
         self.canvas.draw_idle()
 
     def _clear(self, draw=True):
@@ -341,6 +345,7 @@ class TimeseriesTab(QWidget):
                 w.deleteLater()
         self.group = PanelGroup()
         rows, cols = LAYOUTS[self.n]
+        self.last_grid = (rows, cols)
         obs = self._observations() if self.obs_box.isChecked() else {}
         hv = self._hv_spans()
         for i in range(self.n):
