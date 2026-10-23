@@ -18,16 +18,17 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BAT = os.path.join(HERE, "JUICE.bat")
+BAT_RESULTS = os.path.join(HERE, "JUICE Results.bat")
 ICO = os.path.join(HERE, "JUICE.ico")
 
 
-def make(link_path: str) -> None:
+def make(link_path: str, target: str = BAT, description: str = "JUICE - chamber experiment to model run") -> None:
     ps = f'''
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut("{link_path}")
-$s.TargetPath = "{BAT}"
+$s.TargetPath = "{target}"
 $s.WorkingDirectory = "{HERE}"
 $s.IconLocation = "{ICO},0"
-$s.Description = "JUICE - chamber experiment to model run"
+$s.Description = "{description}"
 $s.Save()
 '''
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
@@ -63,9 +64,12 @@ if __name__ == "__main__":
         raise SystemExit("Windows only")
     if "--here" in sys.argv:
         make(os.path.join(HERE, "JUICE.lnk"))
+        make(os.path.join(HERE, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")
     else:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         make(os.path.join(desktop, "JUICE.lnk"))
+        make(os.path.join(desktop, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")
     if "--startmenu" in sys.argv:
         start = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
         make(os.path.join(start, "JUICE.lnk"))
+        make(os.path.join(start, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")

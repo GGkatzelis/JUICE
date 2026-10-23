@@ -5439,19 +5439,39 @@ def main():
         print(f"[ERROR] File not found: {csv_path}")
         csv_path = None
 
-    # No path (or bad path): open a file picker if PyQt is available
+    # No path (or bad path): open a file picker — start where the runs are (TOML output_root)
     if not csv_path and HAS_PYQT:
         app = QApplication.instance() or QApplication(sys.argv)
-        scenarios_root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                      "MCM_tested_scenarios")
-        start_dir = scenarios_root if os.path.isdir(scenarios_root) else os.getcwd()
+        try:
+            from juice_theme import apply_theme
+            apply_theme(app)
+        except Exception:
+            pass
+        if _LOADER is not None:
+            _LOADER.hide()
+        here = os.path.dirname(os.path.abspath(__file__))
+        start_dir = ""
+        if not args.toml:
+            args.toml = next((p for p in (os.path.join(here, "GG_GUI.toml"), os.path.join(here, "FR_GUI.toml")) if os.path.isfile(p)), None)
+        try:
+            import tomllib as _tl
+            with open(args.toml, "rb") as fh:
+                _paths = _tl.load(fh).get("paths", {})
+            start_dir = next((d for d in (_paths.get("output_root"), _paths.get("easy_root")) if d and os.path.isdir(d)), "")
+        except Exception:
+            pass
+        if not start_dir:
+            scenarios_root = os.path.join(here, "MCM_tested_scenarios")
+            start_dir = scenarios_root if os.path.isdir(scenarios_root) else os.getcwd()
         csv_path, _ = QFileDialog.getOpenFileName(
-            None, "Select simulation_results CSV", start_dir,
-            "Simulation results (simulation_results*.csv);;All CSV (*.csv);;All files (*)"
+            None, "Open a JUICE or FACSIMILE result", start_dir,
+            "Results (*.cs *_cs.csv);;All files (*)"
         )
         if not csv_path:
             print(">>> [VIEWER] No file selected. Exiting.")
             return
+        if _LOADER is not None:
+            _LOADER.show()
 
     if csv_path and os.path.exists(csv_path):
         print(f">>> [VIEWER] Loading results from: {csv_path}")
