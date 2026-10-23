@@ -1814,7 +1814,7 @@ class ResultsViewer(QMainWindow):
     def _report_figures(self):
         """[(title, Figure)] of the tab currently shown — what 'Add to figure list' snapshots."""
         name = self.right_tabs.tabText(self.right_tabs.currentIndex()); tab = self.right_tabs.currentWidget()
-        figs = []
+        figs = []; self._report_grid = None; self._report_panel = (6.4, 3.8)
         grid = getattr(tab, "grid", None)
         if grid is not None:                                           # Overview / Timeseries panel grids
             for i in range(grid.count()):
@@ -1822,14 +1822,22 @@ class ResultsViewer(QMainWindow):
                 if w is not None and getattr(w, "fig", None) is not None:
                     title = getattr(w, "title", "") or f"{name} panel {i + 1}"
                     figs.append((title, w.fig))
+            try:
+                self._report_grid = (grid.rowCount(), grid.columnCount())      # same arrangement as on screen
+                if grid.columnCount() == 1:
+                    self._report_panel = (10.0, 3.6)                            # stacked panels: wide
+            except Exception:
+                pass
         elif name == "Process Analysis":
             figs.append((self.pa_fig.axes[0].get_title() if self.pa_fig.axes else "Process analysis", self.pa_fig))
         elif name == "Reactivity":
             figs.append((f"{self.rx_combo.currentText()} reactivity", self.rx_fig))
         elif name == "Budgets":
+            self._report_grid = (2, 1); self._report_panel = (11.0, 4.0)
             figs.append(("Carbon budget", self._cb_fig))
             figs.append(((self._nb_view.currentText() if hasattr(self, "_nb_view") else "Nitrogen") + " budget", self._nb_fig))
         elif name == "Chemical Space":
+            self._report_grid = (2, 2); self._report_panel = (6.4, 4.4)
             for title, fig in (("Injections and roof status", self._cs_ts_fig), ("Volatility basis set", self._cs_vbs_fig),
                                ("Composition by carbon number", self._cs_co_fig), ("Mass defect", self._cs_fam_fig)):
                 figs.append((title, fig))
@@ -1846,7 +1854,17 @@ class ResultsViewer(QMainWindow):
         figs = self._report_figures()
         if not figs:
             self.statusBar().showMessage("nothing drawn on this tab yet", 4000); return
-        n = self.figure_dock.add_figures(figs, source=name)
+        if len(figs) > 1:                       # several figures on the tab → one figure with sub-panels, as on screen
+            try:
+                cap = f"{self.figure_list.run_name}: {name} — " + "; ".join(t for t, _f in figs)
+                self.figure_list.add_composite([f for _t, f in figs], name, source=name, caption=cap, grid=getattr(self, "_report_grid", None),
+                                               panel_size=getattr(self, "_report_panel", (6.4, 3.8)))
+                self.figure_dock.refresh(); n = 1
+            except Exception as e:
+                print(f"[figure list] composite failed ({e}); adding the panels separately")
+                n = self.figure_dock.add_figures(figs, source=name)
+        else:
+            n = self.figure_dock.add_figures(figs, source=name)
         self.statusBar().showMessage(f"{n} figure(s) from {name} added to the list ({len(self.figure_list.items)} in total)", 5000)
         if not self.figure_dock.isVisible():
             self.figure_dock.show()
