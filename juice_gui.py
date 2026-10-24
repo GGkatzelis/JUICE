@@ -323,10 +323,15 @@ class ReviewPanel(QWidget):
         hb0.addStretch(); rb = QPushButton("Refresh"); rb.clicked.connect(lambda: self.win.refresh_all(force_plot=True)); hb0.addWidget(rb)
         lay.addLayout(hb0)
         self.tabs = QTabWidget(); lay.addWidget(self.tabs, stretch=1)
-        st = QWidget(); sl = QVBoxLayout(st)
+        st = QWidget(); sl = QVBoxLayout(st); sl.setSpacing(4)
         self.summary = QLabel(""); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        sl.addWidget(self.summary)
-        self.checks = QListWidget(); self.checks.setMaximumHeight(120); self.checks.setWordWrap(True); sl.addWidget(self.checks)
+        sl.addWidget(self.summary)                                 # one line: name, day, time window, conditions
+        self.checks_title = QLabel("<b>Needs attention</b>"); sl.addWidget(self.checks_title)
+        self.checks = QListWidget(); self.checks.setMaximumHeight(120); self.checks.setWordWrap(True)
+        self.checks.setToolTip("click an entry: the step it belongs to opens and the field is pointed out"); sl.addWidget(self.checks)
+        self.checks.itemClicked.connect(self._guide_clicked)
+        self.fix = QLabel(""); self.fix.setWordWrap(True); self.fix.setStyleSheet("color: #9a6b00; font-size: 10px; padding: 2px 4px;"); self.fix.hide()
+        sl.addWidget(self.fix)
         sl.addWidget(QLabel("<b>What goes into the input files</b>"))
         self.bullets = QListWidget(); self.bullets.setWordWrap(True); sl.addWidget(self.bullets, stretch=1)
         self.tabs.addTab(st, "Summary")
@@ -353,15 +358,98 @@ class ReviewPanel(QWidget):
             self.refresh_files(); return []
         known = mechanism_species(self.win.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
         msgs = validate(spec, known)
-        self.summary.setText("<b>" + (spec.name or "(no name)") + "</b><br>" + ReviewPage._summary(spec).replace("\n", "<br>"))
+        c = spec.conditions
+        self.summary.setText(f"<b>{spec.name or '(no name)'}</b> — {c.date or '(no date)'} {c.start}–{c.end} UTC, "
+                             f"{'measured conditions from the archive' if c.source == 'archive' else 'manual conditions'}"
+                             f"{', step ' + str(c.step_s) + ' s' if getattr(c, 'step_s', None) else ''}")
+        self.fix.hide()
+        n_err = sum(1 for lvl, _m in msgs if lvl == "error")
+        self.checks_title.setText("<b>Needs attention</b>" + (f" — {n_err} to fix before running, {len(msgs) - n_err} to check" if msgs else " — nothing"))
         for lvl, m in msgs:
-            self.checks.addItem(QListWidgetItem(("✖ " if lvl == "error" else "⚠ ") + m))
+            it = QListWidgetItem(("✖ " if lvl == "error" else "⚠ ") + m); it.setData(Qt.ItemDataRole.UserRole, (lvl, m))
+            it.setToolTip("click: go to the step and see how to fix it"); self.checks.addItem(it)
         if not msgs:
             self.checks.addItem(QListWidgetItem("✔ No problems found"))
         for b in spec_bullets(spec):
             self.bullets.addItem(QListWidgetItem("• " + b))
         self.refresh_files()
         return msgs
+
+    # ── guidance: a clicked warning opens its step and points at the field ──
+    def _guide(self, msg: str):
+        """(step index, how to fix, action) for a validation message."""
+        import re as _re
+        w = self.win; c, s0, ch, inj = w.page_cond, w.page_start, w.page_chem, w.page_inj
+
+        def focus(widget):
+            def act():
+                try:
+                    widget.setFocus(); widget.selectAll() if hasattr(widget, "selectAll") else None
+                except Exception:
+                    pass
+            return act
+
+        def inj_row(name):
+            def act():
+                t = inj.table
+                for r in range(t.rowCount()):
+                    it = t.item(r, 1)
+                    if it is not None and it.text().strip() == name:
+                        t.selectRow(r); t.scrollToItem(it); t.setFocus(); return
+            return act
+
+        m = _re.search(r"Injection '([^']+)': product '([^']+)' is not a species", msg)
+        if m:
+            name, sp = m.group(1), m.group(2)
+
+            def act():
+                ch.mode_compounds.setChecked(True); ch.search.setText(sp); ch.search.setFocus()
+            return (1, f"'{sp}' is injected but not in the mechanism. Either add it here — the search is prefilled, pick it and press "
+                       f"'Add' — or go to Injections and replace it in '{name}' by a surrogate that is in the mechanism "
+                       f"(the mixture dialog's formula search suggests one).", act)
+        m = _re.search(r"Injection '([^']+)': start time", msg)
+        if m:
+            return (2, f"Enter the start of '{m.group(1)}' as HH:MM (UTC), e.g. 08:30.", inj_row(m.group(1)))
+        m = _re.search(r"Injection '([^']+)': amount", msg)
+        if m:
+            return (2, f"'{m.group(1)}' uses an expression instead of a number; fine if intended, otherwise type the total ppb.", inj_row(m.group(1)))
+        m = _re.search(r"Injection '([^']+)': neither modelled nor timed", msg)
+        if m:
+            return (2, f"'{m.group(1)}' has neither a product nor a start time, so it does nothing: give it a product (modelled) "
+                       f"or a start (recorded in the ENZ), or remove the row.", inj_row(m.group(1)))
+        if msg.startswith("No injections"):
+            return (2, "Add the injections of the day: 'Add action' for NO, O3, humidification …, '+ mixture …' for a solution, "
+                       "or import them from the SAPHIR wiki page on the Experiment step.", None)
+        if msg.startswith("Enter the experiment date") or msg.startswith("Time window") or msg.startswith("Date or time"):
+            return (0, "Fill in the date (YYYY-MM-DD) and the start and end time (HH:MM UTC) under 'Where and when'.", focus(c.date))
+        if msg.startswith("Choose where the chamber conditions"):
+            return (0, "Tick 'measured (archive)' when the day is on the Z: drive, otherwise 'manual' and enter T, p, humidity and flow.", focus(c.src_manual))
+        if msg.startswith("No chemistry"):
+            return (1, "Search a compound by name or formula and add it to the chosen compounds, or choose an existing include set.",
+                    lambda: (ch.search.setFocus()))
+        if msg.startswith("Measured J values"):
+            return (0, "There is no archive data for this day: switch the conditions to manual (clear-sky photolysis), "
+                       "or correct the date / archive path.", focus(c.src_manual))
+        if msg.startswith("Roof never opens"):
+            return (0, "If the chamber roof was opened, add the open and close time to the roof table; a dark experiment needs nothing.",
+                    lambda: (c.roof.setFocus()))
+        return (None, "", None)
+
+    def _guide_clicked(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not data:
+            self.fix.hide(); return
+        lvl, msg = data
+        step, hint, act = self._guide(msg)
+        if step is None:
+            self.fix.setText("No guidance for this message yet."); self.fix.show(); return
+        self.win.steps.setCurrentRow(step)
+        if act is not None:
+            try:
+                act()
+            except Exception:
+                pass
+        self.fix.setText(f"<b>How to fix</b> ({STEPS[step]} step): {hint}"); self.fix.show()
 
     def refresh_files(self):
         self.files.clear()
