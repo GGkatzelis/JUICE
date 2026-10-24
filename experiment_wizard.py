@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel
 from PyQt6.QtGui import QStandardItemModel, QStandardItem
-from PyQt6.QtWidgets import (QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
@@ -1378,21 +1378,28 @@ class WikiImportDialog(QDialog):
                     1, 0, 1, 6)
         lay.addLayout(g)
         self.status = QLabel(""); lay.addWidget(self.status)
-        lay.addWidget(QLabel("Pasted action log (optional) — lines 'HH:MM <code> …'; press Parse"))
-        self.paste = QPlainTextEdit(); self.paste.setMaximumHeight(90)
+        # left: the original page text (fetched, loaded or pasted) — right: what was made of it
+        split = QSplitter(Qt.Orientation.Horizontal); lay.addWidget(split, stretch=1)
+        left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(QLabel("<b>Original wiki text</b> — as fetched / loaded, or paste an action log here; select a row on the right to find its line"))
+        self.paste = QPlainTextEdit()
         self.paste.setPlaceholderText("07:30 H F.R. CHANGE: humidification start\n08:15 h F.R. CHANGE: humidification stop\n"
                                       "08:40 X M.S. CHANGE: 20 µl isoprene injected\n09:30 R F.R. CHANGE: open roof")
-        lay.addWidget(self.paste)
-        pb = QPushButton("Parse pasted text"); pb.clicked.connect(self._parse_paste)
-        hb = QHBoxLayout(); hb.addWidget(pb); hb.addStretch(); lay.addLayout(hb)
-        lay.addWidget(QLabel("Action log — untick lines that should not be used"))
+        ll.addWidget(self.paste, stretch=1)
+        pb = QPushButton("Parse this text"); pb.clicked.connect(self._parse_paste)
+        hb = QHBoxLayout(); hb.addWidget(pb); hb.addStretch(); ll.addLayout(hb)
+        split.addWidget(left)
+        right = QWidget(); rl = QVBoxLayout(right); rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(QLabel("<b>Action log</b> — what the parser read; untick lines that should not be used"))
         self.table = _table(["Use", "Time", "Code", "Action", "Wiki text"])
         for c in (0, 1, 2):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemChanged.connect(lambda _it: self._preview())
-        lay.addWidget(self.table, stretch=2)
-        lay.addWidget(QLabel("What will be imported — ⚠ marks things the wiki did not say clearly"))
-        self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); lay.addWidget(self.preview, stretch=1)
+        self.table.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._show_source_line(r))
+        rl.addWidget(self.table, stretch=2)
+        rl.addWidget(QLabel("<b>What will be imported</b> — ⚠ marks things the wiki did not say clearly"))
+        self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); rl.addWidget(self.preview, stretch=1)
+        split.addWidget(right); split.setSizes([420, 680])
         hbr = QHBoxLayout()
         self.replace_box = QCheckBox("Replace the current injection rows (untick to append)"); self.replace_box.setChecked(True)
         hbr.addWidget(self.replace_box); hbr.addStretch()
@@ -1413,6 +1420,7 @@ class WikiImportDialog(QDialog):
 
     def _fetched(self, text: str):
         self.fetch_btn.setEnabled(True)
+        self.paste.setPlainText(text)                      # keep the original next to the parsed log
         self._set_events(saphir_wiki.parse_action_log(text), f"wiki {self.date.text().strip()}")
 
     def _fetch_failed(self, msg: str):
@@ -1430,6 +1438,7 @@ class WikiImportDialog(QDialog):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", os.path.basename(p) + " " + text[:2000])
         if m and not self.date.text().strip():
             self.date.setText(m.group(1))
+        self.paste.setPlainText(text)
         self._set_events(saphir_wiki.parse_action_log(text), os.path.basename(p))
 
     def _parse_paste(self):
@@ -1449,6 +1458,32 @@ class WikiImportDialog(QDialog):
                 it = QTableWidgetItem(v); it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable); self.table.setItem(r, c, it)
         self.table.blockSignals(False)
         self._preview()
+
+    def _show_source_line(self, row: int):
+        """Highlight and scroll to the original line of the selected action-log row."""
+        from PyQt6.QtGui import QTextCursor, QTextCharFormat, QColor
+        from PyQt6.QtWidgets import QTextEdit as _QTE            # ExtraSelection lives on QTextEdit in PyQt6
+        try:
+            self._show_source_line_impl(row, QTextCursor, QTextCharFormat, QColor, _QTE)
+        except Exception as e:                                   # never let a slot raise: PyQt6 would abort the process
+            print(f"[wiki] highlight failed: {e}")
+
+    def _show_source_line_impl(self, row, QTextCursor, QTextCharFormat, QColor, _QTE):
+        if row < 0 or row >= len(self._events):
+            return
+        line = (self._events[row].line or "").strip()
+        doc = self.paste.document(); text = self.paste.toPlainText()
+        pos = text.find(line) if line else -1
+        if pos < 0:
+            needle = f"{self._events[row].time} {self._events[row].code}"
+            pos = text.find(needle)
+        if pos < 0:
+            self.paste.setExtraSelections([]); return
+        cur = QTextCursor(doc); cur.setPosition(pos)
+        cur.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
+        sel = _QTE.ExtraSelection(); fmt = QTextCharFormat(); fmt.setBackground(QColor("#fff2a8")); sel.format = fmt; sel.cursor = cur
+        self.paste.setExtraSelections([sel])
+        show = QTextCursor(doc); show.setPosition(pos); self.paste.setTextCursor(show); self.paste.centerCursor()
 
     def _current_import(self) -> saphir_wiki.WikiImport:
         for r, ev in enumerate(self._events):
