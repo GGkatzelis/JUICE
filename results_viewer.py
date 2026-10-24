@@ -1177,7 +1177,15 @@ class ResultsViewer(QMainWindow):
         self.pa_fig = Figure(figsize=(12, 6))
         self.pa_canvas = FigureCanvas(self.pa_fig); _interact(self.pa_canvas)
         self.pa_toolbar = NavigationToolbar(self.pa_canvas, self)
-        pa_layout.addWidget(self.pa_toolbar)
+        pa_row = QHBoxLayout(); pa_row.setContentsMargins(4, 0, 4, 0); pa_row.setSpacing(5)
+        pa_row.addWidget(self.pa_toolbar)
+        pa_row.addWidget(QLabel("group into Other below"))
+        self.pa_thresh = QDoubleSpinBox(); self.pa_thresh.setRange(0.0, 50.0); self.pa_thresh.setDecimals(1)
+        self.pa_thresh.setSingleStep(0.5); self.pa_thresh.setValue(2.0); self.pa_thresh.setSuffix(" %")
+        self.pa_thresh.setToolTip("pathways whose time-average share of the total production (or destruction) is below this are summed into 'Other'")
+        self.pa_thresh.valueChanged.connect(lambda _v: self._update_budget(self._pa_species) if getattr(self, "_pa_species", "") else None)
+        pa_row.addWidget(self.pa_thresh); pa_row.addStretch()
+        pa_layout.addLayout(pa_row)
         pa_layout.addWidget(self.pa_canvas)
         self.right_tabs.addTab(pa_widget, "Process Analysis")
 
@@ -1925,6 +1933,7 @@ class ResultsViewer(QMainWindow):
 
     # ── Process Analysis tab ──────────────────────────────────────────────────
     def _update_budget(self, species):
+        self._pa_species = species                      # remembered so the 'Other' threshold can redraw
         self.pa_fig.clear()
         ax_msg = self.pa_fig.add_subplot(111)
 
@@ -1965,7 +1974,7 @@ class ResultsViewer(QMainWindow):
         self.pa_fig.clear()
         t = self.df.index.values
 
-        THRESH = 0.02
+        THRESH = float(self.pa_thresh.value()) / 100.0 if hasattr(self, "pa_thresh") else 0.02
 
         def _group(pathways):
             if not pathways:

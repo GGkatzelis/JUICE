@@ -13,7 +13,7 @@ stays out of the way while a NavigationToolbar pan/zoom mode is active.
 from __future__ import annotations
 
 import math
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
@@ -178,16 +178,24 @@ class _Interaction:
 
 
 class _Dividers:
-    """Draggable gaps between side-by-side (or stacked) axes of one figure, like a Qt splitter:
-    hover the gap → split cursor, drag → the boundary moves and both neighbours resize.  The chosen
-    boundaries survive redraws: they are keyed by gap order and re-applied on every draw."""
-    MIN_W = 0.08          # axes narrower than this (figure fraction) are colourbars etc.: not neighbours
+    """Resize the sub-plots of a figure with the mouse, like Qt splitters:
+
+      • the middle of the gap between two neighbours → split cursor, drag moves the boundary and
+        both neighbours resize (the gap keeps its width);
+      • the edge of one plot (also an outer edge) → resize cursor, drag moves only that edge, the
+        other plot stays — this widens or narrows the gap, e.g. for long tick labels.
+
+    Choices survive redraws: they are recorded as operations (keyed by plot rank and edge, or by
+    gap order) and re-applied on every draw.  Colourbars (narrow axes) are left alone."""
+    MIN_W = 0.08          # axes narrower than this (figure fraction) are colourbars etc.
+    PAD = 0.007           # hit distance to an edge, figure fraction
+    MIN_SIZE = 0.05
 
     def __init__(self, canvas):
         self.canvas = canvas
         self._drag = None
         self._cursor_set = False
-        self.overrides: Dict[str, float] = {}
+        self.ops: List[tuple] = []          # ("edge", rank, side, value) | ("gap", kind, index, mid)
         canvas.mpl_connect("motion_notify_event", self._motion)
         canvas.mpl_connect("button_press_event", self._press)
         canvas.mpl_connect("button_release_event", self._release)
@@ -196,16 +204,11 @@ class _Dividers:
     # ── geometry ──
     def _panels(self):
         fig = self.canvas.figure
-        out = []
-        for ax in fig.axes:
-            b = ax.get_position()
-            if b.width >= self.MIN_W and b.height >= self.MIN_W and ax.get_visible():
-                out.append(ax)
-        return out
+        axes = [ax for ax in fig.axes if ax.get_visible() and ax.get_label() != "<colorbar>"
+                and ax.get_position().width >= self.MIN_SIZE and ax.get_position().height >= self.MIN_SIZE]
+        return sorted(axes, key=lambda a: (round(a.get_position().x0, 3), -round(a.get_position().y0, 3)))
 
-    def _gaps(self):
-        """[(kind, lo, hi, left_group, right_group)] in figure fraction; kind 'h' = vertical divider."""
-        axes = self._panels()
+    def _gaps(self, axes):
         pos = {id(a): a.get_position() for a in axes}
         seen = set(); gaps = []
         for a in axes:
@@ -214,26 +217,20 @@ class _Dividers:
                 if a is b:
                     continue
                 pb = pos[id(b)]
-                # horizontal neighbours: b right of a, vertical overlap
                 if pb.x0 >= pa.x1 - 1e-3 and min(pa.y1, pb.y1) - max(pa.y0, pb.y0) > 0.3 * min(pa.height, pb.height):
                     lo, hi = pa.x1, pb.x0
-                    if 0 <= hi - lo < 0.25:
+                    if 0 <= hi - lo < 0.6:
                         key = ("h", round(lo, 3), round(hi, 3))
                         if key not in seen:
                             seen.add(key)
-                            left = [c for c in axes if abs(pos[id(c)].x1 - lo) < 0.01]
-                            right = [c for c in axes if abs(pos[id(c)].x0 - hi) < 0.01]
-                            gaps.append(("h", lo, hi, left, right))
-                # vertical neighbours: b below a
+                            gaps.append(("h", lo, hi, [c for c in axes if abs(pos[id(c)].x1 - lo) < 0.01], [c for c in axes if abs(pos[id(c)].x0 - hi) < 0.01]))
                 if pb.y1 <= pa.y0 + 1e-3 and min(pa.x1, pb.x1) - max(pa.x0, pb.x0) > 0.3 * min(pa.width, pb.width):
                     lo, hi = pb.y1, pa.y0
-                    if 0 <= hi - lo < 0.25:
+                    if 0 <= hi - lo < 0.6:
                         key = ("v", round(lo, 3), round(hi, 3))
                         if key not in seen:
                             seen.add(key)
-                            below = [c for c in axes if abs(pos[id(c)].y1 - lo) < 0.01]
-                            above = [c for c in axes if abs(pos[id(c)].y0 - hi) < 0.01]
-                            gaps.append(("v", lo, hi, below, above))
+                            gaps.append(("v", lo, hi, [c for c in axes if abs(pos[id(c)].y1 - lo) < 0.01], [c for c in axes if abs(pos[id(c)].y0 - hi) < 0.01]))
         gaps.sort(key=lambda g: (g[0], g[1]))
         return gaps
 
@@ -242,55 +239,75 @@ class _Dividers:
         return event.x / w, event.y / h
 
     def _hit(self, event):
+        """('edge', rank, side) | ('gap', index, gap) | None"""
         if event.x is None or event.y is None:
             return None
         fx, fy = self._fig_xy(event)
-        for i, g in enumerate(self._gaps()):
+        axes = self._panels()
+        for rank, ax in enumerate(axes):                       # edges first: they take priority over the gap middle
+            p = ax.get_position()
+            if p.y0 - self.PAD <= fy <= p.y1 + self.PAD:
+                if abs(fx - p.x0) <= self.PAD:
+                    return ("edge", rank, "left")
+                if abs(fx - p.x1) <= self.PAD:
+                    return ("edge", rank, "right")
+            if p.x0 - self.PAD <= fx <= p.x1 + self.PAD:
+                if abs(fy - p.y0) <= self.PAD:
+                    return ("edge", rank, "bottom")
+                if abs(fy - p.y1) <= self.PAD:
+                    return ("edge", rank, "top")
+        for i, g in enumerate(self._gaps(axes)):
             kind, lo, hi = g[0], g[1], g[2]
-            pad = 0.006
-            if kind == "h" and lo - pad <= fx <= hi + pad and g[3] and g[4]:
+            if kind == "h" and lo <= fx <= hi and g[3] and g[4]:
                 ys = [a.get_position() for a in g[3] + g[4]]
-                if min(p.y0 for p in ys) <= fy <= max(p.y1 for p in ys):
-                    return i, g
-            if kind == "v" and lo - pad <= fy <= hi + pad and g[3] and g[4]:
+                if min(q.y0 for q in ys) <= fy <= max(q.y1 for q in ys):
+                    return ("gap", i, g)
+            if kind == "v" and lo <= fy <= hi and g[3] and g[4]:
                 xs = [a.get_position() for a in g[3] + g[4]]
-                if min(p.x0 for p in xs) <= fx <= max(p.x1 for p in xs):
-                    return i, g
+                if min(q.x0 for q in xs) <= fx <= max(q.x1 for q in xs):
+                    return ("gap", i, g)
         return None
 
     # ── apply ──
-    @staticmethod
-    def _move(g, new_mid):
+    def _set_edge(self, ax, side, value):
+        p = ax.get_position()
+        if side == "left" and p.x1 - value > self.MIN_SIZE:
+            ax.set_position([value, p.y0, p.x1 - value, p.height])
+        elif side == "right" and value - p.x0 > self.MIN_SIZE:
+            ax.set_position([p.x0, p.y0, value - p.x0, p.height])
+        elif side == "bottom" and p.y1 - value > self.MIN_SIZE:
+            ax.set_position([p.x0, value, p.width, p.y1 - value])
+        elif side == "top" and value - p.y0 > self.MIN_SIZE:
+            ax.set_position([p.x0, p.y0, p.width, value - p.y0])
+
+    def _move_gap(self, g, new_mid):
         kind, lo, hi, first, second = g
-        gap = hi - lo
-        a, b = new_mid - gap / 2, new_mid + gap / 2
+        gap = hi - lo; a, b = new_mid - gap / 2, new_mid + gap / 2
         for ax in first:
-            p = ax.get_position()
-            if kind == "h":
-                if a - p.x0 > 0.05:
-                    ax.set_position([p.x0, p.y0, a - p.x0, p.height])
-            else:
-                if a - p.y0 > 0.05:
-                    ax.set_position([p.x0, p.y0, p.width, a - p.y0])
+            self._set_edge(ax, "right" if kind == "h" else "top", a)
         for ax in second:
-            p = ax.get_position()
-            if kind == "h":
-                if p.x1 - b > 0.05:
-                    ax.set_position([b, p.y0, p.x1 - b, p.height])
+            self._set_edge(ax, "left" if kind == "h" else "bottom", b)
+
+    def _apply_ops(self):
+        axes = self._panels()
+        for op in self.ops:
+            if op[0] == "edge":
+                _k, rank, side, value = op
+                if rank < len(axes):
+                    self._set_edge(axes[rank], side, value)
             else:
-                if p.y1 - b > 0.05:
-                    ax.set_position([p.x0, b, p.width, p.y1 - b])
+                _k, kind, index, mid = op
+                gaps = [g for g in self._gaps(axes) if g[0] == kind]
+                if index < len(gaps):
+                    self._move_gap(gaps[index], mid)
 
     def _on_draw(self, _event):
-        if not self.overrides or self._drag is not None:
+        if not self.ops or self._drag is not None:
             return
-        gaps = self._gaps()
-        changed = False
-        for i, g in enumerate(gaps):
-            key = f"{g[0]}{i}"
-            if key in self.overrides and abs((g[1] + g[2]) / 2 - self.overrides[key]) > 1e-3:
-                self._move(g, self.overrides[key]); changed = True
-        if changed:
+        before = [tuple(round(v, 4) for v in a.get_position().bounds) for a in self._panels()]
+        self._apply_ops()
+        after = [tuple(round(v, 4) for v in a.get_position().bounds) for a in self._panels()]
+        if before != after:
             self.canvas.draw_idle()
 
     # ── events ──
@@ -298,17 +315,25 @@ class _Dividers:
         tb = getattr(self.canvas, "toolbar", None)
         return bool(tb is not None and getattr(tb, "mode", ""))
 
-    def _set_cursor(self, kind):
+    def _set_cursor(self, shape):
         try:
             from PyQt6.QtCore import Qt
             from PyQt6.QtGui import QCursor
-            if kind is None:
+            if shape is None:
                 if self._cursor_set:
                     self.canvas.unsetCursor(); self._cursor_set = False
             else:
-                self.canvas.setCursor(QCursor(Qt.CursorShape.SplitHCursor if kind == "h" else Qt.CursorShape.SplitVCursor)); self._cursor_set = True
+                self.canvas.setCursor(QCursor(shape)); self._cursor_set = True
         except Exception:
             pass
+
+    def _cursor_for(self, hit):
+        from PyQt6.QtCore import Qt
+        if hit is None:
+            return None
+        if hit[0] == "gap":
+            return Qt.CursorShape.SplitHCursor if hit[2][0] == "h" else Qt.CursorShape.SplitVCursor
+        return Qt.CursorShape.SizeHorCursor if hit[2] in ("left", "right") else Qt.CursorShape.SizeVerCursor
 
     def _press(self, event):
         if event.button != 1 or self._busy():
@@ -318,29 +343,44 @@ class _Dividers:
             self._drag = hit
             inter = getattr(self.canvas, "_juice_interaction", None)
             if inter is not None:
-                inter._drag = None          # the pan/zoom handler must not act on this drag
+                inter._drag = None            # the pan handler must not act on this drag
 
-    def _release(self, _event):
-        if self._drag is not None:
-            i, g = self._drag
-            self.overrides[f"{g[0]}{i}"] = (g[1] + g[2]) / 2
-            self._drag = None
+    def _release(self, event):
+        if self._drag is None:
+            return
+        hit = self._drag; self._drag = None
+        if hit[0] == "edge":
+            _k, rank, side = hit
+            axes = self._panels()
+            if rank < len(axes):
+                p = axes[rank].get_position()
+                value = {"left": p.x0, "right": p.x1, "bottom": p.y0, "top": p.y1}[side]
+                self.ops = [o for o in self.ops if not (o[0] == "edge" and o[1] == rank and o[2] == side)] + [("edge", rank, side, value)]
+        else:
+            _k, index, g = hit
+            self.ops = [o for o in self.ops if not (o[0] == "gap" and o[1] == g[0] and o[2] == index)] + [("gap", g[0], index, (g[1] + g[2]) / 2)]
 
     def _motion(self, event):
         if self._drag is not None:
             if event.x is None:
                 return
-            i, g = self._drag
             fx, fy = self._fig_xy(event)
-            new_mid = fx if g[0] == "h" else fy
-            self._move(g, new_mid)
-            lo, hi = g[1], g[2]; gap = hi - lo
-            self._drag = (i, (g[0], new_mid - gap / 2, new_mid + gap / 2, g[3], g[4]))
+            hit = self._drag
+            if hit[0] == "edge":
+                _k, rank, side = hit
+                axes = self._panels()
+                if rank < len(axes):
+                    self._set_edge(axes[rank], side, fx if side in ("left", "right") else fy)
+            else:
+                _k, index, g = hit
+                new_mid = fx if g[0] == "h" else fy
+                self._move_gap(g, new_mid)
+                gap = g[2] - g[1]
+                self._drag = ("gap", index, (g[0], new_mid - gap / 2, new_mid + gap / 2, g[3], g[4]))
             self.canvas.draw_idle(); return
         if self._busy():
             return
-        hit = self._hit(event)
-        self._set_cursor(hit[1][0] if hit else None)
+        self._set_cursor(self._cursor_for(self._hit(event)))
 
 
 def attach_dividers(canvas):
