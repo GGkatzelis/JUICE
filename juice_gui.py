@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from experiment_spec import load_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS
+from experiment_spec import load_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for
 from experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
 from elog_generator import generate_both
 from idl_parser import parse_idl_easy
@@ -356,7 +356,7 @@ class ReviewPanel(QWidget):
             self.summary.setText("<i>Nothing entered yet.</i><br>Give the experiment a name, then open a saved experiment, "
                                  "import the SAPHIR wiki page, paste your notes, or pick a template.")
             self.refresh_files(); return []
-        known = mechanism_species(self.win.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
+        known = known_species_for(spec, self.win.include_dir, self.win.out_dir())
         msgs = validate(spec, known)
         c = spec.conditions
         self.summary.setText(f"<b>{spec.name or '(no name)'}</b> — {c.date or '(no date)'} {c.start}–{c.end} UTC, "
@@ -398,6 +398,14 @@ class ReviewPanel(QWidget):
                         t.selectRow(r); t.scrollToItem(it); t.setFocus(); return
             return act
 
+        if msg.startswith("Import:"):
+            m = _re.search(r"^Import: (\d\d:\d\d): ([^:]+): no MCM species and no surrogate", msg)
+            if m:
+                return (2, f"'{m.group(2)}' (injected {m.group(1)}) is in the mixture but has no MCM species. Open the mixture on the "
+                           f"Injections step ('+ mixture …' or double-click its row) and give it a surrogate — the suggestion in the "
+                           f"message is a start — or leave it unmodelled on purpose. The note stays as a record either way.",
+                        None)
+            return (2, "A remark from the wiki import: check the injection it refers to; the note stays as a record of what the import assumed.", None)
         m = _re.search(r"Injection '([^']+)': product '([^']+)' is not a species", msg)
         if m:
             name, sp = m.group(1), m.group(2)
@@ -513,7 +521,7 @@ class RunPage(QWidget):
         """Write ENZ/EASY/experiment.json and the scenario JSON.  Returns the JSON path ('' on error)."""
         self.refresh()
         spec = self.win.collect_spec()
-        known = mechanism_species(self.win.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
+        known = known_species_for(spec, self.win.include_dir, self.win.out_dir())
         errors = [m for lvl, m in validate(spec, known) if lvl == "error"]
         if errors:
             self.log.append("Cannot prepare:\n  " + "\n  ".join(errors)); self.bar.setFormat("fix the errors first"); return ""

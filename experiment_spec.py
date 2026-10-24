@@ -231,6 +231,7 @@ class ExperimentSpec:
     # (reaction "A + B --> C", new rate expression or "0" = remove, comment) → written exactly as EASY
     # does it: k[A + B --> C] = CONST(expr) after the mechanism includes (last definition wins)
     reaction_adjustments: List[Tuple[str, str, str]] = field(default_factory=list)
+    import_notes: List[str] = field(default_factory=list)       # what the wiki / mixture import could not resolve (shown under 'Needs attention')
     template: str = ""
 
 
@@ -655,7 +656,35 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         seen_cols.add(col)
     if not spec.injections:
         msgs.append(("warning", "No injections defined."))
+    for note in spec.import_notes:
+        msgs.append(("warning", "Import: " + note.lstrip("⚠✖ ").strip()))
     return msgs
+
+
+def known_species_for(spec: ExperimentSpec, include_dir: str, out_dir: str = "") -> set:
+    """Species an injection may produce without a warning: the standard chamber species, the species of
+    an existing include set (mechanism_stem) or — compounds mode — the chosen compounds, the add-on
+    species, and whatever a previously generated chemistry/ folder of the experiment contains."""
+    names = mechanism_species(include_dir, spec.mechanism_stem) if spec.mechanism_stem else mechanism_species("", "")
+    names |= {p.upper() for p in spec.precursors}
+    names |= {"NO", "NO2", "O3", "CO", "CO2", "HONO", "H2O2", "HNO3", "SO2", "H2", "CH4", "HCHO"}
+    try:
+        names |= {s.upper() for s in mreg.addon_species(list(spec.addons))}
+    except Exception:
+        pass
+    chem = os.path.join(out_dir, "chemistry") if out_dir else ""
+    if chem and os.path.isdir(chem):
+        for f in os.listdir(chem):
+            if f.lower().endswith((".mech", ".incl")):
+                try:
+                    for line in open(os.path.join(chem, f), encoding="latin-1"):
+                        code = line.split(";", 1)[0]
+                        if "-->" in code:
+                            for tok in re.findall(r"[A-Za-z][A-Za-z0-9_]*", code.replace("-->", "+")):
+                                names.add(tok.upper())
+                except OSError:
+                    pass
+    return names
 
 
 # ─────────────────────────────────────────────────────────────────────────────

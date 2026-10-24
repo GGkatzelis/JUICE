@@ -1560,6 +1560,7 @@ class ExperimentHost:
         self.page_chamber.embed_initials(self.page_init)
         self.page_review = ReviewPage(self)
         self.last_result: dict = {}
+        self.import_notes: List[str] = []                 # kept with the experiment (ExperimentSpec.import_notes)
 
     def pages(self):
         """Pages shown one after the other (the initial values sit inside the chamber page)."""
@@ -1576,6 +1577,7 @@ class ExperimentHost:
         self.page_chamber.set_from(spec.chamber)
         self.page_init.set_from(spec)
         self.page_review.overrides.setPlainText("\n".join(spec.overrides))
+        self.import_notes = list(spec.import_notes)
 
     def collect_spec(self) -> ExperimentSpec:
         b = self._base
@@ -1589,6 +1591,7 @@ class ExperimentHost:
         spec.chamber = self.page_chamber.get(b.chamber)
         self.page_init.apply(spec)
         spec.overrides = [l.strip() for l in self.page_review.overrides.toPlainText().splitlines() if l.strip()]
+        spec.import_notes = list(self.import_notes)
         return spec
 
     # ── wiki import ───────────────────────────────────────────────────────────
@@ -1623,6 +1626,8 @@ class ExperimentHost:
             for p in imp.precursors:
                 if p not in have:
                     chem.chosen.addItem(p)
+        notes = [m for _lvl, m in imp.checks]
+        self.import_notes = notes if replace else self.import_notes + notes
         spec = self.collect_spec()
         spec.injections = list(imp.injections) if replace else spec.injections + list(imp.injections)
         self.page_inj.set_from(spec)
