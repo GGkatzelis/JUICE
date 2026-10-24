@@ -1,0 +1,13 @@
+# JUICE measured inputs — one row per time, UTC.  Keep the header line; delete the columns you do not have.
+# time: 'YYYY-MM-DD HH:MM' (UTC), or 'HH:MM' of the experiment day, or hours of day as a number
+# T: chamber temperature in K (°C is recognised when values are < 150)
+# p: pressure in hPa (optional; default from the experiment)
+# H2O: water vapour in vol-% (ppm is recognised when values are > 100) — or give RH in % instead
+# flow: dilution / replenishment flow in m3/h
+# roof: 1 = roof open (lights on), 0 = closed — optional, the roof times of the experiment are used otherwise
+# jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m: photolysis frequencies in 1/s (any subset; missing ones are modelled)
+# NO NO2 O3: measured mixing ratios in ppb — only needed if a species is to be held to its measurement
+time,T,p,H2O,flow,roof,jNO2,jO1D,jHONO,NO,NO2,O3
+2024-07-09 06:00,295.6,1006.5,1.33,6.0,0,0,0,0,0.05,0.02,1.2
+2024-07-09 06:01,295.6,1006.5,1.33,6.0,0,0,0,0,0.05,0.02,1.2
+2024-07-09 12:20,303.1,1006.1,1.52,6.0,1,0.0071,2.1e-5,0.0013,0.30,1.9,35.0

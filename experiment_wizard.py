@@ -299,12 +299,23 @@ class ConditionsPage(QWizardPage):
         lay.addWidget(QLabel("<b>Chamber conditions</b> — temperature, pressure, humidity, flow and photolysis frequencies "
                              "drive the rate constants and the air density; the model needs them for every minute."))
         self.src_archive = QRadioButton("Measured — from the SAPHIR archive (T, P, humidity, flow, J values, NO, NO2, O3)")
+        self.src_file = QRadioButton("Measured — from a file you provide (CSV or Excel: time + T, p, humidity, flow, roof, J values, NO, NO2, O3)")
         self.src_manual = QRadioButton("Manual — constant values, clear-sky photolysis (no measurements available)")
-        self.src_archive.toggled.connect(self._source_changed)
-        lay.addWidget(self.src_archive); lay.addWidget(self.src_manual)
+        for rb in (self.src_archive, self.src_file, self.src_manual):
+            rb.toggled.connect(self._source_changed)
+        lay.addWidget(self.src_archive)
         ha = QHBoxLayout(); ha.addSpacing(24); ha.addWidget(QLabel("Archive root"))
         self.archive = QLineEdit(r"Z:\IEK8-SAPHIR\data"); self.archive.textChanged.connect(self._archive_status); ha.addWidget(self.archive, stretch=1)
         self.archive_status = QLabel(""); ha.addWidget(self.archive_status); lay.addLayout(ha)
+        lay.addWidget(self.src_file)
+        hf = QHBoxLayout(); hf.addSpacing(24); hf.addWidget(QLabel("Input file"))
+        self.input_path = QLineEdit(); self.input_path.setPlaceholderText("measured conditions table — see 'Template…' for the columns and units")
+        self.input_path.textChanged.connect(self._file_status); hf.addWidget(self.input_path, stretch=1)
+        bf = QPushButton("Browse …"); bf.clicked.connect(self._browse_input); hf.addWidget(bf)
+        tf = QPushButton("Template …"); tf.setToolTip("write an example CSV with the recognised columns, units and time formats"); tf.clicked.connect(self._write_template); hf.addWidget(tf)
+        lay.addLayout(hf)
+        self.file_status = _info(""); self.file_status.setContentsMargins(24, 0, 0, 0); lay.addWidget(self.file_status)
+        lay.addWidget(self.src_manual)
 
         self.manual_box = QGroupBox("Manual values")
         mg = QGridLayout(self.manual_box)
@@ -338,10 +349,40 @@ class ConditionsPage(QWizardPage):
         ch = ic.chamber(name)
         self.chamber_info.setText(f"{ch.volume_m3:g} m³ — used to turn injected amounts into ppb. {ch.note}")
 
-    def _source_changed(self, archive_on: bool):
-        self.manual_box.setVisible(not archive_on)
+    def _source_changed(self, _on: bool = False):
+        archive_on, file_on = self.src_archive.isChecked(), self.src_file.isChecked()
+        self.manual_box.setVisible(not (archive_on or file_on))
         self.archive.setEnabled(archive_on)
-        self.jsrc.setCurrentIndex(0 if archive_on else 1)
+        self.input_path.setEnabled(file_on)
+        self.jsrc.setCurrentIndex(0 if (archive_on or file_on) else 1)
+        if file_on:
+            self._file_status()
+
+    def _browse_input(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Measured inputs table", self.input_path.text() or "", "Tables (*.csv *.txt *.xlsx *.xls);;All files (*)")
+        if p:
+            self.input_path.setText(p); self.src_file.setChecked(True)
+
+    def _write_template(self):
+        import measured_inputs as mi
+        p, _ = QFileDialog.getSaveFileName(self, "Write the measured-inputs template", "measured_inputs_template.csv", "CSV (*.csv)")
+        if p:
+            mi.write_template(p)
+            self.file_status.setText(f"template written: {p} — fill it with your data and choose it as the input file")
+
+    def _file_status(self):
+        p = self.input_path.text().strip()
+        if not p:
+            self.file_status.setText("no file chosen" if self.src_file.isChecked() else ""); return
+        if not os.path.isfile(p):
+            self.file_status.setText("✖ file not found"); return
+        try:
+            import measured_inputs as mi
+            inp = mi.cached_inputs(p, self.date.text().strip(), float(self.press.text() or 1006.5))
+            txt = "✔ " + inp.summary() + ("; " + "; ".join(inp.notes) if inp.notes else "")
+            self.file_status.setText(txt)
+        except Exception as e:
+            self.file_status.setText(f"✖ cannot read: {e}")
 
     def _archive_status(self):
         if not self.date.text().strip():
@@ -357,10 +398,11 @@ class ConditionsPage(QWizardPage):
         self.date.setText(c.date); self.start.setText(c.start); self.end.setText(c.end); self.step.setValue(int(c.step_s))
         self.archive.setText(c.archive_root); self.temp.setText(f"{c.temperature_K:g}")
         self.press.setText(f"{c.pressure_hPa:g}"); self.h2o.setText(f"{c.h2o_percent:g}"); self.flow.setText(f"{c.flow_m3h:g}")
-        if c.source in ("archive", "manual"):
-            (self.src_archive if c.source == "archive" else self.src_manual).setChecked(True)
+        self.input_path.setText(c.input_file)
+        if c.source in ("archive", "manual", "file"):
+            {"archive": self.src_archive, "manual": self.src_manual, "file": self.src_file}[c.source].setChecked(True)
         else:                                          # blank experiment: nothing chosen yet
-            for rb in (self.src_archive, self.src_manual):
+            for rb in (self.src_archive, self.src_file, self.src_manual):
                 rb.setAutoExclusive(False); rb.setChecked(False); rb.setAutoExclusive(True)
             self.manual_box.setVisible(False)
         self.jsrc.setCurrentIndex(0 if c.j_source == "measured" else 1)
@@ -372,8 +414,9 @@ class ConditionsPage(QWizardPage):
     def get(self) -> Conditions:
         c = Conditions()
         c.date, c.start, c.end, c.step_s = self.date.text().strip(), self.start.text().strip(), self.end.text().strip(), int(self.step.value())
-        c.source = "archive" if self.src_archive.isChecked() else ("manual" if self.src_manual.isChecked() else "")
+        c.source = "archive" if self.src_archive.isChecked() else ("file" if self.src_file.isChecked() else ("manual" if self.src_manual.isChecked() else ""))
         c.archive_root = self.archive.text().strip()
+        c.input_file = self.input_path.text().strip()
         c.temperature_K = float(self.temp.text() or 298); c.temperature_mode = "enz" if self.temp_mode.currentIndex() == 0 else "const"
         c.pressure_hPa = float(self.press.text() or 1006.5); c.h2o_percent = float(self.h2o.text() or 0); c.flow_m3h = float(self.flow.text() or 0)
         c.j_source = "measured" if self.jsrc.currentIndex() == 0 else "clear_sky"

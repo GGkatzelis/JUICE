@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from experiment_spec import load_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for
+from experiment_spec import load_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources
 from experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
 from elog_generator import generate_both
 from idl_parser import parse_idl_easy
@@ -161,12 +161,16 @@ def spec_bullets(spec: ExperimentSpec) -> List[str]:
         out.append("Chemistry: not chosen yet")
     for rxn, rate, _cmt in spec.reaction_adjustments:
         out.append(f"Reaction adjusted: {rxn}  →  " + ("switched off" if (rate or "0").strip() in ("0", "0.", "0.0") else f"k = {rate}"))
-    if c.source == "archive":
-        out.append(f"Conditions: measured T, P, humidity, flow and J values from the archive for {c.date}"
-                   + (", clear-sky J" if c.j_source == "clear_sky" else ""))
-    elif c.source == "manual":
-        out.append(f"Conditions: constant T {c.temperature_K:g} K, P {c.pressure_hPa:g} hPa, H2O {c.h2o_percent:g} %, "
-                   f"flow {c.flow_m3h:g} m³/h, {'clear-sky' if c.j_source == 'clear_sky' else 'measured'} photolysis")
+    try:                                   # readiness: where every physical input comes from
+        src = input_sources(spec)
+        head = {"archive": f"Conditions from the SAPHIR archive for {c.date}", "file": f"Conditions from {os.path.basename(c.input_file) or 'a file'}",
+                "manual": "Conditions typed as constants"}.get(c.source, "Conditions: source not chosen")
+        out.append(head + " — " + "; ".join(f"{k}: {v}" for k, v in src.items()))
+    except Exception:
+        if c.source == "archive":
+            out.append(f"Conditions: measured T, P, humidity, flow and J values from the archive for {c.date}")
+        elif c.source == "manual":
+            out.append(f"Conditions: constant T {c.temperature_K:g} K, P {c.pressure_hPa:g} hPa, H2O {c.h2o_percent:g} %, flow {c.flow_m3h:g} m³/h")
     out.append(f"Time: {c.date} {c.start}–{c.end} UTC in {c.step_s} s steps; roof open "
                + (", ".join(f"{o}–{cl}" for o, cl in c.roof_open) or "never (dark)"))
     out.append(f"Chamber: {ch.name}, {ch.volume_m3:g} m³" + (f"; {', '.join(c.constrain_species)} held to measurements" if c.constrain_species else ""))
@@ -430,6 +434,14 @@ class ReviewPanel(QWidget):
                        "or import them from the SAPHIR wiki page on the Experiment step.", None)
         if msg.startswith("Enter the experiment date") or msg.startswith("Time window") or msg.startswith("Date or time"):
             return (0, "Fill in the date (YYYY-MM-DD) and the start and end time (HH:MM UTC) under 'Where and when'.", focus(c.date))
+        if msg.startswith("Measured inputs from a file") or msg.startswith("Measured inputs file"):
+            return (0, "Choose the table with the measured conditions (Browse …), or press 'Template …' to get an example with the column names, units and time formats.", focus(c.input_path))
+        if msg.startswith("Photolysis: measured J values selected but none found"):
+            return (0, "No measured J values in the archive / file for this day: switch 'J values' under Advanced to clear sky, or add jNO2, jO1D, … columns to the input file.", focus(c.jsrc))
+        if msg.startswith("Inputs:"):
+            return (0, "Some conditions are not in the measurements and stay constant; check the manual values or add the columns to the input file.", focus(c.temp))
+        if msg.startswith("Held species without measurements"):
+            return (0, "A species can only be held to measurements that exist: add the column (NO, NO2, O3) to the input file or remove it from 'held species' under Advanced.", focus(c.constrain))
         if msg.startswith("Choose where the chamber conditions"):
             return (0, "Tick 'measured (archive)' when the day is on the Z: drive, otherwise 'manual' and enter T, p, humidity and flow.", focus(c.src_manual))
         if msg.startswith("No chemistry"):
@@ -681,8 +693,9 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         for w in (c.date, c.start, c.end, c.archive, c.temp, c.press, c.h2o, c.flow, c.constrain, s0.name_edit, s0.out_edit,
                   cb.hono_factor, cb.y_inline, cb.dark_factor):
             w.textChanged.connect(self._schedule_refresh)
-        for w in (c.src_archive, c.src_manual):
+        for w in (c.src_archive, c.src_manual, c.src_file):
             w.toggled.connect(self._schedule_refresh)
+        c.input_path.textChanged.connect(self._schedule_refresh)
         for w in (c.step,):
             w.valueChanged.connect(self._schedule_refresh)
         for w in (c.jsrc, c.temp_mode, c.chamber, ch.base_combo, ch.mech_combo):
@@ -716,8 +729,9 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         theme.mark_missing(c.date, not c.date.text().strip())
         theme.mark_missing(c.start, not c.start.text().strip())
         theme.mark_missing(c.end, not c.end.text().strip())
-        no_src = not (c.src_archive.isChecked() or c.src_manual.isChecked())
-        theme.mark_missing(c.src_archive, no_src); theme.mark_missing(c.src_manual, no_src)
+        no_src = not (c.src_archive.isChecked() or c.src_manual.isChecked() or c.src_file.isChecked())
+        theme.mark_missing(c.src_archive, no_src); theme.mark_missing(c.src_manual, no_src); theme.mark_missing(c.src_file, no_src)
+        theme.mark_missing(c.input_path, c.src_file.isChecked() and not c.input_path.text().strip())
         no_chem = (ch.mode_compounds.isChecked() and ch.chosen.count() == 0) or (ch.mode_existing.isChecked() and not ch.mech_combo.currentText().strip())
         theme.mark_missing(ch.chosen, no_chem and ch.mode_compounds.isChecked())
         theme.mark_missing(ch.mech_combo, no_chem and ch.mode_existing.isChecked())

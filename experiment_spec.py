@@ -127,8 +127,9 @@ class Conditions:
     start: str = "04:00"                  # HH:MM
     end: str = "21:59"
     step_s: int = 60
-    source: str = "manual"                # manual | archive
+    source: str = "manual"                # manual | archive | file
     archive_root: str = r"Z:\IEK8-SAPHIR\data"
+    input_file: str = ""                  # source 'file': CSV/Excel with time + T, p, H2O/RH, flow, roof, J values, NO/NO2/O3 (measured_inputs.py)
     temperature_K: float = 298.0
     temperature_mode: str = "enz"         # enz: T = CONST(T_in) | const: T = CONST(<temperature_K>)
     pressure_hPa: float = 1006.5
@@ -307,6 +308,52 @@ def _archive_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) 
     return None
 
 
+def _file_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:
+    """One standard ENZ column from the user's measured-inputs file (None if the file lacks it)."""
+    try:
+        import measured_inputs as mi
+        inp = mi.cached_inputs(c.input_file, c.date, c.pressure_hPa)
+        if inp is None:
+            return None
+        return mi.column_on_grid(inp, enz_col, grid, fill)
+    except Exception:
+        return None
+
+
+def _measured_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:
+    if c.source == "archive":
+        return _archive_column(c, enz_col, grid, fill)
+    if c.source == "file":
+        return _file_column(c, enz_col, grid, fill)
+    return None
+
+
+def input_sources(spec: ExperimentSpec) -> Dict[str, str]:
+    """Where each physical input of the run comes from: 'measured (archive)', 'measured (file)',
+    'constant <value>', 'clear-sky model', 'roof times' — the readiness report of the experiment."""
+    c = spec.conditions
+    where = {"archive": "measured (archive)", "file": "measured (file)"}.get(c.source, "")
+    grid = time_grid(c) if (c.date and c.start and c.end) else np.zeros(2)
+    out: Dict[str, str] = {}
+    for enz, label, const, unit in (("t", "temperature", c.temperature_K, "K"), ("H2O", "humidity", c.h2o_percent, "%"),
+                                    ("dilute", "flow", c.flow_m3h, "m³/h")):
+        arr = _measured_column(c, enz, grid, const) if where else None
+        out[label] = where if arr is not None else f"constant {const:g} {unit}"
+    out["pressure"] = (where if (c.source == "file" and _file_column(c, "p", grid, c.pressure_hPa) is not None)
+                       else f"constant {c.pressure_hPa:g} hPa")
+    if c.j_source == "measured" and where:
+        have = [j for j in ("jNO2", "jO1D", "jHONO", "jH2O2", "jHCHO_r", "jHCHO_m") if _measured_column(c, j, grid, 0.0) is not None]
+        out["photolysis"] = (f"{where}: " + ", ".join(have)) if have else "NO measured J values found — columns would be 0"
+    else:
+        out["photolysis"] = "clear-sky model (jNO2 from the solar zenith angle, the rest from the mechanism)"
+    out["roof"] = (f"{where} (roof column)" if (c.source == "file" and _file_column(c, "hv", grid, 0.0) is not None)
+                   else (", ".join(f"{o}–{cl}" for o, cl in c.roof_open) or "never open (dark)"))
+    if c.constrain_species:
+        missing = [s for s in c.constrain_species if _measured_column(c, s, grid, 0.0) is None]
+        out["held to measurements"] = ", ".join(c.constrain_species) + (f" — MISSING: {', '.join(missing)}" if missing else "")
+    return out
+
+
 def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray], List[str]]:
     """Build the ENZ time grid and ordered column data for the spec.
 
@@ -322,22 +369,26 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     cols["hv"] = _roof(grid, c)
 
     def phys(name: str, const: float) -> np.ndarray:
-        if c.source == "archive":
-            arr = _archive_column(c, name, grid, const)
+        if c.source in ("archive", "file"):
+            arr = _measured_column(c, name, grid, const)
             if arr is not None:
                 return arr
-            notes.append(f"{name}: archive data not found, constant {const} used")
+            notes.append(f"{name}: not in the {'archive' if c.source == 'archive' else 'input file'}, constant {const} used")
         return np.full(n, float(const))
 
+    if c.source == "file":                                 # a roof column in the file wins over typed roof times
+        hv = _file_column(c, "hv", grid, 0.0)
+        if hv is not None:
+            cols["hv"] = (np.asarray(hv) > 0.5).astype(float)
     cols["dilute"] = phys("dilute", c.flow_m3h)
     cols["t"] = phys("t", c.temperature_K)
     cols["H2O"] = phys("H2O", c.h2o_percent)
     for inj in spec.injections:
         col = inj.enz_column()
         cols[col] = cols.get(col, np.zeros(n)) + pulse_column(grid, c, inj.start, inj.duration_min)
-    if c.source == "archive":
+    if c.source in ("archive", "file"):
         for name in ("NO2", "NO", "O3"):
-            arr = _archive_column(c, name, grid, 0.0)
+            arr = _measured_column(c, name, grid, 0.0)
             if arr is not None:
                 cols[name] = arr
     for sp in c.constrain_species:
@@ -347,7 +398,7 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
         for jname, jcol, _rxn in J_INPUTS:
             enz_name = {"jno2": "jNO2", "jo1d": "jO1D", "jhono": "jHONO", "jh2o2": "jH2O2",
                         "jhcho_r": "jHCHO_r", "jhcho_m": "jHCHO_m"}[jname]
-            arr = _archive_column(c, enz_name, grid, 0.0) if c.source == "archive" else None
+            arr = _measured_column(c, enz_name, grid, 0.0) if c.source in ("archive", "file") else None
             if arr is None:
                 notes.append(f"{enz_name}: no measured J values, column filled with 0")
                 arr = np.zeros(n)
@@ -623,8 +674,37 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
                 msgs.append(("error", "Time window is empty — check start and end time."))
         except Exception as e:
             msgs.append(("error", f"Date or time is not valid: {e}"))
-    if c.source not in ("archive", "manual"):
-        msgs.append(("error", "Choose where the chamber conditions come from: measured (archive) or manual."))
+    if c.source not in ("archive", "manual", "file"):
+        msgs.append(("error", "Choose where the chamber conditions come from: measured (archive), measured (file) or manual."))
+    if c.source == "file":
+        if not c.input_file:
+            msgs.append(("error", "Measured inputs from a file: choose the file (CSV or Excel; 'Template…' writes an example)."))
+        elif not os.path.isfile(c.input_file):
+            msgs.append(("error", f"Measured inputs file not found: {c.input_file}"))
+        else:
+            try:
+                import measured_inputs as mi
+                inp = mi.cached_inputs(c.input_file, c.date, c.pressure_hPa)
+                if inp is not None and not inp.cols:
+                    msgs.append(("error", "Measured inputs file: no column recognised — see the template for the column names."))
+                elif inp is not None:
+                    for note in inp.notes:
+                        if "cannot" in note:
+                            msgs.append(("warning", "Measured inputs file: " + note))
+            except Exception as e:
+                msgs.append(("error", f"Measured inputs file cannot be read: {e}"))
+    try:
+        src = input_sources(spec)
+        if src.get("photolysis", "").startswith("NO measured"):
+            msgs.append(("warning", "Photolysis: measured J values selected but none found — the J columns would be 0 (switch to clear sky or provide them)."))
+        if c.source in ("archive", "file"):
+            consts = [k for k in ("temperature", "humidity", "flow") if src.get(k, "").startswith("constant")]
+            if consts:
+                msgs.append(("warning", "Inputs: " + ", ".join(consts) + " not measured — constant value(s) used."))
+        if "held to measurements" in src and "MISSING" in src["held to measurements"]:
+            msgs.append(("error", "Held species without measurements: " + src["held to measurements"].split("MISSING: ")[1]))
+    except Exception:
+        pass
     if not spec.mechanism_stem and not spec.precursors:
         msgs.append(("error", "No chemistry: choose compounds or an existing mechanism."))
     if c.j_source == "measured" and c.source == "manual":

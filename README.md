@@ -102,3 +102,26 @@ If you use JUICE in a publication, please cite the repository and contact the au
 
 - Georgios Gkatzelis, Forschungszentrum Jülich GmbH — [g.gkatzelis@fz-juelich.de](mailto:g.gkatzelis@fz-juelich.de)
 - Franz Rohrer, Forschungszentrum Jülich GmbH — [f.rohrer@fz-juelich.de](mailto:f.rohrer@fz-juelich.de)
+
+## Measured chamber conditions from your own file
+
+JUICE needs the physical conditions of the chamber over time. At SAPHIR they are read from the
+archive; anywhere else, choose **Measured — from a file you provide** on the *Where and when*
+step and give one table (CSV or Excel, first sheet). `Template …` writes an example with the
+recognised columns, units and time formats; `templates/measured_inputs_template.csv` is the same file.
+
+| column | aliases | unit in the file | notes |
+|---|---|---|---|
+| time | utc, datetime, hour | `YYYY-MM-DD HH:MM` (UTC), `HH:MM` of the day, hours of day, unix s or s since 2000 | first column if none matches |
+| T | temp, temperature, TK | K (°C recognised when < 150) | chamber air temperature |
+| p | press, pressure | hPa (Pa when > 5000) | optional |
+| H2O | water, H2O_percent | vol-% (ppm when > 100) | or give `RH` in % → converted with T and p |
+| flow | dilute, total_flow | m³/h | dilution / replenishment flow |
+| roof | hv, lights, open | 0 / 1 | optional; replaces the typed roof times |
+| jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m | | 1/s | any subset; the rest is modelled |
+| NO NO2 O3 | | ppb | only to hold a species to its measurement |
+
+Unknown columns are ignored and listed. Missing conditions fall back to the typed constants, and
+the review's *Needs attention* says so. The *What goes into the input files* list states for every
+input whether it is measured, a constant, or modelled. Measurements for comparison in the results
+viewer are a separate file, `<date>.observations.csv` next to the result (`hour_utc,key,value`).
