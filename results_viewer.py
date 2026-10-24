@@ -24,8 +24,9 @@ def _interact(canvas, hover: bool = True):
     """Overview-style mouse interaction (wheel/Ctrl+wheel/right-drag zoom, drag pan, double-click reset,
     hover readout) on any canvas of the viewer; silently skipped if the helper is unavailable."""
     try:
-        from plot_interaction import attach
+        from plot_interaction import attach, attach_dividers
         attach(canvas, hover=hover)
+        attach_dividers(canvas)                    # drag the gap between sub-plots to resize them
     except Exception as e:
         print(f"[viewer] interaction not attached: {e}")
 
@@ -1986,8 +1987,8 @@ class ResultsViewer(QMainWindow):
         if np.nanmean(other_dest) > 0:
             major_dest['Other destruction'] = other_dest
 
-        gs = self.pa_fig.add_gridspec(1, 2, width_ratios=[3, 1], wspace=0.35,
-                                      left=0.07, right=0.93, top=0.88, bottom=0.08)
+        gs = self.pa_fig.add_gridspec(1, 2, width_ratios=[2.4, 1], wspace=0.9,
+                                      left=0.07, right=0.93, top=0.90, bottom=0.30)   # legend below the stack; wide gap for the bar labels (drag it)
         ax_ts  = self.pa_fig.add_subplot(gs[0, 0])
         ax_bar = self.pa_fig.add_subplot(gs[0, 1])
 
@@ -2037,9 +2038,9 @@ class ResultsViewer(QMainWindow):
         ax_ts.grid(True, linestyle='--', alpha=0.35)
 
         handles, labels = ax_ts.get_legend_handles_labels()
-        if handles:
-            ax_ts.legend(handles, labels, loc='upper left',
-                         fontsize=11, framealpha=0.75, ncol=1,
+        if handles:                                   # below the stack, never over the fluxes (drag it elsewhere if you like)
+            ax_ts.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.13),
+                         fontsize=11, framealpha=0.85, ncol=min(3, max(1, -(-len(handles) // 6))),
                          handlelength=1.2, handleheight=0.8,
                          borderpad=0.5, labelspacing=0.3).set_draggable(True)
 
