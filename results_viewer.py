@@ -1930,6 +1930,13 @@ class ResultsViewer(QMainWindow):
                     pass
             self._config_label_text = f"✓ {name}"
             self.cfg_status.setText(self._config_label_text)
+            if hasattr(self, 'pa_fig') and not getattr(self, '_pa_species', ''):   # default Process Analysis species: O3
+                default = next((c for c in self.df.columns if c.upper() == 'O3'), None)
+                if default:
+                    try:
+                        self._update_budget(default)
+                    except Exception as _e:
+                        print(f"[viewer] default process analysis skipped: {_e}")
             if not silent:
                 print(f"[BudgetEngine] Config loaded: {path}")
         except Exception as e:
