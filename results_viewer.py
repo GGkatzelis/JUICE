@@ -1816,6 +1816,21 @@ class ResultsViewer(QMainWindow):
         except Exception as e:
             print(f"[viewer] figure list not available: {e}")
 
+    def _draw_on_first_visit(self, index: int):
+        name = self.right_tabs.tabText(index)
+        if name in self._drawn_once:
+            return
+        try:
+            if name == "Reactivity":
+                self.rx_combo.setCurrentText("OH"); self._update_reactivity()
+            elif name == "Budgets":
+                self._cb_mode_combo.setCurrentIndex(1); self._update_both_budgets()
+            else:
+                return
+            self._drawn_once.add(name)
+        except Exception as e:
+            print(f"[viewer] {name} not drawn automatically: {e}")
+
     def _toggle_figure_dock(self):
         if self.figure_dock is not None:
             self.figure_dock.setVisible(not self.figure_dock.isVisible())
@@ -2759,6 +2774,9 @@ class ResultsViewer(QMainWindow):
             print(f"[viewer] Overview tab not available: {_e}")
         self._auto_load_koh()
         self._auto_load_observations()
+        # Reactivity (OH) and Budgets (grouped by class) draw themselves the first time their tab is opened
+        self._drawn_once = set()
+        self.right_tabs.currentChanged.connect(self._draw_on_first_visit)
 
     # ── Reference loading ─────────────────────────────────────────────────────
     def _cmp_easy_scenario_dir(self) -> str:
@@ -3812,7 +3830,7 @@ class ResultsViewer(QMainWindow):
         self._nb_view.currentIndexChanged.connect(self._update_nitrogen_budget)
         ctrl_layout.addWidget(self._nb_view)
         ctrl_layout.addWidget(QLabel("Exclude:"))
-        self._cb_exclude = QLineEdit("CO2"); self._cb_exclude.setFixedWidth(220)
+        self._cb_exclude = QLineEdit("CO, CO2"); self._cb_exclude.setFixedWidth(220)
         self._cb_exclude.setPlaceholderText("names or formulas, e.g. CO, CH4, C2H6O")
         self._cb_exclude.setToolTip("Species left out of both budgets: MCM names or chemical formulas, comma-separated. "
                                     "A formula removes every species with that formula (isomers included).")
