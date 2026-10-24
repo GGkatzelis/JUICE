@@ -1346,6 +1346,10 @@ class _WikiFetchThread(QThread):
             self.failed.emit(str(e))
 
 
+def _wrap(text: str) -> QLabel:
+    lb = QLabel(text); lb.setWordWrap(True); return lb
+
+
 class WikiImportDialog(QDialog):
     """Fetch / load / paste a saphirwiki day page, show the parsed action log for confirmation,
     and hand back a WikiImport (roof, injections with actions, precursors, checks)."""
@@ -1381,7 +1385,7 @@ class WikiImportDialog(QDialog):
         # left: the original page text (fetched, loaded or pasted) — right: what was made of it
         split = QSplitter(Qt.Orientation.Horizontal); lay.addWidget(split, stretch=1)
         left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("<b>Original wiki text</b> — as fetched / loaded, or paste an action log here; select a row on the right to find its line"))
+        ll.addWidget(_wrap("<b>Original wiki text</b> — as fetched / loaded, or paste an action log here; select a row on the right to find its line"))
         self.paste = QPlainTextEdit()
         self.paste.setPlaceholderText("07:30 H F.R. CHANGE: humidification start\n08:15 h F.R. CHANGE: humidification stop\n"
                                       "08:40 X M.S. CHANGE: 20 µl isoprene injected\n09:30 R F.R. CHANGE: open roof")
@@ -1390,14 +1394,14 @@ class WikiImportDialog(QDialog):
         hb = QHBoxLayout(); hb.addWidget(pb); hb.addStretch(); ll.addLayout(hb)
         split.addWidget(left)
         right = QWidget(); rl = QVBoxLayout(right); rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(QLabel("<b>Action log</b> — what the parser read; untick lines that should not be used"))
+        rl.addWidget(_wrap("<b>Action log</b> — what the parser read; untick lines that should not be used"))
         self.table = _table(["Use", "Time", "Code", "Action", "Wiki text"])
         for c in (0, 1, 2):
             self.table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemChanged.connect(lambda _it: self._preview())
         self.table.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._show_source_line(r))
         rl.addWidget(self.table, stretch=2)
-        rl.addWidget(QLabel("<b>What will be imported</b> — ⚠ marks things the wiki did not say clearly"))
+        rl.addWidget(_wrap("<b>What will be imported</b> — ⚠ marks things the wiki did not say clearly"))
         self.preview = QPlainTextEdit(); self.preview.setReadOnly(True); rl.addWidget(self.preview, stretch=1)
         split.addWidget(right); split.setSizes([420, 680])
         hbr = QHBoxLayout()
