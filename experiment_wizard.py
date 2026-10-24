@@ -214,8 +214,9 @@ class StartPage(QWizardPage):
         lay.addWidget(QLabel("<b>Start from</b>"))
         hb = QHBoxLayout()
         ob = QPushButton("Open a saved experiment …"); ob.clicked.connect(self._open_saved); hb.addWidget(ob)
-        wb = QPushButton("Import from the SAPHIR wiki …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self)); hb.addWidget(wb)
-        pb = QPushButton("Paste experiment notes …"); pb.clicked.connect(lambda: self.wiz.import_from_wiki(self, paste=True)); hb.addWidget(pb)
+        wb = QPushButton("Import experiment log …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self)); hb.addWidget(wb)
+        wb.setToolTip("Fetch the day's SAPHIR wiki page, load a saved page or text file, or paste your own notes "
+                      "('HH:MM <code> …' lines) — all end in the same action-log check")
         hb.addStretch(); lay.addLayout(hb)
         lay.addWidget(_info("Wiki import and pasted notes read the action log (roof, humidification, injections), "
                             "switch to the archive for the measured conditions when the day folder exists, and leave "
@@ -656,7 +657,7 @@ class InjectionsPage(QWizardPage):
         for label, fn in [("+ add", self._add_action), ("+ compounds from Chemistry", self._add_compounds),
                           ("+ mixture …", self._mixture_dialog), ("Edit mixture …", self._edit_mixture),
                           ("Amount calculator …", self._amount_dialog),
-                          ("Import from wiki …", lambda: self.wiz.import_from_wiki(self)),
+                          ("Import experiment log …", lambda: self.wiz.import_from_wiki(self)),
                           ("− row", lambda: _del_row(self.table))]:
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); lay.addLayout(hb)
@@ -1358,7 +1359,7 @@ class WikiImportDialog(QDialog):
                  chamber_name: str = "SAPHIR"):
         super().__init__(parent)
         self.T_K, self.P_hPa, self.chamber_name = T_K, P_hPa, chamber_name
-        self.setWindowTitle("Import a SAPHIR experiment from the wiki")
+        self.setWindowTitle("Import experiment log — SAPHIR wiki, saved page or pasted notes")
         self.resize(1100, 720)
         self.result_import: Optional[saphir_wiki.WikiImport] = None
         self.archive_root = archive_root
