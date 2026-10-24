@@ -1923,6 +1923,11 @@ class ResultsViewer(QMainWindow):
         try:
             self.budget_engine.load(path, include_dirs=self._toml_include_dirs())
             name = os.path.basename(path)
+            if hasattr(self, '_cs_ts_fig'):            # the injections panel needs the scenario's burst list
+                try:
+                    self._cs_draw_injection_ts()
+                except Exception:
+                    pass
             self._config_label_text = f"✓ {name}"
             self.cfg_status.setText(self._config_label_text)
             if not silent:
@@ -3781,7 +3786,9 @@ class ResultsViewer(QMainWindow):
 
         ctrl_layout.addWidget(QLabel("Display:"))
         self._cb_mode_combo = QComboBox()
-        self._cb_mode_combo.addItems(["All Species", "Grouped by Class"])
+        self._cb_mode_combo.addItems(["All Species", "Grouped by Class", "Grouped by carbon number", "Grouped by oxygen number", "Grouped by volatility (VBS)"])
+        self._cb_mode_combo.setCurrentIndex(1)
+        self._cb_mode_combo.setToolTip("carbon budget bands: every species, chemical classes (parent VOCs separately), carbon number, oxygen number, or volatility class from LogC*")
         ctrl_layout.addWidget(self._cb_mode_combo)
 
         self._cb_total_chk = QCheckBox("Total C")
@@ -3931,6 +3938,12 @@ class ResultsViewer(QMainWindow):
         mode = self._cb_mode_combo.currentText()
         if mode == "All Species":
             names, colors = self._cb_draw_all_species(ax, t, species_data)
+        elif mode.startswith("Grouped by carbon"):
+            names, colors = self._cb_draw_by(ax, t, species_data, self._key_carbon, ["C1", "C2–C3", "C4–C5", "C6–C9", "C10–C15", "C16+"], "viridis")
+        elif mode.startswith("Grouped by oxygen"):
+            names, colors = self._cb_draw_by(ax, t, species_data, self._key_oxygen, ["no O", "1 O", "2 O", "3 O", "4 O", "5+ O"], "YlOrBr")
+        elif mode.startswith("Grouped by volatility"):
+            names, colors = self._cb_draw_by(ax, t, species_data, self._key_volatility, ["VOC", "IVOC", "SVOC", "LVOC", "ELVOC"], "plasma")
         else:
             names, colors = self._cb_draw_grouped(ax, t, species_data, parent_voc)
 
@@ -3959,7 +3972,7 @@ class ResultsViewer(QMainWindow):
         handles, labels = ax.get_legend_handles_labels()
         if handles:
             ncol = min(6, max(3, -(-len(handles) // 5)))          # below the axes in up to 6 columns: full-width plot, never over the stack
-            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.14), borderaxespad=0.0,
+            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.22), borderaxespad=0.0,   # below the x label
                       fontsize=10 if len(handles) > 15 else 11,
                       ncol=ncol, framealpha=0.85).set_draggable(True)
 
@@ -4037,6 +4050,39 @@ class ResultsViewer(QMainWindow):
             names.append(f"{prefix} (minor, {len(minor)} compounds)"); arrays.append(sum(minor))
             colors.append(_shade(base_color, n - 1, n)); hatches.append('')
         return names, arrays, colors, hatches
+
+    # ── alternative groupings of the carbon budget ──
+    @staticmethod
+    def _key_carbon(name):
+        n = _carbon_count(name)
+        return "C1" if n <= 1 else "C2–C3" if n <= 3 else "C4–C5" if n <= 5 else "C6–C9" if n <= 9 else "C10–C15" if n <= 15 else "C16+"
+
+    @staticmethod
+    def _key_oxygen(name):
+        e = MCM_DB.get(name.upper()); n = e.n_O if e is not None else 0
+        return "no O" if n == 0 else f"{n} O" if n <= 4 else "5+ O"
+
+    def _key_volatility(self, name):
+        e = MCM_DB.get(name.upper())
+        if e is None or e.n_C <= 0:
+            return "VOC"
+        lc = self._cs_calc_logc_star(e.n_C, e.n_O, e.n_N)
+        if not np.isfinite(lc):
+            return "VOC"
+        return "VOC" if lc > 6.5 else "IVOC" if lc > 2.5 else "SVOC" if lc > -0.5 else "LVOC" if lc > -4.5 else "ELVOC"
+
+    def _cb_draw_by(self, ax, t, species_data, key_fn, order, cmap_name):
+        """Stacked bands by an arbitrary key (carbon number, oxygen number, volatility class)."""
+        totals = {}
+        for sp, (_, ppb_c) in species_data.items():
+            k = key_fn(sp)
+            totals[k] = totals.get(k, np.zeros(len(t))) + np.nan_to_num(ppb_c)
+        keys = [k for k in order if k in totals and np.nanmax(totals[k]) > 1e-9] + [k for k in totals if k not in order and np.nanmax(totals[k]) > 1e-9]
+        cmap = _mcm.get_cmap(cmap_name)
+        colors = [cmap(0.15 + 0.75 * i / max(1, len(keys) - 1)) for i in range(len(keys))]
+        if keys:
+            ax.stackplot(t, *[totals[k] for k in keys], labels=keys, colors=colors, alpha=0.85)
+        return keys, colors
 
     def _cb_draw_all_species(self, ax, t, species_data):
         """Stacked area with one band per species, sorted by mean contribution.
@@ -4216,7 +4262,7 @@ class ResultsViewer(QMainWindow):
         handles, labels = ax.get_legend_handles_labels()
         if handles:
             ncol = min(6, max(3, -(-len(handles) // 5)))          # below the axes in up to 6 columns: full-width plot, never over the stack
-            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.14), borderaxespad=0.0,
+            ax.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, -0.22), borderaxespad=0.0,   # below the x label
                       fontsize=10 if len(handles) > 15 else 11,
                       ncol=ncol, framealpha=0.85).set_draggable(True)
 
@@ -4556,6 +4602,11 @@ class ResultsViewer(QMainWindow):
             if tgt and tgt in self.df.columns and tgt not in inj_species:
                 inj_species.append(tgt)
         # Limit to the top few by peak concentration to avoid clutter
+        excl_txt = self._cs_exclude.text() if hasattr(self, '_cs_exclude') else ''
+        if excl_txt.strip():                       # the Exclude field applies here too (names or formulas)
+            excl = {x.strip().upper() for x in excl_txt.replace(';', ',').split(',') if x.strip()}
+            inj_species = [sp for sp in inj_species if sp.upper() not in excl
+                           and not (MCM_DB.get(sp.upper()) is not None and (getattr(MCM_DB.get(sp.upper()), 'formula', '') or '').upper() in excl)]
         if len(inj_species) > 6:
             peaks = [(sp, np.nanmax(self.df[sp].values / self.df['M'].values * 1e9)) for sp in inj_species]
             peaks.sort(key=lambda x: -x[1])
