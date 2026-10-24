@@ -4882,17 +4882,22 @@ class ResultsViewer(QMainWindow):
         unit_lbl = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
         x_all = sorted(spc['nC'].unique())
 
-        # ── LEFT: nC vs Σconc, stacked by nO ─────────────────────────
-        grp_no = (spc.groupby(['nC', 'nO'])['unit_val'].sum().unstack(fill_value=0))
+        # ── LEFT: nC vs Σconc, stacked by nO (saturated: nO ≥ O_MAX is one band) ──
+        O_MAX = 7
+        spc = spc.copy(); spc['nO_bin'] = spc['nO'].clip(upper=O_MAX)
+        grp_no = (spc.groupby(['nC', 'nO_bin'])['unit_val'].sum().unstack(fill_value=0))
         grp_no = grp_no.reindex(x_all, fill_value=0)
         n_levels = sorted(grp_no.columns)
         cmap = _mcm.get_cmap('viridis')
         bottoms = np.zeros(len(x_all))
+        self._cs_co_bars = []                          # (axes, patch, nC, key, kind) for the hover list
         for no in n_levels:
-            color = cmap(no / max(max(n_levels), 1))
+            color = cmap(min(no, O_MAX) / O_MAX)
             vals = grp_no[no].values
-            ax_no.bar(x_all, vals, bottom=bottoms, color=color,
-                      edgecolor='k', linewidth=0.3, label=f"nO={int(no)}")
+            bars = ax_no.bar(x_all, vals, bottom=bottoms, color=color,
+                             edgecolor='k', linewidth=0.3, label=(f"nO≥{O_MAX}" if no >= O_MAX else f"nO={int(no)}"))
+            for x, patch in zip(x_all, bars):
+                self._cs_co_bars.append((ax_no, patch, x, no, "nO"))
             bottoms = bottoms + vals
         ax_no.set_xlabel("Number of carbon atoms (nC)", fontsize=13)
         ax_no.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=13)
@@ -4911,9 +4916,11 @@ class ResultsViewer(QMainWindow):
             if cls not in grp_cl.columns:
                 continue
             vals = grp_cl[cls].values
-            ax_cl.bar(x_all, vals, bottom=bottoms,
-                      color=self._CS_CLASS_COLORS[cls],
-                      edgecolor='k', linewidth=0.3, label=cls)
+            bars = ax_cl.bar(x_all, vals, bottom=bottoms,
+                             color=self._CS_CLASS_COLORS[cls],
+                             edgecolor='k', linewidth=0.3, label=cls)
+            for x, patch in zip(x_all, bars):
+                self._cs_co_bars.append((ax_cl, patch, x, cls, "class"))
             bottoms = bottoms + vals
         ax_cl.set_xlabel("Number of carbon atoms (nC)", fontsize=13)
         ax_cl.set_ylabel(f"Σ concentration ({unit_lbl})", fontsize=13)
@@ -4926,7 +4933,46 @@ class ResultsViewer(QMainWindow):
         self._cs_co_fig.suptitle("Composition by carbon number",
                                   fontsize=12, fontweight='bold', y=0.99)
         self._cs_co_fig.subplots_adjust(left=0.07, right=0.98, top=0.88, bottom=0.16, wspace=0.28)
+        self._cs_co_spc = spc; self._cs_co_tip = None
+        if not getattr(self, '_cs_co_hover_on', False):
+            self._cs_co_canvas.mpl_connect('motion_notify_event', self._cs_co_hover)
+            self._cs_co_canvas.mpl_connect('axes_leave_event', lambda _e: self._cs_co_hover(None))
+            self._cs_co_hover_on = True
         self._cs_co_canvas.draw()
+
+    def _cs_co_hover(self, event):
+        """Hover a stacked bar segment: the species in it, largest first (top 5) and how many there are."""
+        tip = getattr(self, '_cs_co_tip', None)
+        if tip is not None:
+            try:
+                tip.remove()
+            except Exception:
+                pass
+            self._cs_co_tip = None
+        if event is None or event.inaxes is None or not getattr(self, '_cs_co_bars', None):
+            self._cs_co_canvas.draw_idle(); return
+        hit = next((b for b in self._cs_co_bars if b[0] is event.inaxes and b[1].get_height() > 0 and b[1].contains(event)[0]), None)
+        if hit is None:
+            self._cs_co_canvas.draw_idle(); return
+        ax, patch, nC, key, kind = hit
+        spc = self._cs_co_spc
+        if kind == "nO":
+            sel = spc[(spc['nC'] == nC) & (spc['nO_bin'] == key)]
+            head = f"C{int(nC)}, " + (f"nO ≥ {int(key)}" if key >= 7 else f"nO = {int(key)}")
+        else:
+            sel = spc[(spc['nC'] == nC) & (spc['class'] == key)]
+            head = f"C{int(nC)}, {key}"
+        sel = sel.sort_values('unit_val', ascending=False)
+        unit = 'ppb' if self._cs_units_combo.currentIndex() == 0 else 'µg/m³'
+        rows = [f"{r['name']} ({r['formula']}): {r['unit_val']:.3g}" for _i, r in sel.head(5).iterrows()]
+        more = f"\n… {len(sel) - 5} more" if len(sel) > 5 else ""
+        text = f"{head} — {len(sel)} compound(s), Σ {sel['unit_val'].sum():.3g} {unit}\n" + "\n".join(rows) + more
+        x = patch.get_x() + patch.get_width() / 2; y = patch.get_y() + patch.get_height() / 2
+        right = x > np.mean(ax.get_xlim())
+        self._cs_co_tip = ax.annotate(text, xy=(x, y), xytext=(-12 if right else 12, 0), textcoords="offset points",
+                                      ha="right" if right else "left", va="center", fontsize=10, zorder=20,
+                                      bbox=dict(boxstyle="round,pad=0.35", fc="white", ec="#888", alpha=0.95))
+        self._cs_co_canvas.draw_idle()
 
     def _cs_draw_family_pie(self):
         """Bottom-right panel: mass defect plot — molecular mass vs mass defect
