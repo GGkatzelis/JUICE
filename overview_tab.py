@@ -474,7 +474,8 @@ class OverviewTab(QWidget):
                 dict(title="Photolysis: jNO2 and jO1D", species=have(["JNO2", "J4"])[:1] + have(["JO1D", "J1"])[:1], kind="native", obs=["jNO2"], log=False,
                      twin=have(["JO1D", "J1"])[:1][0] if have(["JO1D", "J1"]) else None, units=("jNO2 [1/s]", "jO1D [1/s]")),
                 dict(title="Chamber sources and conditions", species=[], kind="sources", obs=["jNO2"], log=False, sources=True),
-                dict(title="NOx and ozone", species=have(["NO", "NO2", "O3"]), kind="ppb", obs=["NO", "NO2", "O3"], log=False)]
+                dict(title="NOx and ozone", species=have(["NO", "NO2", "O3"]), kind="ppb", obs=["NO", "NO2", "O3"], log=False,
+                     twin="O3", units=("NO, NO2 [ppb]", "O3 [ppb]"))]
 
     def _model_at(self, species: str, kind: str, hours: np.ndarray):
         t, y = self._model(species, kind)
