@@ -1005,12 +1005,13 @@ class StudyWindow(QMainWindow):
             x = np.array([r[a1] for r in sub]); y = np.array([r[a2] for r in sub]); z = np.array([r[key] for r in sub])
             if len(sub) >= 4:
                 xs, ys = (np.log10(x), np.log10(y)) if log else (x, y)
+                cs = None
                 try:
                     cs = ax.tricontourf(xs, ys, z, levels=14, cmap="viridis"); self.fig.colorbar(cs, ax=ax, label=f"{label} [{unit}]")
                     ax.tricontour(xs, ys, z, levels=7, colors="white", linewidths=0.6, alpha=0.7)
                 except Exception:
                     sc = ax.scatter(xs, ys, c=z, cmap="viridis", s=60); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
-                ax.scatter(xs, ys, c="k", s=8)
+                self._run_markers(ax, xs, ys, z, cs)
                 for xi, yi, zi in zip(xs, ys, z):
                     ax.annotate(f"{zi:.3g}", (xi, yi), fontsize=F["small"], color="white", xytext=(3, 3), textcoords="offset points")
                 regime_note = self._regimes(ax, st, sub, a1, a2, xs, ys, z, key, log) if self.show_regimes.isChecked() else ""
@@ -1147,12 +1148,13 @@ class StudyWindow(QMainWindow):
                 lo, hi = (np.nanpercentile(allv, 1), np.nanpercentile(allv, 99)) if allv.size else (0, 1)
                 self._v_scale[key] = (lo, hi if hi > lo else lo + 1)
             lo, hi = self._v_scale[key]; levels = np.linspace(lo, hi, 15)
+        cs = None
         try:                                   # values beyond the day's scale: end colours (arrows on the colour bar), never holes
             cs = ax.tricontourf(xs, ys, z, levels=levels, cmap="viridis", extend="both" if not isinstance(levels, int) else "neither")
             fig.colorbar(cs, ax=ax, label=f"{lab} [{unit}]" if unit != "-" else lab)
         except Exception:
             sc = ax.scatter(xs, ys, c=z, cmap="viridis", s=60); fig.colorbar(sc, ax=ax)
-        ax.scatter(xs, ys, c="k", s=6)
+        self._run_markers(ax, xs, ys, z, cs)
         note = ""
         if self.v_reg.isChecked():
             note = self._v_ridge(ax, st, a1, a2, x, y, po3, log)
@@ -1282,6 +1284,14 @@ class StudyWindow(QMainWindow):
                 lg.set_bbox_to_anchor((0.5, -0.16), transform=ax.transAxes); lg.set_loc("upper center")
             else:
                 lg.set_bbox_to_anchor(None); lg.set_loc(choice)
+
+    def _run_markers(self, ax, xs, ys, z, cs):
+        """One circle per run, filled with that run's own value on the contour's colour scale, thin white edge:
+        a circle that stands out from its surroundings shows where the contour between runs is interpolated."""
+        if cs is not None:
+            ax.scatter(xs, ys, c=z, cmap=cs.cmap, norm=cs.norm, s=34, edgecolors="white", linewidths=0.8, zorder=5)
+        else:
+            ax.scatter(xs, ys, c="k", s=8, zorder=5)
 
     def _ppb_scale(self, ax, which: str, total_ppb: float, log: bool):
         """Second scale on the opposite side of a factor axis: the total injected ppb that factor means."""
