@@ -42,7 +42,7 @@ class _Events(QObject):
 
 
 class StudyWindow(QMainWindow):
-    def __init__(self, toml_path: str = "", study_path: str = ""):
+    def __init__(self, toml_path: str = "", study_path: str = "", experiment: str = ""):
         super().__init__()
         self.toml_path = toml_path
         self.paths = load_paths(toml_path)
@@ -62,11 +62,30 @@ class StudyWindow(QMainWindow):
         if study_path:
             self._load(study_path)
         else:
+            if experiment and os.path.isfile(experiment):      # opened from the step window: start from that experiment
+                self.study.experiments = [experiment]
+                base = os.path.basename(experiment)[:-len(".experiment.json")]
+                self.study.name = f"{base}_study"
+                self.study.folder = os.path.join(os.path.dirname(experiment), "studies", self.study.name)
             self._from_study()
+        self._readiness()
 
     # ── layout ──
     def _build(self):
         left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6, 6, 6, 6)
+        ll.addWidget(_more_info("A study reruns saved experiments many times without touching them: pick the experiments, "
+                                "optionally one change for all of them, optionally a sweep — then pilot, estimate, run.", [
+            "<b>One experiment, a sweep</b>: add the experiment, leave the variant empty, switch on one or two axes "
+            "(e.g. initial NO log 0.1 … 20 ppb × injected VOC × 0.5 … 4) → an ozone isopleth or a sensitivity curve.",
+            "<b>Many experiments, one change</b>: add the experiments, put the change in the variant table "
+            "(a reaction rate, an add-on, a chamber parameter, scaled injections) → every experiment is rerun with it; "
+            "compare against the original runs in the viewer.",
+            "<b>Both</b>: the sweep is applied to every experiment; the plot shows the first one, the table all of them.",
+            "<b>Nothing changed</b>: just reruns the experiments with this study's solver settings (useful after a mechanism update).",
+            "Yellow fields still need input. 'Check' lists what the study would do and what it cannot do (e.g. a reaction that is "
+            "not in an experiment's subset). 'Run pilot, then estimate' runs one case alone, measures it and asks before the rest.",
+            "Every run lives in &lt;study folder&gt;/runs/&lt;experiment&gt;__&lt;axis&gt;-&lt;value&gt;/ with provenance lines in its .easy; "
+            "finished runs are skipped when the study is repeated or extended."], "ⓘ How a study works"))
         g = QGroupBox("Study"); gl = QGridLayout(g)
         gl.addWidget(QLabel("Name"), 0, 0); self.name = QLineEdit(); gl.addWidget(self.name, 0, 1, 1, 2)
         gl.addWidget(QLabel("Folder"), 1, 0); self.folder = QLineEdit(); gl.addWidget(self.folder, 1, 1)
@@ -76,6 +95,7 @@ class StudyWindow(QMainWindow):
 
         g = QGroupBox("Base experiments (.experiment.json written by the step window)"); gl = QVBoxLayout(g)
         self.exps = QListWidget(); self.exps.setMaximumHeight(110); gl.addWidget(self.exps)
+        self.exps.model().rowsInserted.connect(self._readiness); self.exps.model().rowsRemoved.connect(self._readiness)
         hb = QHBoxLayout()
         for label, fn in (("Add …", self._add_exps), ("Add all in a folder …", self._add_folder), ("Remove", self._remove_exp)):
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
@@ -106,6 +126,9 @@ class StudyWindow(QMainWindow):
             self.axes_ui.append((on, kind, target, values))
         gl.setColumnStretch(2, 2); gl.setColumnStretch(3, 3)
         self.count = QLabel(""); self.count.setStyleSheet("color:#555"); gl.addWidget(self.count, 2, 0, 1, 4)
+        gl.addWidget(_info("Target: a species for 'initial' (values in ppb); an injection name, an action, 'voc', 'nox' or 'all' for the "
+                           "injection kinds; a reaction for 'rate_factor'. Values: a list, 'lin a b n' or 'log a b n'. "
+                           "Two axes = a grid of all combinations."), 3, 0, 1, 4)
         ll.addWidget(g)
 
         g = QGroupBox("Metrics taken from every run"); gl = QGridLayout(g)
@@ -127,7 +150,11 @@ class StudyWindow(QMainWindow):
         hb.addStretch(); gl.addLayout(hb, 1, 0, 1, 4)
         self.bar = QProgressBar(); self.bar.setFormat("%v / %m runs"); gl.addWidget(self.bar, 2, 0, 1, 4)
         self.status = QLabel("—"); self.status.setWordWrap(True); self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.status, 3, 0, 1, 4)
+        self.ready = QLabel(""); self.ready.setWordWrap(True); self.ready.setStyleSheet("color:#6a4c93; font-style: italic")
+        self.ready.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.ready, 4, 0, 1, 4)
         ll.addWidget(g)
+        self.name.textChanged.connect(self._readiness); self.folder.textChanged.connect(self._readiness)
+        self.mods.itemChanged.connect(self._readiness)
         ll.addStretch()
         scroll = QScrollArea(); scroll.setWidget(left); scroll.setWidgetResizable(True); scroll.setMinimumWidth(560)
 
@@ -224,9 +251,50 @@ class StudyWindow(QMainWindow):
         for c, v in enumerate((m.target if m else "", m.value if m else "", m.comment if m else ""), start=1):
             self.mods.setItem(r, c, QTableWidgetItem(v))
 
+    def _readiness(self, *_a):
+        """Yellow on what still needs input, and one line saying what the study would do."""
+        if getattr(self, "_loading", False):
+            return
+        missing = []
+        theme.mark_missing(self.name, not self.name.text().strip())
+        if not self.name.text().strip():
+            missing.append("a study name")
+        theme.mark_missing(self.exps, self.exps.count() == 0)
+        if self.exps.count() == 0:
+            missing.append("at least one base experiment")
+        n_axes = 0
+        for i, (on, kind, target, values) in enumerate(self.axes_ui):
+            if on.isChecked():
+                bad_t = not target.text().strip()
+                try:
+                    bad_v = not S.parse_values(values.text())
+                except ValueError:
+                    bad_v = True
+                theme.mark_missing(target, bad_t); theme.mark_missing(values, bad_v)
+                if bad_t or bad_v:
+                    missing.append(f"{'the target' if bad_t else 'the values'} of axis {i + 1}")
+                else:
+                    n_axes += 1
+            else:
+                theme.mark_missing(target, False); theme.mark_missing(values, False)
+        n_mods = sum(1 for r in range(self.mods.rowCount()) if self.mods.item(r, 1) and self.mods.item(r, 1).text().strip())
+        if self.mods.rowCount() > n_mods:
+            missing.append("the target of a change in the variant table")
+        if missing:
+            self.ready.setText("Still needed: " + ", ".join(missing) + ".")
+        else:
+            what = []
+            if n_mods:
+                what.append(f"{n_mods} change(s) applied to every experiment")
+            if n_axes:
+                what.append(f"a sweep over {n_axes} axis/axes")
+            self.ready.setText("Ready: " + (" and ".join(what) if what else "the experiments rerun unchanged") +
+                               f" — {self.exps.count()} experiment(s). Next: Check, then 'Run pilot, then estimate'.")
+
     def _count(self, *_a):
         if getattr(self, "_loading", False):
             return
+        self._readiness()
         try:
             st = self._to_study(); n_pts = len(S.grid_points(st.axes)); n = len(st.experiments) * n_pts
             txt = f"{len(st.experiments)} experiment(s) × {n_pts} grid point(s) = {n} runs"
@@ -558,7 +626,8 @@ def main(argv=None):
     theme.taskbar_identity()
     app = QApplication(argv); theme.apply_theme(app)
     files = [a for a in argv[1:] if a.endswith(".study.json")]
-    w = StudyWindow(pick_toml(argv), files[0] if files else ""); w.show(); theme.force_taskbar_icon(w)
+    exp = argv[argv.index("--experiment") + 1] if "--experiment" in argv and argv.index("--experiment") + 1 < len(argv) else ""
+    w = StudyWindow(pick_toml(argv), files[0] if files else "", exp); w.show(); theme.force_taskbar_icon(w)
     return app.exec()
 
 

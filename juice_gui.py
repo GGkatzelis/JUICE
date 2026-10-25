@@ -458,6 +458,10 @@ class RunPage(QWidget):
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self.stop); hb.addWidget(self.stop_btn)
         self.view_btn = QPushButton("3. Open results"); self.view_btn.setObjectName("primary"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
+        self.study_btn = QPushButton("Sweep or batch from this experiment …")
+        self.study_btn.setToolTip("Saves this experiment and opens the study window with it: vary NOx / VOC over a grid (isopleth), "
+                                  "or apply one change to this and other experiments and run them all.")
+        self.study_btn.clicked.connect(self._study_from_here); hb.addWidget(self.study_btn)
         ob = QPushButton("Open an earlier result …"); ob.clicked.connect(lambda: self.win._open_results_file()); hb.addWidget(ob)
         hb.addStretch(); lay.addLayout(hb)
         self.files = QLabel(""); self.files.setWordWrap(True); lay.addWidget(self.files)
@@ -504,6 +508,18 @@ class RunPage(QWidget):
 
     def cs_path(self) -> str:
         return self.json_path[:-5] + ".cs" if self.json_path else ""
+
+    def _study_from_here(self):
+        """Save the experiment description, then open the study window with it as the base experiment."""
+        spec = self.win.collect_spec()
+        path = os.path.join(self.win.out_dir(), spec.name + ".experiment.json")
+        if not os.path.isdir(os.path.join(self.win.out_dir(), "chemistry")) and not spec.inorganic_only:
+            if QMessageBox.question(self.win, "Study", "A study needs this experiment's input files prepared once (step 1).\n"
+                                    "Prepare them now and open the study?") != QMessageBox.StandardButton.Yes:
+                return
+            if not self.prepare():
+                return
+        self.win._save(path); self.win._study(path)
 
     def run(self):
         if not self.json_path:
@@ -785,9 +801,11 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         else:
             QMessageBox.information(self, "Experiment folder", f"{self.out_dir()} does not exist yet — save the experiment first.")
 
-    def _study(self):
+    def _study(self, experiment: str = ""):
         """The study window (study_window.py): many experiments with one consistent change, or a parameter sweep."""
         args = [os.path.join(HERE, "study_window.py")] + (["--toml", self.toml_path] if self.toml_path else [])
+        if experiment:
+            args += ["--experiment", experiment]
         p = QProcess(self); p.start(sys.executable, args); self._studies = getattr(self, "_studies", []) + [p]
 
     def _settings(self):
