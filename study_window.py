@@ -259,15 +259,20 @@ class StudyWindow(QMainWindow):
             self.exp_status.setText(f"cannot read: {e}"); return
         self._spec = spec
         inj = [e for e in spec.injections if e.products.strip()]
+        amount = lambda e: f"{e.name} {e.total_ppb} ppb at {e.start or '—'}"
+        # the two groups first: true injections only (VOC = voc + mixture actions, NOx = NO and NO2 injections incl. their
+        # impurity channels); chamber sources are listed separately below and are never part of a group
+        vocs = [e for e in inj if e.action_key() in ("voc", "mixture")]
+        if vocs:
+            self._vary_add("All VOC injections together: " + ", ".join(e.name for e in vocs), "group of injections", "; ".join(amount(e) for e in vocs),
+                           ("injection_scale", ",".join(e.name for e in vocs)), None, hows=("× factor",), label="VOC")
+        nox = [e for e in inj if e.action_key() in ("no", "no2")]
+        if nox:
+            self._vary_add("All NOx injections together: " + ", ".join(e.name for e in nox), "group of injections", "; ".join(amount(e) for e in nox),
+                           ("injection_scale", ",".join(e.name for e in nox)), None, hows=("× factor",), label="NOx")
         for e in inj:
             self._vary_add(e.name, ACTIONS.get(e.action_key(), {}).get("label", e.action_key()), f"{e.total_ppb} ppb at {e.start or '—'}" + (f", {e.duration_min:g} min" if e.duration_min else ""),
                            ("injection_scale", e.name), ("injection_set", e.name), hows=("× factor", "= ppb"))
-        vocs = [e.name for e in inj if e.action_key() in ("voc", "mixture")]
-        if len(vocs) > 1:
-            self._vary_add("All VOC injections together", "group", ", ".join(vocs), ("injection_scale", ",".join(vocs)), None, hows=("× factor",), label="VOC")
-        nox = [e.name for e in inj if e.action_key() in ("no", "no2")]
-        if len(nox) > 1:
-            self._vary_add("All NOx injections together", "group", ", ".join(nox), ("injection_scale", ",".join(nox)), None, hows=("× factor",), label="NOx")
         ch = spec.chamber
         for label, fld, k_scale, k_set in CHAMBER_ROWS:
             if fld == "hono_const" and not ch.hono:
@@ -280,12 +285,14 @@ class StudyWindow(QMainWindow):
         self.exp_status.setText(f"{spec.name}: {len(inj)} injection(s)" + (", chamber sources" if ch.hono or ch.hcho else "") +
                                 f"; {'measured conditions' if spec.conditions.source in ('archive', 'file') else 'manual conditions'}; "
                                 f"{len(spec.precursors)} compound(s)" if spec.precursors else f"{spec.name}: {len(inj)} injection(s)")
+        placed = set()                                   # a saved member goes to the first row that offers it
         for row in self._vary_rows:
-            for i, key in enumerate(("scale", "set")):
+            for key in ("scale", "set"):
                 kt = row.get(key)
-                if assignments and kt in assignments:
+                if assignments and kt in assignments and kt not in placed:
                     ax, how = assignments[kt]
-                    row["axis"].setCurrentIndex(ax); row["how"].setCurrentText(how)
+                    row["axis"].setCurrentIndex(ax); row["how"].setCurrentText(how); placed.add(kt)
+                    break
         self._count()
 
     def _vary_add(self, what, kind, base, scale: Optional[Tuple[str, str]], setk: Optional[Tuple[str, str]], hows, label: str = "", custom: bool = False):
@@ -319,7 +326,7 @@ class StudyWindow(QMainWindow):
                 if row["axis"].currentIndex() == i + 1:
                     how = row["how"].currentText()
                     kt = row["scale"] if how.startswith("×") else row["set"]
-                    if kt:
+                    if kt and kt not in [m[0] for m in members]:
                         members.append((kt, row["label"] or row["what"]))
             if not members:
                 continue
@@ -359,6 +366,8 @@ class StudyWindow(QMainWindow):
                 if exps:
                     self._load_exp(exps[0], assignments)
                     for (k, t), (i, how) in assignments.items():      # members with no row in the table (e.g. an initial value) → custom rows
+                        if any(r["scale"] == (k, t) or r["set"] == (k, t) for r in self._vary_rows):
+                            continue
                         if not any(r["scale"] == (k, t) or r["set"] == (k, t) for r in self._vary_rows):
                             if k == "initial":
                                 self._vary_add(f"Initial {t}", "initial value", "0 (not set)", None, (k, t), hows=("= ppb",), custom=True)
