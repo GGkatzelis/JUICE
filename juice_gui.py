@@ -567,11 +567,18 @@ class RunPage(QWidget):
         b.clicked.connect(lambda: self._study_earlier("sweep")); hb.addWidget(b)
         b = QPushButton("Run several earlier experiments with one change …"); b.setToolTip("Choose saved experiments; one change (rate, add-on, chamber parameter, scaled injections, MCM version) is applied to all of them.")
         b.clicked.connect(lambda: self._study_earlier("batch")); hb.addWidget(b)
+        b = QPushButton("Open an earlier study …"); b.setToolTip("A saved .study.json: its finished runs, results table and plots, without running anything again.")
+        b.clicked.connect(lambda: self._study_earlier("open")); hb.addWidget(b)
         hb.addStretch(); gl.addLayout(hb)
         return g
 
     def _study_earlier(self, mode: str):
         start = self.win.output_root if os.path.isdir(self.win.output_root) else self.win.easy_root
+        if mode == "open":
+            p, _ = QFileDialog.getOpenFileName(self.win, "Open a study", start, "Study (*.study.json)")
+            if p:
+                self.win._study(study=p)
+            return
         if mode == "sweep":
             p, _ = QFileDialog.getOpenFileName(self.win, "Experiment to sweep", start, "Experiment (*.experiment.json)")
             if p:
@@ -877,9 +884,11 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         else:
             QMessageBox.information(self, "Experiment folder", f"{self.out_dir()} does not exist yet — save the experiment first.")
 
-    def _study(self, experiment=None, mode: str = ""):
+    def _study(self, experiment=None, mode: str = "", study: str = ""):
         """The study window (study_window.py): sweep one experiment, or run several with one change."""
         args = [os.path.join(HERE, "study_window.py")] + (["--toml", self.toml_path] if self.toml_path else [])
+        if study:
+            args.append(study)
         if mode:
             args += ["--mode", mode]
         for e in ([experiment] if isinstance(experiment, str) else (experiment or [])):

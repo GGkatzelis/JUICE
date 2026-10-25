@@ -62,7 +62,9 @@ def main(argv=None) -> int:
         rest = [p for p in r.plans if not S.is_done(p)]
         if rest:
             secs, txt = r.estimate(workers)
-            print(f"{len(rest)} runs remaining × {S.fmt_duration(r.per_run_seconds())} / {workers or st.workers} workers ≈ {txt}")
+            wk = workers or st.workers
+            print(f"{len(rest)} runs remaining; pilot {S.fmt_duration(r.per_run_seconds())} alone, about "
+                  f"{S.parallel_factor(min(wk, len(rest))):.1f}× slower with {wk} in parallel ≈ {txt}")
             lvl, gtxt = S.check_guards(len(rest))
             if not yes:
                 ans = input(f"{gtxt}. Continue? [y/N] ").strip().lower()

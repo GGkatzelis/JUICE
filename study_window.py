@@ -297,9 +297,17 @@ class StudyWindow(QMainWindow):
             "between neighbouring points: % change of the result per % change of the parameter (+1 proportional, 0 insensitive, "
             "negative = the result falls as the parameter rises).",
             "<b>No axis</b> (several experiments, one change): one bar per experiment; compare each with its original run in the viewer.",
+            "<b>Regimes</b> (two axes, one of them NOx): <i>NOx-sensitive</i> = the result rises with NOx (little NOx; radicals end as "
+            "peroxides); <i>VOC-sensitive / NOx-saturated</i> = it rises with VOC and falls with more NOx (radicals end as HNO3). The dashed "
+            "ridge is where the result stops changing with NOx. Red dotted: P(H2O2)/P(HNO3) = 0.35, the chemical indicator of the "
+            "same split (high = NOx-sensitive). Few grid points give a coarse ridge — 6 × 6 or more for a clean one.",
             "<b>log axes</b> for log-spaced sweeps (log 0.1 20 6). <b>Save image</b> writes PNG or SVG."], "ⓘ About this plot"))
         hb = QHBoxLayout(); hb.addWidget(QLabel("Metric")); self.plot_metric = QComboBox(); self.plot_metric.currentIndexChanged.connect(self._plot); hb.addWidget(self.plot_metric)
         self.plot_log = QCheckBox("log axes"); self.plot_log.toggled.connect(self._plot); hb.addWidget(self.plot_log)
+        self.show_regimes = QCheckBox("regimes"); self.show_regimes.setChecked(True); self.show_regimes.toggled.connect(self._plot)
+        self.show_regimes.setToolTip("Isopleths with a NOx axis: the ridge where the result stops rising with NOx, the NOx-sensitive and\n"
+                                     "VOC-sensitive (NOx-saturated) sides, and the 0.35 contour of the regime indicator when it was computed.")
+        hb.addWidget(self.show_regimes)
         b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b); hb.addStretch(); pl.addLayout(hb)
         self.fig = Figure(figsize=(8, 5.5)); self.canvas = FigureCanvas(self.fig); pl.addWidget(self.canvas, stretch=1)
         self.plot_note = QLabel(""); self.plot_note.setWordWrap(True); self.plot_note.setStyleSheet("color:#555"); pl.addWidget(self.plot_note)
@@ -840,8 +848,12 @@ class StudyWindow(QMainWindow):
                 self.status.setText("all runs done"); return
             secs, txt = self.runner.estimate(self.workers.value()); lvl, g = S.check_guards(len(rest))
             disk = self.runner.disk_estimate()
-            msg = (f"Pilot {p.name}: {S.fmt_duration(p.elapsed)}.\n\n{len(rest)} runs remaining × {S.fmt_duration(self.runner.per_run_seconds())} "
-                   f"/ {self.workers.value()} workers ≈ {txt}" + (f"; about {disk / 1e6:.0f} MB of results" if disk and not math.isnan(disk) else "") +
+            wk = self.workers.value(); fac = S.parallel_factor(min(wk, len(rest)))
+            best = min(range(1, wk + 1), key=lambda k: S.estimate_seconds(len(rest), p.elapsed, k))
+            msg = (f"Pilot {p.name}: {S.fmt_duration(p.elapsed)} alone.\n\n{len(rest)} runs remaining with {wk} in parallel "
+                   f"(each about {fac:.1f}× slower when sharing the machine) ≈ {txt}" +
+                   (f"\n{best} in parallel would take about as long or less ({S.fmt_duration(S.estimate_seconds(len(rest), p.elapsed, best))})"
+                    if best < wk else "") + (f"; about {disk / 1e6:.0f} MB of results" if disk and not math.isnan(disk) else "") +
                    (f"\n\n⚠ {g}" if lvl != "ok" else "") + "\n\nRun the remaining runs now?")
             if QMessageBox.question(self, "Estimate", msg) == QMessageBox.StandardButton.Yes:
                 self._busy(True); self.runner.start(lambda k, pp, _r: self._events.event.emit(k, pp), self.workers.value(), rest)
@@ -918,7 +930,12 @@ class StudyWindow(QMainWindow):
     def _rows(self) -> List[dict]:
         st = self._to_study()
         plans = self.runner.plans if self.runner else S.plan_runs(st)
-        return S.collect_results(st, plans)
+        rows = S.collect_results(st, plans)
+        if "regime" not in st.metrics and len(st.axes) >= 2:          # the isopleth's regime contour needs it, even when not ticked
+            extra = {r["run"]: r.get("regime") for r in S.collect_results(S.Study(**{**st.__dict__, "metrics": ["regime"]}), plans)}
+            for r in rows:
+                r["regime"] = extra.get(r["run"])
+        return rows
 
     def _refresh_results(self):
         rows = self._rows(); st = self.study
@@ -973,11 +990,13 @@ class StudyWindow(QMainWindow):
                 ax.scatter(xs, ys, c="k", s=8)
                 for xi, yi, zi in zip(xs, ys, z):
                     ax.annotate(f"{zi:.3g}", (xi, yi), fontsize=F["small"], color="white", xytext=(3, 3), textcoords="offset points")
+                regime_note = self._regimes(ax, st, sub, a1, a2, xs, ys, z, key, log) if self.show_regimes.isChecked() else ""
             else:
                 sc = ax.scatter(x, y, c=z, cmap="viridis", s=80); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
             ax.set_xlabel(a1 + (" (log10)" if log else "")); ax.set_ylabel(a2 + (" (log10)" if log else ""))
             ax.set_title(f"{label} — {exp}" + (f"  (+{len(exps) - 1} more experiments: see Results)" if len(exps) > 1 else ""), loc="left")
-            self.plot_note.setText(f"isopleth of {label} over {a1} × {a2}; {len(sub)} grid points, interpolated between them")
+            self.plot_note.setText(f"isopleth of {label} over {a1} × {a2}; {len(sub)} grid points, interpolated between them"
+                                   + (("\n" + regime_note) if len(sub) >= 4 and regime_note else ""))
         elif len(axes) == 1:
             a1 = axes[0].name(); notes = []
             for exp in exps:
@@ -997,6 +1016,45 @@ class StudyWindow(QMainWindow):
             ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (change applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
             self.plot_note.setText("one value per experiment; compare with the base runs in the viewer's Comparison tab")
         self.fig.tight_layout(); self.canvas.draw()
+
+    def _regimes(self, ax, st, sub, a1, a2, xs, ys, z, key, log) -> str:
+        """Ridge line and regime labels on a two-axis isopleth with a NOx axis."""
+        i_nox = S.nox_axis(st.axes[:2])
+        if i_nox < 0:
+            return "regimes: no axis varies NOx (NO/NO2 injection or initial value), so the regimes are not drawn"
+        try:
+            X, Y, Z, dN = S.regime_map(xs, ys, z, nox_on_x=(i_nox == 0))
+        except Exception as e:
+            return f"regimes: not drawn ({e})"
+        if not np.isfinite(dN).any():
+            return "regimes: too few grid points to tell the slopes apart"
+        scale = np.nanmax(np.abs(dN)) or 1.0
+        pos, neg = np.nansum(dN > 0.02 * scale), np.nansum(dN < -0.02 * scale)
+        try:
+            ax.contour(X, Y, dN, levels=[0.0], colors="black", linewidths=1.6, linestyles="--")
+        except Exception:
+            pass
+        for sign, text in ((1, "NOx-sensitive"), (-1, "VOC-sensitive\n(NOx-saturated)")):
+            m = (np.sign(dN) == sign) & np.isfinite(dN) & (np.abs(dN) > 0.02 * scale)
+            if m.sum() > 20:
+                ax.text(float(np.nanmean(X[m])), float(np.nanmean(Y[m])), text, ha="center", va="center", fontsize=F["small"] + 1,
+                        color="black", bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="none", alpha=0.75))
+        note = (f"regimes from the slope of {S.METRICS[key][0]} along the NOx axis ({st.axes[i_nox].name()}): dashed = ridge (no change with NOx); "
+                f"{100 * pos / max(1, pos + neg):.0f} % of the sampled area NOx-sensitive")
+        rows_r = [r for r in sub if r.get("regime") is not None and np.isfinite(r["regime"])]
+        if len(rows_r) >= 4 and key != "regime":
+            xr = np.array([r[a1] for r in rows_r], float); yr = np.array([r[a2] for r in rows_r], float)
+            if log:
+                xr, yr = np.log10(xr), np.log10(yr)
+            try:
+                c = ax.tricontour(xr, yr, np.array([r["regime"] for r in rows_r], float), levels=[0.35], colors="#d62728", linewidths=1.2, linestyles=":")
+                ax.clabel(c, fmt={0.35: "P(H2O2)/P(HNO3) = 0.35"}, fontsize=F["small"])
+                note += "; red dotted = regime indicator 0.35"
+            except Exception:
+                pass
+        elif "regime" not in st.metrics:
+            note += "; tick 'Regime P(H2O2)/P(HNO3)' to compare with the indicator"
+        return note
 
     def _save_image(self):
         p, _ = QFileDialog.getSaveFileName(self, "Save image", os.path.join(self.study.folder or "", f"{self.study.name}_{self.plot_metric.currentData() or 'plot'}.png"), "PNG (*.png);;SVG (*.svg)")

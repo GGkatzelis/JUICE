@@ -721,10 +721,22 @@ def prior_seconds(st: Study) -> float:
     return float(np.median(times)) if times else 0.0
 
 
-def estimate_seconds(n_remaining: int, per_run: float, workers: int) -> float:
+# Runs in parallel slow each other down (memory bandwidth, CPU boost clock): measured 2026-10-25 on a
+# 10-core office PC, a run that takes 49 s alone took ~135 s with 11 in parallel → ~0.18 per extra run.
+PARALLEL_SLOWDOWN = 0.18
+
+
+def parallel_factor(workers: int) -> float:
+    return 1.0 + PARALLEL_SLOWDOWN * max(0, workers - 1)
+
+
+def estimate_seconds(n_remaining: int, per_run: float, workers: int, alone: bool = True) -> float:
+    """Wall time for n runs.  `alone`: per_run was measured with no other run going (the pilot, or the
+    base experiment) — then each run is assumed slower by parallel_factor(workers)."""
     if not n_remaining or not per_run or math.isnan(per_run):
         return 0.0
-    return math.ceil(n_remaining / max(1, workers)) * per_run
+    w = max(1, min(workers, n_remaining))
+    return math.ceil(n_remaining / w) * per_run * (parallel_factor(w) if alone else 1.0)
 
 
 def fmt_duration(s: float) -> str:
@@ -848,6 +860,10 @@ class StudyRunner:
         self.stop_event.set()
 
     # ── estimates ──
+    def measured_alone(self) -> bool:
+        """True while the only finished runs ran one at a time (the pilot)."""
+        return len([x for x in self.elapsed if x and not math.isnan(x)]) <= 1 and             sum(1 for p in self.plans if is_done(p)) <= 1
+
     def per_run_seconds(self) -> float:
         done = [x for x in self.elapsed if x and not math.isnan(x)]
         if not done:
@@ -859,7 +875,7 @@ class StudyRunner:
         return sum(1 for p in self.plans if not is_done(p) and p.status not in ("done", "running"))
 
     def estimate(self, workers: int = 0) -> Tuple[float, str]:
-        s = estimate_seconds(self.remaining(), self.per_run_seconds(), workers or self.study.workers)
+        s = estimate_seconds(self.remaining(), self.per_run_seconds(), workers or self.study.workers, alone=self.measured_alone())
         return s, fmt_duration(s)
 
     def disk_estimate(self) -> float:
@@ -993,6 +1009,34 @@ def write_results(st: Study, rows: List[dict]) -> str:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=keys); w.writeheader(); w.writerows(rows)
     return path
+
+
+NOX_SPECIES = ("NO", "NO2", "NOX")
+
+
+def nox_axis(axes: List[Axis]) -> int:
+    """Index of the axis that varies NOx (an NO/NO2 injection or group, an initial NO/NO2, a new NO/NO2 injection); -1 if none."""
+    for i, ax in enumerate(axes):
+        for kind, target in ax.members():
+            names = [x.strip().upper() for x in re.split(r"[,|]", target)]
+            if kind in ("initial", "injection_set", "injection_scale", "injection_new") and names and \
+               (names[0] in NOX_SPECIES or names[0].startswith(("NO_", "NO2_")) or all(n in NOX_SPECIES or n.startswith(("NO_", "NO2_")) for n in names if n)):
+                return i
+        if ax.name().upper().startswith(("NOX_", "NO_", "NO2_", "NO+")):
+            return i
+    return -1
+
+
+def regime_map(x: np.ndarray, y: np.ndarray, z: np.ndarray, nox_on_x: bool, n: int = 80):
+    """Interpolate a result onto a regular grid and its derivative along the NOx axis.
+    Returns (X, Y, Z, dZ/dNOx) on the grid; NaN outside the sampled area.  The ridge (dZ/dNOx = 0)
+    separates NOx-sensitive (dZ/dNOx > 0) from VOC-sensitive / NOx-saturated (dZ/dNOx < 0)."""
+    from scipy.interpolate import griddata
+    gx = np.linspace(np.nanmin(x), np.nanmax(x), n); gy = np.linspace(np.nanmin(y), np.nanmax(y), n)
+    X, Y = np.meshgrid(gx, gy)
+    Z = griddata((x, y), z, (X, Y), method="linear")
+    dZdy, dZdx = np.gradient(Z, gy, gx)
+    return X, Y, Z, (dZdx if nox_on_x else dZdy)
 
 
 def normalised_sensitivity(xs: List[float], ys: List[float]) -> List[float]:
