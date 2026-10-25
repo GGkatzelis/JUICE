@@ -139,7 +139,7 @@ class StudyWindow(QMainWindow):
         self.axis_values = []
         for i in range(2):
             vg.addWidget(QLabel(f"Axis {i + 1} values"), 2 * i, 0)
-            e = QLineEdit(); e.setPlaceholderText("a list: 0.5, 1, 2   |   evenly spaced: lin 0 20 5   |   log-spaced: log 0.1 20 6   (start end number)")
+            e = QLineEdit(); e.setPlaceholderText("a list: 0.5, 1, 2   |   lin 0 20 5 = 5 values from 0 to 20   |   log 0.1 20 6 = 6 log-spaced values from 0.1 to 20")
             e.setMinimumWidth(420); e.textChanged.connect(self._count)
             vg.addWidget(e, 2 * i, 1); self.axis_values.append(e)
             lb = QLabel(""); lb.setStyleSheet("color:#555"); lb.setWordWrap(True); lb.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -575,8 +575,20 @@ class StudyWindow(QMainWindow):
                     missing.append(f"the values of axis {i + 1}")
                 elif need:
                     n_axes += 1
-                rows = [r["what"] for r in self._vary_rows if r["axis"].currentIndex() == i + 1]
-                getattr(self, f"axis_desc{i}").setText(("varies " + ", ".join(rows)) if rows else "")
+                rows = [r for r in self._vary_rows if r["axis"].currentIndex() == i + 1]
+                desc = ""
+                if rows:
+                    hows = {r["how"].currentText() for r in rows}
+                    try:
+                        vals = S.parse_values(self.axis_values[i].text())
+                    except ValueError:
+                        vals = []
+                    unit = "× the experiment's amount" if hows == {"× factor"} else ("ppb" if hows <= {"= ppb"} else "")
+                    shown = ", ".join(f"{v:.3g}" for v in vals[:12]) + (f", … ({len(vals)} values)" if len(vals) > 12 else "")
+                    desc = ("varies " + ", ".join(r["what"] for r in rows) +
+                            (f"  →  {len(vals)} runs at {shown} {unit}" if vals else "") +
+                            ("   (1 = as in the experiment)" if hows == {"× factor"} and vals else ""))
+                getattr(self, f"axis_desc{i}").setText(desc)
         else:
             theme.mark_missing(self.exps, self.exps.count() == 0)
             if self.exps.count() == 0:
