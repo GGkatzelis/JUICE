@@ -14,6 +14,7 @@ The engine is study.py (no Qt); study_runner.py drives the same study files from
 from __future__ import annotations
 
 import csv
+import re
 import math
 import os
 import sys
@@ -130,6 +131,8 @@ class StudyWindow(QMainWindow):
         hb = QHBoxLayout()
         b = QPushButton("+ initial value of a species …"); b.clicked.connect(self._add_initial_row); hb.addWidget(b)
         b = QPushButton("+ reaction rate × factor …"); b.clicked.connect(self._add_rate_row); hb.addWidget(b)
+        b = QPushButton("+ new injection …"); b.setToolTip("An injection the experiment does not have (e.g. NO at 11:00 over 5 min); its amount goes on an axis, e.g. 0, 2, 5, 10 ppb.")
+        b.clicked.connect(self._add_new_injection_row); hb.addWidget(b)
         b = QPushButton("− custom row"); b.clicked.connect(self._remove_custom_row); hb.addWidget(b)
         hb.addStretch(); sl.addLayout(hb)
         vg = QGridLayout()
@@ -386,6 +389,26 @@ class StudyWindow(QMainWindow):
         if ok and rx.strip():
             self._vary_add(rx.strip(), "reaction rate", "MCM rate", ("rate_factor", rx.strip()), None, hows=("× factor",), custom=True); self._count()
 
+    def _add_new_injection_row(self):
+        sp, ok = QInputDialog.getText(self, "New injection", "Compound to inject (NO, NO2, O3, CO or an MCM name):", text="NO")
+        if not ok or not sp.strip():
+            return
+        start, ok = QInputDialog.getText(self, "New injection", "Start time HH:MM (UTC):",
+                                         text=(self._spec.conditions.roof_open[0][0] if getattr(self, "_spec", None) and self._spec.conditions.roof_open else "11:00"))
+        if not ok or not re.fullmatch(r"\d{1,2}:\d{2}", start.strip()):
+            return
+        _sp, _st, default_dur = S.parse_new_injection(f"{sp}|{start}|")
+        dur, ok = QInputDialog.getDouble(self, "New injection", "Duration of the pulse [min]:", default_dur, 0.1, 600, 1)
+        if not ok:
+            return
+        target = f"{sp.strip().upper()}|{start.strip()}|{dur:g}"
+        self._vary_add(f"New injection: {sp.strip().upper()} at {start.strip()} over {dur:g} min", "new injection", "not in the experiment",
+                       None, ("injection_new", target), hows=("= ppb",), custom=True)
+        self._vary_rows[-1]["axis"].setCurrentIndex(1 if not any(r["axis"].currentIndex() == 1 for r in self._vary_rows[:-1]) else 2)
+        if not self.axis_values[self._vary_rows[-1]["axis"].currentIndex() - 1].text().strip():
+            self.axis_values[self._vary_rows[-1]["axis"].currentIndex() - 1].setText("0, 2, 5, 10, 20")
+        self._count()
+
     def _remove_custom_row(self):
         r = self.vary.currentRow()
         if r >= 0 and self._vary_rows[r]["custom"]:
@@ -410,7 +433,10 @@ class StudyWindow(QMainWindow):
             (k0, t0), lab0 = members[0]
             scale = k0 in ("injection_scale", "chamber_scale", "rate_factor")
             label = (S._safe(lab0) if len(members) == 1 and self._vary_rows and any(r["label"] for r in self._vary_rows if (r["scale"] == (k0, t0) or r["set"] == (k0, t0))) else S._safe(t0.split(",")[0]) if len(members) == 1 else S._safe("+".join(S._safe(t.split(",")[0]) for (_k, t), _l in members)))
-            label += "_x" if scale else ("_t0_ppb" if k0 == "initial" else "_ppb" if k0 == "injection_set" else "")
+            if k0 == "injection_new" and len(members) == 1:
+                sp_, st_, _du = S.parse_new_injection(t0)
+                label = f"{sp_}_added_{st_.replace(':', '')}"
+            label += "_x" if scale else ("_t0_ppb" if k0 == "initial" else "_ppb" if k0 in ("injection_set", "injection_new") else "")
             axes.append(S.Axis(k0, t0, vals, label, [[k, t] for (k, t), _l in members[1:]]))
         return axes
 
@@ -435,7 +461,7 @@ class StudyWindow(QMainWindow):
                 assignments = {}
                 for i, ax in enumerate(axes[:2]):
                     for k, t in ax.members():
-                        assignments[(k, t)] = (i + 1, "× factor" if k in ("injection_scale", "chamber_scale", "rate_factor") else ("= ppb" if k in ("injection_set", "initial") else "= value"))
+                        assignments[(k, t)] = (i + 1, "× factor" if k in ("injection_scale", "chamber_scale", "rate_factor") else ("= ppb" if k in ("injection_set", "initial", "injection_new") else "= value"))
                     self.axis_values[i].setText(", ".join(f"{v:g}" for v in ax.values))
                 if exps:
                     self._load_exp(exps[0], assignments)
@@ -449,6 +475,10 @@ class StudyWindow(QMainWindow):
                                 self._vary_add(t, "reaction rate", "MCM rate", (k, t), None, hows=("× factor",), custom=True)
                             elif k in ("injection_scale", "injection_set"):     # generic class from a CLI-made study (voc, nox, all, …)
                                 self._vary_add(f"Injections: {t}", "injection class", "", ("injection_scale", t), ("injection_set", t), hows=("× factor", "= ppb"), custom=True)
+                            elif k == "injection_new":
+                                sp_, st_, du_ = S.parse_new_injection(t)
+                                self._vary_add(f"New injection: {sp_} at {st_} over {du_:g} min", "new injection", "not in the experiment",
+                                               None, (k, t), hows=("= ppb",), custom=True)
                             elif k in ("chamber_scale", "chamber"):
                                 self._vary_add(f"Chamber {t}", "chamber", "", ("chamber_scale", t), ("chamber", t), hows=("× factor", "= value"), custom=True)
                             else:

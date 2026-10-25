@@ -62,6 +62,7 @@ MOD_KINDS: Dict[str, Tuple[str, str, str]] = {   # kind → (label, what 'target
     "injection_set":   ("Injected amount = ppb", "injection name", "total ppb"),
     "chamber_scale":   ("Chamber parameter × factor", "field of ChamberEffects, e.g. hono_const (chamber HONO source), dark_hono_rate", "factor"),
     "initial":         ("Initial value at t0", "species", "ppb"),
+    "injection_new":   ("New injection (not in the experiment)", "species|HH:MM|minutes, e.g. NO|11:00|5", "total ppb (0 = none)"),
     "condition":       ("Condition", "field of Conditions, e.g. temperature_K, h2o_percent", "new value"),
     "base_mechanism":  ("Base mechanism (MCM version) — rebuilds the chemistry", "base id from mechanisms/base, e.g. MCM_v3.3.1", "(none)"),
 }
@@ -70,6 +71,7 @@ AXIS_KINDS: Dict[str, str] = {
     "initial":         "initial value of a species at t0 [ppb]",
     "injection_scale": "× factor on the injected amount of an injection / action / 'all'",
     "injection_set":   "injected amount of an injection [ppb]",
+    "injection_new":   "amount of an injection added to the experiment [ppb]; target species|HH:MM|minutes",
     "rate_factor":     "× factor on a reaction rate",
     "chamber":         "chamber parameter value",
     "chamber_scale":   "× factor on a chamber parameter (e.g. hono_const = chamber HONO source strength)",
@@ -107,6 +109,9 @@ class Axis:
             return f"{self.target}_ppb"
         if self.kind in ("injection_scale", "rate_factor"):
             return f"{self.target}_x"
+        if self.kind == "injection_new":
+            sp, start, _dur = parse_new_injection(self.target)
+            return f"{sp}_added_{start.replace(':', '')}_ppb"
         return f"{self.target}"
 
 
@@ -197,6 +202,49 @@ def _scale_expr(expr: str, factor) -> str:
         return f"({expr})*{_fmt(factor)}"
 
 
+def parse_new_injection(target: str) -> Tuple[str, str, float]:
+    """'NO|11:00|5' → ('NO', '11:00', 5.0); duration defaults to the SAPHIR action default, else 1 min."""
+    parts = [x.strip() for x in target.split("|")]
+    sp = parts[0].upper() if parts else ""
+    start = parts[1] if len(parts) > 1 and re.fullmatch(r"\d{1,2}:\d{2}", parts[1]) else ""
+    try:
+        dur = float(parts[2]) if len(parts) > 2 and parts[2] else None
+    except ValueError:
+        dur = None
+    if dur is None:
+        key = {"NO": "no", "NO2": "no2", "O3": "o3", "CO": "co"}.get(sp)
+        dur = float(ACTIONS[key]["duration_min"]) if key else 1.0
+    return sp, start, dur
+
+
+def add_injection(spec: ExperimentSpec, target: str, ppb: str) -> List[str]:
+    """Add (or set) an injection the experiment does not have: species at HH:MM over minutes, total ppb.
+    NO / NO2 / O3 / CO use the SAPHIR names and switch columns (QNO, …), other species Q_<name>.  If the
+    experiment already injects that species, the new one is named <species>_add with its own column."""
+    sp, start, dur = parse_new_injection(target)
+    if not sp or not start:
+        return [f"new injection '{target}': give species|HH:MM|minutes"]
+    key = {"NO": "no", "NO2": "no2", "O3": "o3", "CO": "co"}.get(sp, "voc")
+    tag = f"{sp}@{start}"
+    ev = next((e for e in spec.injections if e.comment.startswith(f"study: added {tag}")), None)
+    if ev is None:
+        taken = {e.name.upper() for e in spec.injections}
+        name = sp if sp not in taken else f"{sp}_add"
+        col, sw = "", ""
+        if name == sp and key != "voc":
+            col, sw = ACTIONS[key]["column"], ACTIONS[key]["switch"]
+        else:
+            col, sw = f"Q_{name}", f"q_{name}"
+        ev = InjectionEvent(name, ACTIONS[key]["products"] or sp if key != "voc" else sp, _fmt(float(ppb)), start, dur, col, sw,
+                            comment=f"study: added {tag} ({dur:g} min)", action=key)
+        spec.injections.append(ev)
+    else:
+        ev.total_ppb = _fmt(float(ppb))
+    if key == "voc" and sp not in [p.upper() for p in (spec.precursors or [])] and not spec.mechanism_stem:
+        return [f"new injection of {sp}: it is not among the experiment's compounds — add it on the Chemistry step if it should react"]
+    return []
+
+
 def _events_matching(spec: ExperimentSpec, target: str) -> List[InjectionEvent]:
     t = target.strip()
     if "," in t:                                   # several names / classes varied together
@@ -275,6 +323,8 @@ def apply_modification(spec: ExperimentSpec, mod: Modification, fac_path: str = 
                 e.extra_channels = [(p, _scale_expr(a, v)) for p, a in e.extra_channels]
             else:
                 e.total_ppb = _fmt(float(v))
+    elif k == "injection_new":
+        notes += add_injection(spec, t, v or "0")
     elif k == "initial":
         spec.initials = [x for x in spec.initials if x[0].upper() != t.upper()]
         spec.initials.append((t.upper(), f"M*1e-9*{_fmt(float(v))}"))
