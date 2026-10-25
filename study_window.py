@@ -73,7 +73,9 @@ class StudyWindow(QMainWindow):
         self._loading = False
         self.setWindowTitle("JUICE — Study")
         self.setWindowIcon(theme.app_icon()); self.resize(1640, 960)
+        self._loading = True                            # building fires change signals: they must not read empty widgets back into the study
         self._build()
+        self._loading = False
         m = self.menuBar().addMenu("File")
         m.addAction("New study", self._new); m.addAction("Open study …", self._open); m.addAction("Save study", self._save)
         m.addAction("Save study as …", self._save_as); m.addSeparator()
@@ -129,11 +131,11 @@ class StudyWindow(QMainWindow):
             self.vary.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         sl.addWidget(self.vary)
         hb = QHBoxLayout()
-        b = QPushButton("+ initial value of a species …"); b.clicked.connect(self._add_initial_row); hb.addWidget(b)
-        b = QPushButton("+ reaction rate × factor …"); b.clicked.connect(self._add_rate_row); hb.addWidget(b)
+        b = QPushButton("+ initial value …"); b.setToolTip("A species' value at the start of the run goes on an axis (ppb)."); b.clicked.connect(self._add_initial_row); hb.addWidget(b)
+        b = QPushButton("+ rate × factor …"); b.setToolTip("A reaction's MCM rate times the axis factor."); b.clicked.connect(self._add_rate_row); hb.addWidget(b)
         b = QPushButton("+ new injection …"); b.setToolTip("An injection the experiment does not have (e.g. NO at 11:00 over 5 min); its amount goes on an axis, e.g. 0, 2, 5, 10 ppb.")
         b.clicked.connect(self._add_new_injection_row); hb.addWidget(b)
-        b = QPushButton("− custom row"); b.clicked.connect(self._remove_custom_row); hb.addWidget(b)
+        b = QPushButton("− row"); b.setToolTip("Removes a row added with the + buttons."); b.clicked.connect(self._remove_custom_row); hb.addWidget(b)
         hb.addStretch(); sl.addLayout(hb)
         vg = QGridLayout()
         self.axis_values = []
@@ -194,12 +196,26 @@ class StudyWindow(QMainWindow):
         self.count = QLabel(""); self.count.setStyleSheet("color:#555"); self.count.setWordWrap(True); ll.addWidget(self.count)
 
         g = QGroupBox("Results read from every run"); gl = QGridLayout(g)
+        fh = QHBoxLayout(); fh.addWidget(QLabel("Focus"))
+        self.focus = QComboBox()
+        for k, (label, _keys) in S.FOCUS.items():
+            self.focus.addItem(label, k)
+        self.focus.addItem("Custom (tick below)", "custom")
+        self.focus.currentIndexChanged.connect(self._focus_changed); fh.addWidget(self.focus); fh.addStretch()
+        gl.addLayout(fh, 10, 0, 1, 2)
         note = _info("Outputs, not inputs: after each run these numbers are read from its result file and collected in the "
                      "Results table, the CSV and the isopleth / sensitivity plot. They change nothing in the model.")
         note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(note, 0, 0, 1, 2)
         self.metric_boxes = {}
         for i, (k, (label, unit)) in enumerate(S.METRICS.items()):
-            cb = QCheckBox(f"{label} [{unit}]"); self.metric_boxes[k] = cb; gl.addWidget(cb, 1 + i // 2, i % 2)
+            cb = QCheckBox(label + ("" if unit == "-" else f" [{unit}]")); self.metric_boxes[k] = cb; gl.addWidget(cb, 11 + i // 2, i % 2)
+            if k in S.METRIC_HELP:
+                cb.setToolTip(S.METRIC_HELP[k])
+            cb.toggled.connect(self._metric_toggled)
+        mh = _more_info("Ozone focus: production rate, efficiency and regime come from each run's HO2, RO2, OH and NOx, so they show "
+                        "why O3 changes across an isopleth, not only how much.",
+                        [f"<b>{S.METRICS[k][0]}</b>: {v}" for k, v in S.METRIC_HELP.items()], "ⓘ Definitions")
+        mh.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(mh, 40, 0, 1, 2)
         ll.addWidget(g)
 
         g = QGroupBox("Execution"); gl = QGridLayout(g)
@@ -293,6 +309,25 @@ class StudyWindow(QMainWindow):
         split = QSplitter(); split.addWidget(scroll); split.addWidget(self.tabs); split.setStretchFactor(0, 65); split.setStretchFactor(1, 35)
         split.setSizes([1066, 574]); self.setCentralWidget(split)
         self._mode_changed()
+
+    def _focus_changed(self, *_a):
+        key = self.focus.currentData()
+        self._plot_first = True                          # the plot shows the focus's first result
+        if key in S.FOCUS and not self._loading:
+            self._loading = True
+            try:
+                for k, cb in self.metric_boxes.items():
+                    cb.setChecked(k in S.FOCUS[key][1])
+            finally:
+                self._loading = False
+            self._count()
+
+    def _metric_toggled(self, *_a):
+        if self._loading:
+            return
+        ticked = {k for k, cb in self.metric_boxes.items() if cb.isChecked()}
+        match = next((k for k, (_l, keys) in S.FOCUS.items() if set(keys) == ticked), "custom")
+        self.focus.blockSignals(True); self.focus.setCurrentIndex(self.focus.findData(match)); self.focus.blockSignals(False)
 
     def _mode_changed(self, *_a):
         sweep = self.mode_sweep.isChecked()
@@ -457,6 +492,8 @@ class StudyWindow(QMainWindow):
                 self._add_mod(m)
             for k, cb in self.metric_boxes.items():
                 cb.setChecked(k in metrics)
+            match = next((k for k, (_l, keys) in S.FOCUS.items() if set(keys) == set(metrics)), "custom")
+            self.focus.setCurrentIndex(self.focus.findData(match))
             if sweep:
                 assignments = {}
                 for i, ax in enumerate(axes[:2]):
@@ -527,7 +564,11 @@ class StudyWindow(QMainWindow):
                         except ValueError:
                             vals = []
                         st.axes.append(S.Axis(kind.currentText(), target.text().strip(), vals))
-        st.metrics = [k for k, cb in self.metric_boxes.items() if cb.isChecked()]
+        focus = self.focus.currentData()
+        order = S.FOCUS[focus][1] if focus in S.FOCUS else []
+        ticked = [k for k, cb in self.metric_boxes.items() if cb.isChecked()]
+        st.metrics = [k for k in order if k in ticked] + [k for k in ticked if k not in order]     # the focus order: first = plotted first
+        st.focus = focus
         st.workers = self.workers.value(); st.export_kv_pd = self.kvpd.isChecked()
         if not st.toml:
             st.toml = self.toml_path
@@ -896,7 +937,8 @@ class StudyWindow(QMainWindow):
         self.plot_metric.blockSignals(True); self.plot_metric.clear()
         for k in st.metrics:
             self.plot_metric.addItem(f"{S.METRICS[k][0]} [{S.METRICS[k][1]}]", k)
-        i = self.plot_metric.findData(cur); self.plot_metric.setCurrentIndex(i if i >= 0 else 0); self.plot_metric.blockSignals(False)
+        i = -1 if getattr(self, "_plot_first", False) else self.plot_metric.findData(cur); self._plot_first = False
+        self.plot_metric.setCurrentIndex(i if i >= 0 else 0); self.plot_metric.blockSignals(False)
         self._plot()
 
     def _export(self):

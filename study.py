@@ -122,7 +122,7 @@ class Study:
     experiments: List[str] = field(default_factory=list)   # .experiment.json paths
     modifications: List[Modification] = field(default_factory=list)
     axes: List[Axis] = field(default_factory=list)      # 0, 1 or 2 axes
-    metrics: List[str] = field(default_factory=lambda: ["o3_max", "ox_lit_delta", "oh_mean_lit", "nox_end", "hcho_max"])
+    metrics: List[str] = field(default_factory=lambda: ["po3_lit_int", "o3_max", "ox_lit_delta", "po3_mean_lit", "ope", "regime", "nox_end", "ho2_ro2"])
     workers: int = max(1, (os.cpu_count() or 2) - 1)
     export_kv_pd: bool = False
     toml: str = ""
@@ -130,6 +130,7 @@ class Study:
     notes: str = ""
     created: str = ""
     mode: str = ""                                      # "sweep" (one experiment, its own knobs) | "batch" (several experiments)
+    focus: str = "ozone"                                # key of FOCUS: which results are ticked by default
 
 
 def save_study(st: Study, path: str) -> str:
@@ -598,12 +599,42 @@ METRICS: Dict[str, Tuple[str, str]] = {        # key → (label, unit)
     "h2o2_max":      ("H2O2 maximum", "ppb"),
     "pan_max":       ("PAN maximum", "ppb"),
     "hno3_end":      ("HNO3 at the end", "ppb"),
+    "po3_mean_lit":  ("P(O3) mean, lit", "ppb/h"),
+    "po3_lit_int":   ("P(O3) integral, lit", "ppb"),
+    "ope":           ("OPE ΔOx/ΔNOz", "-"),
+    "regime":        ("Regime P(H2O2)/P(HNO3)", "-"),
+    "ho2_ro2":       ("HO2/RO2 while lit", "-"),
+    "oh_exposure":   ("OH exposure ∫OH dt", "cm-3 s"),
+    "voc_consumed":  ("Injected VOC consumed", "%"),
+}
+
+# A focus ticks a default set of results; the first one is plotted first.
+FOCUS: Dict[str, Tuple[str, List[str]]] = {
+    "ozone":    ("Ozone production / isopleth", ["po3_lit_int", "o3_max", "ox_lit_delta", "po3_mean_lit", "ope", "regime", "nox_end", "ho2_ro2"]),
+    "radicals": ("Radicals (HOx / ROx)", ["oh_mean_lit", "ho2_mean_lit", "ro2_mean_lit", "ho2_ro2", "oh_exposure", "po3_mean_lit", "hono_max"]),
+    "nox":      ("NOx fate", ["nox_end", "hno3_end", "pan_max", "ope", "no2_max", "regime"]),
+    "voc":      ("VOC oxidation", ["voc_consumed", "oh_exposure", "oh_mean_lit", "hcho_max", "h2o2_max"]),
+}
+METRIC_HELP: Dict[str, str] = {
+    "po3_mean_lit": "gross ozone production k(HO2+NO)[HO2][NO] + k(RO2+NO)[RO2][NO] (MCM: 3.45e-12·e^(270/T), KRO2NO 2.7e-12·e^(360/T)), mean while lit",
+    "po3_lit_int": "the same production rate integrated over the lit period — the ozone made, before its losses",
+    "ope": "Ox (O3+NO2) gained per NOx turned into products while lit; NOz = all nitrogen species except NO and NO2 (HONO, HNO3, N2O5, PANs, organic nitrates, particulate nitrate), counted by their N atoms",
+    "regime": "radical loss via peroxides vs via nitric acid: P(H2O2) = k(HO2+HO2)[HO2]², P(HNO3) = KMT08[OH][NO2], ratio of their lit-period integrals; high = NOx-limited, low = VOC-limited, transition typically ~0.3–0.5",
+    "ho2_ro2": "mean HO2 / mean RO2 while lit (RO2 = the mechanism's RO2 sum)",
+    "oh_exposure": "∫ OH dt over the whole run",
+    "voc_consumed": "1 − Σ precursors at the end / Σ precursors at their maximum (the experiment's chosen compounds)",
 }
 
 
 def compute_metrics(cs_path: str, keys: List[str]) -> Dict[str, float]:
     from experiment_plots import read_columns
-    t, d = read_columns(cs_path, ["M", "HV", "O3", "NO", "NO2", "OH", "HO2", "RO2", "HONO", "HCHO", "H2O2", "PAN", "HNO3"])
+    base = ["M", "T", "H2O", "HV", "O3", "NO", "NO2", "OH", "HO2", "RO2", "HONO", "HCHO", "H2O2", "PAN", "HNO3"]
+    extra = []
+    if any(k in keys for k in ("ope",)):
+        extra += _nitrogen_species(cs_path)
+    if "voc_consumed" in keys:
+        extra += _precursors_for(cs_path)
+    t, d = read_columns(cs_path, base + [x for x in extra if x not in base])
     t = np.asarray(t, float)
     M = np.asarray(d.get("M"), float) if "M" in d else None
 
@@ -642,6 +673,8 @@ def compute_metrics(cs_path: str, keys: List[str]) -> Dict[str, float]:
             elif k == "h2o2_max" and ppb("H2O2") is not None: v = float(np.nanmax(ppb("H2O2")))
             elif k == "pan_max" and ppb("PAN") is not None: v = float(np.nanmax(ppb("PAN")))
             elif k == "hno3_end" and ppb("HNO3") is not None: v = float(ppb("HNO3")[-1])
+            elif k in ("po3_mean_lit", "po3_lit_int", "regime", "ho2_ro2", "oh_exposure", "ope", "voc_consumed"):
+                v = _derived(k, t, d, lit, M, cs_path)
         except Exception:
             v = float("nan")
         out[k] = v
@@ -838,10 +871,113 @@ class StudyRunner:
 # Results table
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _nitrogen_species(cs_path: str) -> List[str]:
+    """Species of the run with nitrogen (MCM formula), except NO and NO2, with NA (particulate nitrate)."""
+    try:
+        from mcm_species_db import MCM_DB
+        from experiment_plots import cs_species
+        names = cs_species(cs_path)
+    except Exception:
+        return []
+    out = []
+    for n in names:
+        sp = MCM_DB.get(n.upper())
+        if (sp is not None and sp.n_N > 0 and n.upper() not in ("NO", "NO2")) or n.upper() in ("NA", "HONO", "N2O5", "NO3", "HNO3"):
+            out.append(n)
+    return out
+
+
+def _n_atoms(name: str) -> int:
+    if name.upper() in ("NA", "HONO", "NO3", "HNO3"):
+        return 1
+    if name.upper() == "N2O5":
+        return 2
+    try:
+        from mcm_species_db import MCM_DB
+        sp = MCM_DB.get(name.upper())
+        return int(sp.n_N) if sp is not None else 0
+    except Exception:
+        return 0
+
+
+def _precursors_for(cs_path: str) -> List[str]:
+    try:
+        from experiment_plots import spec_for_run
+        spec = spec_for_run(cs_path)
+        return [p.upper() for p in (spec.precursors or [])] if spec else []
+    except Exception:
+        return []
+
+
+def _kmt08(T: np.ndarray, M: np.ndarray) -> np.ndarray:
+    """OH + NO2 (+M) → HNO3, MCM v3.3.1 KMT08."""
+    k0 = 3.2e-30 * M * (T / 300.0) ** -4.5; ki = 3.0e-11; fc = 0.41
+    nc = 0.75 - 1.27 * np.log10(fc)
+    f = 10 ** (np.log10(fc) / (1 + (np.log10(k0 / ki) / nc) ** 2))
+    return (k0 * ki) * f / (k0 + ki)
+
+
+def _derived(key: str, t: np.ndarray, d: Dict[str, np.ndarray], lit: np.ndarray, M: Optional[np.ndarray], cs_path: str) -> float:
+    """Production rates, efficiency, regime indicator, exposure, VOC consumption (see METRIC_HELP)."""
+    g = lambda n: np.asarray(d[n], dtype=float) if n in d else None
+    T = g("T") if g("T") is not None else np.full(len(t), 298.0)
+    dt = np.diff(t, prepend=t[0])
+    if key == "oh_exposure":
+        return float(np.nansum(g("OH") * dt)) if g("OH") is not None else float("nan")
+    if key == "voc_consumed":
+        names = [n for n in _precursors_for(cs_path) if n in d]
+        if not names:
+            return float("nan")
+        tot = sum(np.asarray(d[n], dtype=float) for n in names)
+        return float(100.0 * (1.0 - tot[-1] / np.nanmax(tot))) if np.nanmax(tot) > 0 else float("nan")
+    if M is None:
+        return float("nan")
+    ho2, ro2, no, oh, no2 = g("HO2"), g("RO2"), g("NO"), g("OH"), g("NO2")
+    if key == "ho2_ro2":
+        return float(np.nanmean(ho2[lit]) / np.nanmean(ro2[lit])) if ho2 is not None and ro2 is not None and np.nanmean(ro2[lit]) > 0 else float("nan")
+    if key in ("po3_mean_lit", "po3_lit_int"):
+        if ho2 is None or no is None:
+            return float("nan")
+        p = 3.45e-12 * np.exp(270.0 / T) * ho2 * no + (2.7e-12 * np.exp(360.0 / T) * ro2 * no if ro2 is not None else 0.0)
+        p_ppb_s = p / M * 1e9
+        if key == "po3_mean_lit":
+            return float(np.nanmean(p_ppb_s[lit]) * 3600.0)
+        return float(np.nansum((p_ppb_s * dt)[lit]))
+    if key == "regime":
+        if ho2 is None or oh is None or no2 is None:
+            return float("nan")
+        h2o = g("H2O") if g("H2O") is not None else 0.01 * M
+        kmt06 = 1 + 1.40e-21 * np.exp(2200.0 / T) * h2o
+        k_ho2 = 2.20e-13 * kmt06 * np.exp(600.0 / T) + 1.90e-33 * M * kmt06 * np.exp(980.0 / T)
+        p_h2o2 = np.nansum((k_ho2 * ho2 ** 2 * dt)[lit]); p_hno3 = np.nansum((_kmt08(T, M) * oh * no2 * dt)[lit])
+        return float(p_h2o2 / p_hno3) if p_hno3 > 0 else float("nan")
+    if key == "ope":
+        o3 = g("O3")
+        if o3 is None or no2 is None:
+            return float("nan")
+        noz = np.zeros(len(t))
+        for n in _nitrogen_species(cs_path):
+            if n in d:
+                noz += _n_atoms(n) * np.asarray(d[n], dtype=float)
+        i = np.where(lit)[0]
+        if not len(i):
+            return float("nan")
+        d_ox = (o3 + no2)[i[-1]] - (o3 + no2)[i[0]]; d_noz = noz[i[-1]] - noz[i[0]]
+        return float(d_ox / d_noz) if d_noz > 0 else float("nan")
+    return float("nan")
+
+
 def collect_results(st: Study, plans: List[RunPlan] = None) -> List[dict]:
     rows = []
     for p in (plans or plan_runs(st)):
         info = _read_info(p)
+        have = info.get("metrics", {})
+        if is_done(p) and any(k not in have for k in st.metrics):     # results added after the run: computed from its .cs once
+            try:
+                have = dict(have); have.update(compute_metrics(p.cs_path, [k for k in METRICS if k not in have]))
+                info["metrics"] = have; _write_info(p, info)
+            except Exception:
+                pass
         row = {"run": p.name, "experiment": p.base_name, **{k: v for k, v in p.point.items()},
                "status": "done" if is_done(p) else p.status, "elapsed_s": info.get("elapsed"), "cs": p.cs_path if is_done(p) else ""}
         row.update({k: info.get("metrics", {}).get(k) for k in st.metrics})

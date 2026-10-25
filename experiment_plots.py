@@ -331,6 +331,12 @@ def load_observations(archive_root: str, date: str, keys: Optional[List[str]] = 
     return obs
 
 
+def cs_species(path: str) -> List[str]:
+    """Column names of a result file (header only, nothing else is read)."""
+    from column_file_reader import _parse_column_defs
+    return list(_parse_column_defs(path))
+
+
 def read_columns(path: str, names: List[str]) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     """A few named columns of a FACSIMILE-style column file (.cs/.pd/.kv/.enz) without parsing the
     rest: (time, {name: values}).  Comma- or space-separated rows, missing-E exponents repaired.
