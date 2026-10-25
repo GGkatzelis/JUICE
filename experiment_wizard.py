@@ -50,6 +50,37 @@ def _info(text: str) -> QLabel:
     return lab
 
 
+def _more_info(summary: str, bullets: List[str], button: str = "ⓘ How it works") -> QWidget:
+    """One grey line + a small toggle that unfolds the details as bullet points (folded by default)."""
+    w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(2)
+    h = QHBoxLayout(); h.setContentsMargins(0, 0, 0, 0)
+    h.addWidget(_info(summary), stretch=1)
+    b = QPushButton(button); b.setCheckable(True); b.setFlat(True); b.setCursor(Qt.CursorShape.PointingHandCursor)
+    b.setStyleSheet("QPushButton { color: #6a4c93; border: none; padding: 0 4px; } QPushButton:checked { font-weight: bold; }")
+    h.addWidget(b, alignment=Qt.AlignmentFlag.AlignTop); v.addLayout(h)
+    details = QLabel("<ul style='margin-left:-20px'>" + "".join(f"<li>{t}</li>" for t in bullets) + "</ul>")
+    details.setWordWrap(True); details.setStyleSheet("color: #666;"); details.setVisible(False)
+    v.addWidget(details)
+    b.toggled.connect(details.setVisible)
+    w.details, w.toggle = details, b
+    return w
+
+
+WIKI_LINE_HELP = [
+    "<b>Time</b> at the start of the line: <code>HH:MM</code> or <code>HH:MM:SS</code>.",
+    "<b>Code</b>: one letter on its own after the time. Upper case starts, lower case stops: "
+    "<code>R</code>/<code>r</code> roof open/close, <code>H</code>/<code>h</code> humidification, "
+    "<code>S</code>/<code>s</code> seed aerosol, <code>X</code> VOC or mixture, <code>O</code> ozone, "
+    "<code>M</code> NO, <code>D</code> NO2, <code>c</code> CO, <code>C</code> CO2 tracer. "
+    "A stop written as <code>H … stop</code> is also understood.",
+    "<b>The rest is free text.</b> Initials (F.R.) and words like CHANGE: are ignored. "
+    "Read from it: the compound or mixture name, amounts (<code>23 ppb</code>, <code>ppm</code>, <code>180 µl</code>, "
+    "<code>ml</code>, <code>sccm</code>, <code>FC 0.5l 62.5%</code>), bottle concentration <code>(1%)</code>, "
+    "durations (<code>50 sec</code>, <code>5 min</code>) and <code>ppbC</code>.",
+    "Lines without time + code are skipped. Other codes are kept as notes and not modelled.",
+]
+
+
 # ── MCM species completer: type a name, a common name or a formula; pick the MCM species ──
 _MCM_ENTRIES: List[str] = []
 _MCM_ENTRY_TO_NAME: Dict[str, str] = {}
@@ -452,8 +483,11 @@ class ChemistryPage(QWizardPage):
         self._base_changed()
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
         self.mode_existing = QRadioButton("Existing mechanism include set")
+        self.mode_inorganic = QRadioButton("Inorganic chemistry only (no VOC)")
+        self.mode_inorganic.setToolTip("NOx, O3, HOx, CO, SO2 chemistry and photolysis plus the chamber's own HONO and HCHO sources —\n"
+                                       "for tests such as dilution, NO/O3 titration, CO or zero-air experiments.")
         self.mode_compounds.setChecked(True)
-        hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addStretch(); lay.addLayout(hb)
+        hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); lay.addLayout(hb)
         g = QGridLayout()
         g.addWidget(QLabel("Search MCM species (name or formula)"), 0, 0)
         self.search = QLineEdit(); self.search.textChanged.connect(self._filter); g.addWidget(self.search, 0, 1)
@@ -626,13 +660,16 @@ class ChemistryPage(QWizardPage):
         for p in spec.precursors:
             self.chosen.addItem(p)
         self.mech_combo.setCurrentText(spec.mechanism_stem)
-        (self.mode_existing if spec.mechanism_stem else self.mode_compounds).setChecked(True)
+        (self.mode_existing if spec.mechanism_stem else self.mode_inorganic if spec.inorganic_only else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
         self.update_tree()
 
     def apply(self, spec: ExperimentSpec):
+        spec.inorganic_only = self.mode_inorganic.isChecked()
         if self.mode_existing.isChecked():
             spec.mechanism_stem = self.mech_combo.currentText().strip(); spec.precursors = []
+        elif spec.inorganic_only:
+            spec.mechanism_stem = ""; spec.precursors = []
         else:
             spec.mechanism_stem = ""; spec.precursors = [self.chosen.item(i).text() for i in range(self.chosen.count())]
         spec.reaction_adjustments = [(a, b, c) for a, b, c in _rows(self.adjust) if a.strip()]
@@ -704,17 +741,18 @@ class InjectionsPage(QWizardPage):
                           ("− row", lambda: _del_row(self.table))]:
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); lay.addLayout(hb)
-        lay.addWidget(_info("Amount = total injected in ppb (the backend spreads it over the duration). "
-                            "Product(s) may be an MCM species or mole fractions of several (0.9*A+0.1*B). "
-                            "Leave the column and switch empty for the standard names (QNO, QO3, QH2O, Q_<name>). "
-                            "Rows with the same name and an empty start are extra product channels of that injection: "
-                            "the humidification rows are the trace impurities the water carries into SAPHIR "
-                            "(HONO 0.002 ppb, CO 0.5 ppb; NO2/NO 0 = placeholders, fill in if measured). "
-                            "XNOy is the NOy bookkeeping tracer, not a chemical species. "
-                            "In the product cell start typing a name, a common name (isoprene) or a formula (C5H8): the list shows the "
-                            "matching MCM species with formula, molar mass and SMILES; pick one to insert its MCM name. "
-                            "'Amount calculator' turns µl by syringe, ml of bottle gas or MFC flow × time into ppb for the selected row "
-                            "and keeps the derivation; '+ mixture' expands a multi-compound solution into MCM species with mole fractions."))
+        self.help = _more_info("Amount = total ppb injected, spread over the duration. Product = MCM species, or mole fractions (0.9*A+0.1*B).", [
+            "<b>Product cell</b>: type a name (isoprene), an MCM name or a formula (C5H8) and pick from the list "
+            "(formula, molar mass and SMILES are shown).",
+            "<b>Empty product</b> = the injection is recorded in the timeline but not modelled.",
+            "<b>ENZ column / Switch</b>: leave empty for the standard names (QNO, QO3, QH2O, Q_&lt;name&gt;).",
+            "<b>Same name, empty start</b> = an extra product channel of that injection. The humidification rows are the "
+            "impurities the water brings in (HONO 0.002 ppb, CO 0.5 ppb; NO/NO2 0 = placeholders, fill in if measured).",
+            "<b>XNOy</b> is the NOy bookkeeping tracer, not a chemical species.",
+            "<b>Amount calculator …</b> turns µl by syringe, ml of bottle gas or MFC flow × time into ppb for the selected row and keeps the derivation.",
+            "<b>+ mixture …</b> expands a multi-compound solution into MCM species with mole fractions.",
+            "<b>Import experiment log …</b> reads the SAPHIR wiki action log (fetch, saved page or pasted text)."])
+        lay.addWidget(self.help)
         self.chain_box = QGroupBox("Delayed release (advanced)"); self.chain_box.setCheckable(True); self.chain_box.setChecked(False)
         cl = QVBoxLayout(self.chain_box)
         cl.addWidget(_info("Normally the injected amount appears in the chamber during the injection pulse. Some injections "
@@ -1434,6 +1472,8 @@ class WikiImportDialog(QDialog):
         self.paste.setPlaceholderText("07:30 H F.R. CHANGE: humidification start\n08:15 h F.R. CHANGE: humidification stop\n"
                                       "08:40 X M.S. CHANGE: 20 µl isoprene injected\n09:30 R F.R. CHANGE: open roof")
         ll.addWidget(self.paste, stretch=1)
+        ll.addWidget(_more_info("Each line: time, one-letter code, free text — e.g. 07:30 H F.R. CHANGE: humidification start",
+                                WIKI_LINE_HELP, "ⓘ Line format"))
         pb = QPushButton("Parse this text"); pb.clicked.connect(self._parse_paste)
         hb = QHBoxLayout(); hb.addWidget(pb); hb.addStretch(); ll.addLayout(hb)
         split.addWidget(left)

@@ -42,16 +42,19 @@ from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
-                             QCheckBox, QProgressBar, QTextEdit, QMessageBox, QFileDialog, QSplitter, QTabWidget, QFrame)
+                             QCheckBox, QProgressBar, QTextEdit, QMessageBox, QFileDialog, QSplitter, QTabWidget, QFrame,
+                             QDialog, QFormLayout, QDialogButtonBox)
+from PyQt6.QtGui import QKeySequence
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from experiment_spec import load_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources
+from experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources
 from experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
 from elog_generator import generate_both
 from idl_parser import parse_idl_easy
 import injection_calc as ic
 import juice_theme as theme
+import mechanism_registry as mreg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO = theme.LOGO
@@ -157,6 +160,8 @@ def spec_bullets(spec: ExperimentSpec) -> List[str]:
                    + (f"; add-ons: {', '.join(spec.addons)}" if spec.addons else ""))
     elif spec.mechanism_stem:
         out.append(f"Chemistry: mechanism include set '{spec.mechanism_stem}' + inorganic core and photolysis")
+    elif spec.inorganic_only:
+        out.append(f"Chemistry: inorganic only ({spec.base_mechanism} NOx/O3/HOx/CO/SO2 core and photolysis, chamber HONO/HCHO sources) — no VOC")
     else:
         out.append("Chemistry: not chosen yet")
     for rxn, rate, _cmt in spec.reaction_adjustments:
@@ -445,7 +450,8 @@ class ReviewPanel(QWidget):
         if msg.startswith("Choose where the chamber conditions"):
             return (0, "Tick 'measured (archive)' when the day is on the Z: drive, otherwise 'manual' and enter T, p, humidity and flow.", focus(c.src_manual))
         if msg.startswith("No chemistry"):
-            return (1, "Search a compound by name or formula and add it to the chosen compounds, or choose an existing include set.",
+            return (1, "Search a compound by name or formula and add it to the chosen compounds, choose an existing include set, "
+                       "or tick 'Inorganic chemistry only' for a run without VOC.",
                     lambda: (ch.search.setFocus()))
         if msg.startswith("Measured J values"):
             return (0, "There is no archive data for this day: switch the conditions to manual (clear-sky photolysis), "
@@ -670,15 +676,22 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
         # ── menu ──
         m = self.menuBar().addMenu("File")
-        m.addAction("New experiment (blank)", self._new)
-        m.addAction("Open experiment (.experiment.json) …", self._open)
-        m.addAction("Save experiment", self._save)
+        m.addAction("New experiment (blank)", QKeySequence("Ctrl+N"), self._new)
+        m.addAction("Open experiment (.experiment.json) …", QKeySequence("Ctrl+O"), self._open)
+        m.addAction("Save experiment", QKeySequence("Ctrl+S"), lambda: self._save())
+        m.addAction("Save experiment as …", self._save_as)
+        m.addAction("Open experiment folder", self._open_folder)
         m.addSeparator()
         m.addAction("Open results of an earlier run in the viewer …", self._open_results_file)
-        m.addAction("Expert tool (FR_GUI) …", self._expert)
+        m.addSeparator()
+        m.addAction("Settings …", self._settings)
         m.addSeparator()
         m.addAction("Quit", self.close)
-        self.statusBar().showMessage(f"settings: {os.path.basename(toml_path) if toml_path else 'defaults'}   |   include files: {os.path.basename(self.include_dir)}")
+        m.setToolTipsVisible(True)
+        for a in m.actions():
+            if a.text() == "Save experiment":
+                a.setToolTip("Saves what you entered as <name>.experiment.json in the experiment folder.\n"
+                             "The model input files are written by 'Prepare input files' in the Run step.")
 
         self.load_spec(blank_spec())
         self.page_start.name_edit.setPlaceholderText("e.g. isoprene_2024-07-09")
@@ -703,7 +716,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         for t in (c.roof, inj.table, inj.chain, ch.adjust, self.page_init.table):
             t.itemChanged.connect(self._schedule_refresh); t.model().rowsRemoved.connect(self._schedule_refresh); t.model().rowsInserted.connect(self._schedule_refresh)
         ch.chosen.model().rowsInserted.connect(self._schedule_refresh); ch.chosen.model().rowsRemoved.connect(self._schedule_refresh)
-        for w in (ch.mode_compounds, ch.mode_existing):
+        for w in (ch.mode_compounds, ch.mode_existing, ch.mode_inorganic):
             w.toggled.connect(self._schedule_refresh)
         for w in list(cb.checks.values()):
             w.toggled.connect(self._schedule_refresh)
@@ -805,12 +818,60 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.page_start.out_edit.setText(os.path.dirname(os.path.dirname(p)) or self.easy_root)
         self.steps.setCurrentRow(0); self.review.refresh()
 
-    def _save(self):
+    def _save(self, path: str = ""):
+        """The experiment description only (<name>.experiment.json) — works for an unfinished experiment too.
+        The model input files (.easy, .enz, chemistry, scenario JSON) are written by 'Prepare input files'."""
         try:
-            res = self.write_all()
-            self.statusBar().showMessage(f"saved {res['spec_path']}"); self.review.refresh_files()
+            spec = self.collect_spec()
+            path = path or os.path.join(self.out_dir(), spec.name + ".experiment.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            save_spec(spec, path)
+            self.statusBar().showMessage(f"saved {path}", 8000); self.review.refresh_files()
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
+
+    def _save_as(self):
+        spec = self.collect_spec()
+        start = os.path.join(self.out_dir(), spec.name + ".experiment.json")
+        p, _ = QFileDialog.getSaveFileName(self, "Save experiment as", start, "Experiment (*.experiment.json)")
+        if p:
+            self._save(p if p.endswith(".experiment.json") else os.path.splitext(p)[0] + ".experiment.json")
+
+    def _open_folder(self):
+        if os.path.isdir(self.out_dir()):
+            _open_path(self.out_dir())
+        else:
+            QMessageBox.information(self, "Experiment folder", f"{self.out_dir()} does not exist yet — save the experiment first.")
+
+    def _settings(self):
+        """Where JUICE reads and writes, and the solver every run uses — from the settings file (TOML)."""
+        d = QDialog(self); d.setWindowTitle("Settings"); d.setMinimumWidth(680)
+        v = QVBoxLayout(d)
+        v.addWidget(_info("Read from the settings file when the window opens. Edit the file and reopen JUICE to change them."))
+        f = QFormLayout(); v.addLayout(f)
+        paths = load_paths(self.toml_path)
+
+        def row(label, value, tip=""):
+            lb = QLabel(value or "—"); lb.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); lb.setWordWrap(True)
+            if tip:
+                lb.setToolTip(tip)
+            f.addRow(label, lb)
+        row("Settings file", self.toml_path or "none (built-in defaults)")
+        row("New experiments go to", paths.get("output_root", ""), "each experiment gets its own folder <here>/<name>")
+        row("Mechanism include sets", self.include_dir, "the choices under 'Existing mechanism include set' on the Chemistry step")
+        try:
+            row("Base mechanisms", ", ".join(mreg.load_bases()))
+        except Exception as e:
+            row("Base mechanisms", f"not readable: {e}")
+        sol = solver_from_toml(self.toml_path)
+        row("Solver", f"{sol['solver_method']} ({sol['jac_mode']} Jacobian, {sol['ode_backend']}), rtol {sol['rtol']:g}, "
+                      f"{sol['interpolation']} inputs, first step {sol['first_step']:g} s")
+        row("Python", sys.executable)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        if self.toml_path:
+            ob = bb.addButton("Open settings file", QDialogButtonBox.ButtonRole.ActionRole); ob.clicked.connect(lambda: _open_path(self.toml_path))
+        bb.rejected.connect(d.reject); v.addWidget(bb)
+        d.exec()
 
     def _open_results_file(self, path: str = ""):
         """Any result file (.cs), from this or an earlier experiment, in its own viewer window."""
@@ -824,12 +885,6 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             args += ["--toml", self.toml_path]
         p = QProcess(self); p.start(sys.executable, args)
         self._viewers = getattr(self, "_viewers", []) + [p]
-
-    def _expert(self):
-        p = QProcess(self); args = [os.path.join(HERE, "FR_GUI.py"), "-timeout", "0"]
-        if self.toml_path:
-            args += ["-t", self.toml_path]
-        p.start(sys.executable, args); self._expert_proc = p
 
 
 def main(argv=None):

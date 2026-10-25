@@ -218,6 +218,7 @@ class ExperimentSpec:
     base_mechanism: str = mreg.DEFAULT_BASE                   # mechanism_registry base id (MCM download, unmodified)
     addons: List[str] = field(default_factory=list)          # mechanism_registry add-on ids, loaded after the base
     mechanism_stem: str = ""                                  # existing include set, e.g. "ethanol.fac"
+    inorganic_only: bool = False                              # no VOC: inorganic core + chamber sources only (CO/NOx/O3/HOx tests)
     mech_incl_suffix: str = ".saphir.incl"
     use_anorg: bool = True
     use_j_clear_sky_incl: bool = True
@@ -507,13 +508,13 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
     """Extract the base-mechanism subset for spec.precursors into <out_dir>/chemistry, copy the
     chosen add-ons next to it and register them as includes, and point the spec at it.
     No-op when spec.mechanism_stem is already set (existing include set)."""
-    if spec.mechanism_stem or not spec.precursors:
+    if spec.mechanism_stem or not (spec.precursors or spec.inorganic_only):
         return {}
     import io, contextlib, shutil
     from mcm_converter import convert_mcm_file
     chem = os.path.join(out_dir, "chemistry")
     addons = mreg.addons_for(spec.base_mechanism, list(spec.addons)) if spec.addons else []
-    seed = list(spec.precursors)
+    seed = list(spec.precursors) or ["CO"]             # inorganic only: any inorganic seed → init mode, the converter adds the whole inorganic core
     for a in addons:                                   # what the add-on consumes must be in the subset
         seed += [sp for sp in a.needs_base_species if sp not in seed]
     with contextlib.redirect_stdout(io.StringIO()):
@@ -705,8 +706,8 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
             msgs.append(("error", "Held species without measurements: " + src["held to measurements"].split("MISSING: ")[1]))
     except Exception:
         pass
-    if not spec.mechanism_stem and not spec.precursors:
-        msgs.append(("error", "No chemistry: choose compounds or an existing mechanism."))
+    if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only:
+        msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
     if c.j_source == "measured" and c.source == "manual":
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
                                 "(no photolysis). Use 'clear sky' or provide archive data."))
