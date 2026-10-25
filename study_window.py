@@ -880,6 +880,8 @@ class StudyWindow(QMainWindow):
             return
         if kind == "all_done":
             self._busy(False); self._refresh_results()
+            if self.tabs.currentWidget() is getattr(self, "_v_tab", None):
+                self._v_refresh_if_stale()
             done = sum(1 for x in self.runner.plans if S.is_done(x)); self.bar.setValue(done)
             self.status.setText(f"{done} / {len(self.runner.plans)} runs done; results in {self.study.folder}")
             S.write_results(self.study, S.collect_results(self.study, self.runner.plans)); return
@@ -1092,8 +1094,17 @@ class StudyWindow(QMainWindow):
         self._v_data = None; self._v_scale = {}
         from PyQt6.QtCore import QTimer
         self._v_timer = QTimer(self); self._v_timer.timeout.connect(self._v_step)
-        self.tabs.currentChanged.connect(lambda i: self._v_load() if self.tabs.widget(i) is vw and self._v_data is None else None)
+        self._v_tab = vw
+        self.tabs.currentChanged.connect(lambda i: self._v_refresh_if_stale() if self.tabs.widget(i) is vw else None)
         return vw
+
+    def _v_refresh_if_stale(self):
+        """Re-read when the finished runs differ from what the video holds (runs added or finished since)."""
+        st = self._to_study()
+        plans = self.runner.plans if self.runner else S.plan_runs(st)
+        done = sorted(p.name for p in plans if S.is_done(p))
+        if self._v_data is None or done != sorted(self._v_data.get("runs", [])):
+            self._v_load()
 
     def _v_load(self, force: bool = False):
         st = self._to_study()
