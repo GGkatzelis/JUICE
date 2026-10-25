@@ -167,6 +167,60 @@ def extract_observations(archive_root: str, date: str, keys: Optional[List[str]]
     return out, keys
 
 
+def expected_koh(spec: ExperimentSpec, hours: np.ndarray, cols: Dict[str, np.ndarray],
+                 obs_hours: Optional[np.ndarray] = None, obs_koh: Optional[np.ndarray] = None) -> Tuple[np.ndarray, List[Tuple[str, float, float]], float, str]:
+    """First-order expectation of the measured OH reactivity from the injections alone:
+    background (median of the measurement in the 15 min — or the last points of the hour — before the first
+    injection adding ≥ 0.05 s⁻¹, else 0)
+    + Σ kOH of each injection, ramped in linearly over its pulse and diluted afterwards with the
+    chamber flow of the ENZ ('dilute' m³/h ÷ chamber volume).  No chemistry: products, OH loss
+    of the injected compounds and chamber sources are ignored.
+    Returns (expected kOH on `hours`, [(name, start hour, kOH s-1)], background, note)."""
+    import oh_reactivity as R
+    import injection_calc as ic
+    c = spec.conditions
+    T = float(np.nanmean(cols["t"])) if "t" in cols and np.isfinite(cols["t"]).any() else float(c.temperature_K or 298.0)
+    p = float(c.pressure_hPa or 1013.25)
+    vol = getattr(ic.chamber(c.chamber_name), "volume_m3", 276.0) or 276.0
+    events = []
+    for ev in spec.injections:
+        if not ev.start or not ev.products.strip():
+            continue
+        k = 0.0
+        for prod, ppb in [(ev.products, ev.total_ppb)] + list(ev.extra_channels):
+            v, _missing = R.injection_koh(prod, ppb, T, p)
+            k += v or 0.0
+        if k > 0:
+            hh, mm = ev.start.split(":")[:2]
+            events.append((ev.name, int(hh) + int(mm) / 60.0, k, max(float(ev.duration_min or 1.0), 1e-3) / 60.0))
+    # dilution: d ln C / dt = -flow / V   (flow in m³/h → per hour)
+    flow = np.asarray(cols.get("dilute", np.zeros(len(hours))), dtype=float)
+    rate_h = np.where(np.isfinite(flow), flow, 0.0) / vol
+    dt = np.diff(hours, prepend=hours[0])
+    cum = np.cumsum(rate_h * dt)                        # ∫ dilution dt from the start, dimensionless
+    exp_k = np.zeros(len(hours))
+    for _name, h0, k, dur in events:
+        ramp = np.clip((hours - h0) / dur, 0.0, 1.0)
+        i0 = int(np.searchsorted(hours, h0 + dur))
+        decay = np.exp(-(cum - (cum[min(i0, len(cum) - 1)] if len(cum) else 0.0)))
+        exp_k += k * ramp * np.where(hours >= h0 + dur, decay, 1.0)
+    background, note = 0.0, "background 0 (no measurement before the first injection)"
+    if obs_hours is not None and obs_koh is not None and events:
+        big = [h for _n, h, k, _d in events if k >= 0.05]          # injections that change kOH noticeably (not humidification impurities)
+        first = min(big or [h for _n, h, _k, _d in events])
+        ok = np.isfinite(obs_koh) & (obs_hours < first)
+        sel = ok & (obs_hours >= first - 0.25)
+        window = "15 min"
+        if sel.sum() < 3:                                # sparse measurement (e.g. every 10 min): the last points within the hour
+            idx = np.where(ok & (obs_hours >= first - 1.0))[0][-3:]
+            sel = np.zeros(len(obs_hours), bool); sel[idx] = True; window = "hour"
+        if sel.any():
+            background = float(np.median(obs_koh[sel]))
+            note = (f"background {background:.2g} s⁻¹ = median of {int(sel.sum())} measurement(s) in the {window} before "
+                    f"{int(first):02d}:{int(round(first % 1 * 60)):02d}")
+    return exp_k + background, [(n, h, k) for n, h, k, _d in events], background, note
+
+
 # ── one file per experiment day: everything the plots compare against, extracted once ──
 OBS_FILE_SUFFIX = ".observations.csv"
 

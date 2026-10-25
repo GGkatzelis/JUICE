@@ -205,13 +205,21 @@ class InputsPlot(QWidget):
         elif self.mode == "conditions":
             self._conditions(self.fig.add_subplot(121), self.fig.add_subplot(122), hours, cols)
         elif self.mode == "injections":
-            self._injections(self.fig.add_subplot(111), hours, cols)
+            obs = self._measured_koh(spec)
+            if obs is not None and len(obs[0]):
+                gs = self.fig.add_gridspec(2, 1, height_ratios=[1, 1.6])
+                self._injections(self.fig.add_subplot(gs[0]), hours, cols)
+                koh_note = self._koh_panel(self.fig.add_subplot(gs[1]), spec, hours, cols, obs)
+                notes = list(notes) + [koh_note]
+            else:
+                self._injections(self.fig.add_subplot(111), hours, cols)
+                notes = list(notes) + (["no measured kOH for this day — only the pulses are shown"] if spec.conditions.date else [])
         else:
             self._chamber(self.fig.add_subplot(111), spec, hours, cols)
         for ax in self.fig.axes:
             ax.tick_params(labelsize=7)
         if notes:
-            self.note.setText("; ".join(n[:70] for n in notes[:3]))
+            self.note.setText("; ".join(n[:110] for n in notes[:3]))
         self.canvas.draw(); self.plotted = True
 
     def _conditions(self, ax1, ax2, hours, cols):
@@ -227,6 +235,46 @@ class InputsPlot(QWidget):
         if "H2O" in cols:
             axc = ax2.twinx(); axc.plot(hours, cols["H2O"], color="#2e9e4f", lw=1, ls="--"); axc.set_ylabel("H2O [%]", color="#2e9e4f", fontsize=8)
         ax2.set_title("photolysis, humidity (dashed)", fontsize=8); ax2.set_xlabel("hour (UTC)", fontsize=8)
+
+    _KOH_OBS: Dict[Tuple[str, str], object] = {}        # (archive root, date) → measured kOH (hours, values) or None, per session
+
+    def _measured_koh(self, spec):
+        c = spec.conditions
+        if not c.date:
+            return None
+        key = (c.archive_root, c.date)
+        if key not in InputsPlot._KOH_OBS:
+            got = None
+            try:
+                import experiment_plots as ep
+                out = self.win.out_dir()
+                obs = ep.load_observations(c.archive_root, c.date, keys=["kOH"], cache_dir=out if os.path.isdir(out) else "")
+                if "kOH" in obs:
+                    got = (np.asarray(obs["kOH"][0], dtype=float), np.asarray(obs["kOH"][1], dtype=float))
+            except Exception:
+                got = None
+            InputsPlot._KOH_OBS[key] = got
+        return InputsPlot._KOH_OBS[key]
+
+    def _koh_panel(self, ax, spec, hours, cols, obs):
+        import experiment_plots as ep
+        oh_h, oh_k = obs
+        exp_k, events, bg, note = ep.expected_koh(spec, hours, cols, oh_h, oh_k)
+        lo, hi = hours[0], hours[-1]
+        sel = (oh_h >= lo) & (oh_h <= hi)
+        ax.plot(oh_h[sel], oh_k[sel], ".", ms=2.5, color="#555555", alpha=0.7, label="measured (LP-LIF)")
+        ax.plot(hours, exp_k, color=ACCENT, lw=1.6, label="expected from the injections")
+        ymax = max(np.nanmax(exp_k) if len(exp_k) else 0, np.nanpercentile(oh_k[sel], 99) if sel.any() else 0) * 1.15 or 1.0
+        for name, h0, k in events:
+            ax.axvline(h0, color=ACCENT, lw=0.6, alpha=0.35)
+            ax.annotate(f"{name[:14]} +{k:.2g}", (h0, ymax * 0.97), rotation=90, fontsize=6, va="top", ha="right", color="#444")
+        if "hv" in cols:
+            axb = ax.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.2, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
+        ax.set_ylim(0, ymax); ax.set_xlim(lo, hi)
+        ax.set_ylabel("kOH [s⁻¹]", fontsize=8); ax.set_xlabel("hour (UTC)", fontsize=8)
+        ax.set_title("OH reactivity: measured vs expected from the injected amounts (dilution only, no chemistry)", fontsize=8)
+        ax.legend(fontsize=7, loc="upper left")
+        return note
 
     def _injections(self, ax, hours, cols):
         qs = [k for k in cols if k.upper().startswith("Q")]
@@ -630,7 +678,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
         # ── middle: pages, each with its plot at the bottom ──
         self.plot_cond = InputsPlot(self, "conditions", 2.8)
-        self.plot_inj = InputsPlot(self, "injections", 2.6)
+        self.plot_inj = InputsPlot(self, "injections", 4.4)
         self.plot_chamber = InputsPlot(self, "chamber", 2.8)
         self.stack = QStackedWidget()
         self.stack.addWidget(_scroll(_boxed(self.page_start, "Experiment"), _boxed(self.page_cond, "Where and when"),
