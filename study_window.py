@@ -989,6 +989,9 @@ class StudyWindow(QMainWindow):
             a1, a2 = axes[0].name(), axes[1].name()
             exp = exps[0]
             sub = [r for r in rows if r["experiment"] == exp and r.get(key) is not None and not math.isnan(r[key])]
+            dropped = 0
+            if log:                                          # no logarithm of 0: those runs cannot be placed on log axes
+                keep = [r for r in sub if r[a1] > 0 and r[a2] > 0]; dropped = len(sub) - len(keep); sub = keep
             x = np.array([r[a1] for r in sub]); y = np.array([r[a2] for r in sub]); z = np.array([r[key] for r in sub])
             if len(sub) >= 4:
                 xs, ys = (np.log10(x), np.log10(y)) if log else (x, y)
@@ -1003,9 +1006,13 @@ class StudyWindow(QMainWindow):
                 regime_note = self._regimes(ax, st, sub, a1, a2, xs, ys, z, key, log) if self.show_regimes.isChecked() else ""
             else:
                 sc = ax.scatter(x, y, c=z, cmap="viridis", s=80); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
-            ax.set_xlabel(a1 + (" (log10)" if log else "")); ax.set_ylabel(a2 + (" (log10)" if log else ""))
+            (lab1, tot1, _s1), (lab2, tot2, _s2) = S.axis_description(st, axes[0]), S.axis_description(st, axes[1])
+            ax.set_xlabel(lab1 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
+            ax.set_ylabel(lab2 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
+            self._ppb_scale(ax, "x", tot1, log); self._ppb_scale(ax, "y", tot2, log)
             ax.set_title(f"{label} — {exp}" + (f"  (+{len(exps) - 1} more experiments: see Results)" if len(exps) > 1 else ""), loc="left")
             self.plot_note.setText(self._meaning(key, "Colour") + f"\nisopleth over {a1} × {a2}; {len(sub)} grid points, interpolated between them"
+                                   + (f"; {dropped} run(s) at 0 left out — no logarithm of 0 (untick 'log axes' to see them)" if dropped else "")
                                    + (("\n" + regime_note) if len(sub) >= 4 and regime_note else ""))
         elif len(axes) == 1:
             a1 = axes[0].name(); notes = []
@@ -1018,7 +1025,10 @@ class StudyWindow(QMainWindow):
                     notes.append(f"{exp}: % change of {label} per % change of {a1} between neighbouring points = " + ", ".join("—" if math.isnan(s) else f"{s:+.2f}" for s in sens))
             if log:
                 ax.set_xscale("log"); ax.set_yscale("log")
-            ax.set_xlabel(a1); ax.set_ylabel(f"{label} [{unit}]"); ax.grid(alpha=0.3); ax.legend(fontsize=F["legend"]); ax.set_title(f"{label} vs {a1}", loc="left")
+            lab1, tot1, _s1 = S.axis_description(st, axes[0])
+            ax.set_xlabel(lab1, fontsize=F["label"] - 1); ax.set_ylabel(f"{label} [{unit}]"); ax.grid(alpha=0.3); ax.legend(fontsize=F["legend"]); ax.set_title(f"{label} vs {a1}", loc="left")
+            if tot1 and not log:
+                self._ppb_scale(ax, "x", tot1, False)
             self.plot_note.setText("\n".join([self._meaning(key, "Lines")] + notes))
         else:
             ys = [next((r[key] for r in rows if r["experiment"] == e), float("nan")) for e in exps]
@@ -1026,6 +1036,25 @@ class StudyWindow(QMainWindow):
             ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (change applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
             self.plot_note.setText(self._meaning(key, "Bars") + "\none value per experiment; compare with the base runs in the viewer's Comparison tab")
         self.fig.tight_layout(); self.canvas.draw()
+
+    def _ppb_scale(self, ax, which: str, total_ppb: float, log: bool):
+        """Second scale on the opposite side of a factor axis: the total injected ppb that factor means."""
+        if not total_ppb:
+            return
+        if log:
+            fwd = lambda v: np.power(10.0, v) * total_ppb
+            inv = lambda p: np.log10(np.clip(p, 1e-12, None) / total_ppb)
+        else:
+            fwd = lambda v: v * total_ppb
+            inv = lambda p: p / total_ppb
+        try:
+            if which == "x":
+                sec = ax.secondary_xaxis("top", functions=(fwd, inv)); sec.set_xlabel("total injected [ppb]", fontsize=F["small"] + 1)
+            else:
+                sec = ax.secondary_yaxis("right", functions=(fwd, inv)); sec.set_ylabel("total injected [ppb]", fontsize=F["small"] + 1)
+            sec.tick_params(labelsize=F["small"])
+        except Exception:
+            pass
 
     def _meaning(self, key: str, what: str) -> str:
         label, unit = S.METRICS.get(key, (key, ""))

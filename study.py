@@ -1116,6 +1116,45 @@ def regime_map(x: np.ndarray, y: np.ndarray, z: np.ndarray, nox_on_x: bool, n: i
     return X, Y, Z, (dZdx if nox_on_x else dZdy)
 
 
+def axis_description(st: Study, ax: Axis) -> Tuple[str, float, str]:
+    """(readable axis label with unit, total base ppb of the scaled injections (0 if not a scale axis), short name)
+    for the plots: a factor axis says what it multiplies and what 1 means; amount axes carry their unit."""
+    spec = None
+    try:
+        spec = load_spec(st.experiments[0]) if st.experiments else None
+    except Exception:
+        spec = None
+    base_ppb, names = 0.0, []
+    for kind, target in ax.members():
+        if kind == "injection_scale" and spec is not None:
+            for e in _events_matching(spec, target):
+                names.append(e.name)
+                try:
+                    base_ppb += float(e.total_ppb) + sum(float(p) for _pr, p in e.extra_channels if _pr.strip().upper() == e.products.strip().upper())
+                except ValueError:
+                    pass
+    k, t = ax.kind, ax.target
+    if k == "injection_scale":
+        what = ("injections " + ", ".join(names)) if names else f"injections {t}"
+        lab = f"{what} × factor (1 = as in the experiment" + (f", {base_ppb:.3g} ppb in total)" if base_ppb else ")")
+        short = "× factor"
+    elif k == "injection_new":
+        sp, start, dur = parse_new_injection(t); lab = f"{sp} added at {start} over {dur:g} min [ppb]"; short = f"{sp} added [ppb]"
+    elif k == "injection_set":
+        lab = f"{t} injected [ppb]"; short = lab
+    elif k == "initial":
+        lab = f"{t} at the start [ppb]"; short = lab
+    elif k == "rate_factor":
+        lab = f"k({t}) × factor (1 = MCM)"; short = "× factor"
+    elif k == "chamber_scale":
+        lab = f"chamber {t} × factor (1 = as in the experiment)"; short = "× factor"
+    else:
+        lab = f"{k} {t}"; short = lab
+    if ax.also:
+        lab += " — together with " + ", ".join(f"{kk} {tt}" for kk, tt in ax.also)
+    return lab, base_ppb, short
+
+
 def normalised_sensitivity(xs: List[float], ys: List[float]) -> List[float]:
     """d ln y / d ln x between neighbouring grid points (percent change of the metric per percent
     change of the parameter); NaN where a log is undefined."""
