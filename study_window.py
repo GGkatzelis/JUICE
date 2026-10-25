@@ -205,11 +205,30 @@ class StudyWindow(QMainWindow):
         self.kvpd = QCheckBox("write kv/pd files (large; off for sweeps)"); gl.addWidget(self.kvpd, 0, 2, 1, 2)
         hb = QHBoxLayout()
         self.check_btn = QPushButton("Check"); self.check_btn.clicked.connect(self._check); hb.addWidget(self.check_btn)
+        self.check_btn.setToolTip("Lists what the study will run and anything it cannot do. Writes and runs nothing.")
         self.dry_btn = QPushButton("Write inputs only"); self.dry_btn.clicked.connect(lambda: self._materialise(run_after=None)); hb.addWidget(self.dry_btn)
+        self.dry_btn.setToolTip("Writes every run's .easy, .enz and scenario JSON into its run folder, runs nothing.\n"
+                                "To inspect a run before spending CPU, or to run the study elsewhere with study_runner.py.")
         self.pilot_btn = QPushButton("Run pilot, then estimate"); self.pilot_btn.setObjectName("primary"); self.pilot_btn.clicked.connect(self._run_pilot); hb.addWidget(self.pilot_btn)
+        self.pilot_btn.setToolTip("Runs the first case alone, measures its time and disk size, then asks before starting the rest.")
         self.run_btn = QPushButton("Run all"); self.run_btn.clicked.connect(self._run_all); hb.addWidget(self.run_btn)
+        self.run_btn.setToolTip("Runs every case that has no finished result yet, in parallel.")
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self._stop); hb.addWidget(self.stop_btn)
+        self.stop_btn.setToolTip("Stops the running cases; finished ones are kept and skipped next time.")
         hb.addStretch(); gl.addLayout(hb, 1, 0, 1, 4)
+        exec_help = _more_info("Usual order: Check → Run pilot, then estimate → yes. Finished runs are never redone.", [
+            "<b>Check</b>: lists what will run (axes, changes) and what cannot work, e.g. a reaction not in an experiment's subset. Writes nothing.",
+            "<b>Write inputs only</b>: writes every run's .easy, .enz and scenario JSON into &lt;study&gt;/runs/&lt;run&gt;/ without running. "
+            "Use it to open one .easy and confirm the change is where you expect, to see the disk space a big sweep needs, or to copy the "
+            "study to a faster machine and run it there: <code>python study_runner.py &lt;name&gt;.study.json --workers 8 --yes</code>.",
+            "<b>Run pilot, then estimate</b>: runs the first case alone, then shows <i>remaining runs × pilot time ÷ parallel runs</i> and the "
+            "expected disk space, and asks before starting the rest.",
+            "<b>Run all</b>: runs everything not yet finished. Without a pilot the estimate comes from the base experiment's last run, if known.",
+            "<b>Stop</b>: kills the running cases; finished ones stay. Running the study again continues where it stopped, and adding grid "
+            "points later only runs the new ones.",
+            "<b>Parallel runs</b>: each run is its own process on one core. Leave a core free if you keep working on the machine.",
+            "<b>kv/pd files</b>: rates and production/loss budgets for the process analysis in the viewer; large, so off for sweeps."], "ⓘ What the buttons do")
+        exec_help.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(exec_help, 5, 0, 1, 4)
         self.bar = QProgressBar(); self.bar.setFormat("%v / %m runs"); gl.addWidget(self.bar, 2, 0, 1, 4)
         self.status = QLabel("—"); self.status.setWordWrap(True); self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.status, 3, 0, 1, 4)
         self.ready = QLabel(""); self.ready.setWordWrap(True); self.ready.setStyleSheet("color:#6a4c93; font-style: italic")
@@ -223,19 +242,43 @@ class StudyWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.runs = _table(["Run", "Experiment", "Point", "State", "Progress", "Time", "Note"])
         self.runs.itemDoubleClicked.connect(lambda _it: self._open_run())
-        rw = QWidget(); rl = QVBoxLayout(rw); rl.setContentsMargins(0, 0, 0, 0); rl.addWidget(self.runs)
+        rw = QWidget(); rl = QVBoxLayout(rw); rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(_more_info("One row per run: experiment × grid point. Double-click a finished run to open it in the viewer.", [
+            "<b>State</b>: planned (nothing written) → ready (inputs written) → running → done | failed. Done = a result newer than its inputs "
+            "and a clean exit; such runs are skipped when the study runs again.",
+            "<b>Point</b>: the axis values of this run, e.g. VOC_x = 2, NOx_x = 0.5 (× factors) or NO_t0_ppb = 5 (a value).",
+            "<b>Time</b>: wall-clock time of the run; the median of finished runs drives the remaining-time estimate.",
+            "<b>Note</b>: what could not be applied (e.g. archive unreachable → the base experiment's .enz reused) or why a run failed.",
+            "<b>Show log</b>: the solver output of the selected run; <b>Open run folder</b>: its .easy, .enz, JSON and results."], "ⓘ About this table"))
+        rl.addWidget(self.runs)
         hb = QHBoxLayout()
         for label, fn in (("Open in viewer", self._open_run), ("Open run folder", lambda: self._open_path(self._sel_plan().folder if self._sel_plan() else "")),
                           ("Show log", self._show_log)):
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); rl.addLayout(hb); self.tabs.addTab(rw, "Runs")
         self.results = _table(["Run"]); self.results.itemDoubleClicked.connect(lambda _it: self._open_run(self.results))
-        rw = QWidget(); rl = QVBoxLayout(rw); rl.setContentsMargins(0, 0, 0, 0); rl.addWidget(self.results)
+        rw = QWidget(); rl = QVBoxLayout(rw); rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(_more_info("The numbers read from every finished run, one row per run. Double-click a row to open that run.", [
+            "Columns: the run, its experiment, the axis values, then the results ticked under 'Results read from every run'.",
+            "Concentrations in ppb come from number density ÷ M; radicals (OH, HO2, RO2) stay in molecules cm⁻³.",
+            "'While lit' = the period with the roof open or the lamps on (HV > 0.5); 'gain while lit' = value at the end of that "
+            "period minus value at its start. Ox = O3 + NO2, so it does not move when NO titrates O3.",
+            "<b>Export CSV</b> writes the table; the same file is saved as &lt;study&gt;_results.csv after every complete run of the study.",
+            "Changed which results are ticked? Press <b>Refresh</b>: the numbers are recomputed from the stored values, no rerun needed."], "ⓘ About this table"))
+        rl.addWidget(self.results)
         hb = QHBoxLayout()
         b = QPushButton("Refresh"); b.clicked.connect(self._refresh_results); hb.addWidget(b)
         b = QPushButton("Export CSV …"); b.clicked.connect(self._export); hb.addWidget(b)
         hb.addStretch(); rl.addLayout(hb); self.tabs.addTab(rw, "Results")
         pw = QWidget(); pl = QVBoxLayout(pw); pl.setContentsMargins(0, 0, 0, 0)
+        pl.addWidget(_more_info("What is drawn depends on the number of axes: two → isopleth, one → curves, none → one bar per experiment.", [
+            "<b>Two axes</b>: filled contours of the chosen result over axis 1 × axis 2 for the first experiment, interpolated between the "
+            "grid points (black dots, value printed next to each). Few points give coarse contours: 4 × 4 or more for a usable isopleth.",
+            "<b>One axis</b>: the result against the axis value, one line per experiment. The note below gives the normalised sensitivity "
+            "between neighbouring points: % change of the result per % change of the parameter (+1 proportional, 0 insensitive, "
+            "negative = the result falls as the parameter rises).",
+            "<b>No axis</b> (several experiments, one change): one bar per experiment; compare each with its original run in the viewer.",
+            "<b>log axes</b> for log-spaced sweeps (log 0.1 20 6). <b>Save image</b> writes PNG or SVG."], "ⓘ About this plot"))
         hb = QHBoxLayout(); hb.addWidget(QLabel("Metric")); self.plot_metric = QComboBox(); self.plot_metric.currentIndexChanged.connect(self._plot); hb.addWidget(self.plot_metric)
         self.plot_log = QCheckBox("log axes"); self.plot_log.toggled.connect(self._plot); hb.addWidget(self.plot_log)
         b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b); hb.addStretch(); pl.addLayout(hb)
