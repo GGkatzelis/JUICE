@@ -49,7 +49,7 @@ MIXTURE_WORDS = {"gasoline": "GASOLINE", "diesel": "DIESEL", "cooking": "COOKING
 _UNITS = [                                   # a stated mixing ratio beats a liquid volume
     (r"(\d+(?:[.,]\d+)?)\s*ppbv?\b", "ppb"),
     (r"(\d+(?:[.,]\d+)?)\s*ppmv?\b", "ppm"),
-    (r"(\d+(?:[.,]\d+)?)\s*(?:µl|μl|ul|microliter|mikroliter)\b", "ul"),
+    (r"(\d+(?:[.,]\d+)?)\s*(?:µl|μl|ul|microliter|mikroliter|microl|mikrol)\b", "ul"),
     (r"(\d+(?:[.,]\d+)?)\s*(?:ml|milliliter)\b", "ml"),
     (r"(\d+(?:[.,]\d+)?)\s*(?:nl|nanoliter)\b", "nl"),
 ]
@@ -170,17 +170,66 @@ def load_wiki_file(path: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _LINE = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s+([A-Za-z$])(?=\s|$)(.*)$")
+# 'HH:MM H.F. CHANGE: Roof open' — no one-letter code; the action is read from the words
+_FREE = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(.+)$")
+_INITIALS_TAG = re.compile(r"^\s*(?:(?:[A-ZÄÖÜ][a-zäöü]?\.\s*){1,3})?\s*(?:(CHANGE|ZUSTAND|STATUS|STATE|INFO|NOTE|NOTIZ|COMMENT|KOMMENTAR)\s*:)?\s*(.*)$", re.IGNORECASE)
+_STATE_TAGS = ("zustand", "status", "state", "info", "note", "notiz", "comment", "kommentar")
+_ADD_WORDS = r"(inject|injection|injected|addition|added|add |zugabe|dosier|eingeleitet|filled|fill )"
+
+
+def infer_code(text: str) -> str:
+    """The one-letter action code for a log line written without one ('' = a note).
+    Reads the words: roof open/closed, humidification on/off, seed on/off, ozone / NO / NO2 / CO / CO2
+    additions, and any other injection or addition → X (VOC or mixture).  State reports
+    ('ZUSTAND:', 'STATUS:') and flushing / valve / instrument lines stay notes."""
+    m = _INITIALS_TAG.match(text)
+    tag, body = (m.group(1) or "").lower(), (m.group(2) if m else text)
+    if tag in _STATE_TAGS:
+        return ""
+    t = " " + body.lower() + " "
+    off = re.search(r"\b(off|stop|stopp|end|ende|aus|closed|close|zu|geschlossen|finished)\b", t) is not None
+    if re.search(r"\b(roof|dach)\b", t):
+        return "r" if re.search(r"\b(clos|zu\b|geschlossen|schlie)", t) else ("R" if re.search(r"\b(open|opened|auf|offen|geöffnet|öffn)", t) else "")
+    if re.search(r"(humidif|befeucht)", t):
+        return "h" if off else "H"
+    if re.search(r"\b(seed|aerosol|ammonium ?sulfat)", t):
+        return "s" if off else "S"
+    adding = re.search(_ADD_WORDS, t) is not None or re.search(r"\d\s*(ppb|ppm|µl|μl|ul|microl|ml|sccm)\b", t) is not None
+    if not adding:
+        return ""
+    if re.search(r"\b(o3|ozone|ozon)\b", t):
+        return "O"
+    if re.search(r"\bno2\b", t):
+        return "D"
+    if re.search(r"\b(no|nitric oxide|stickstoffmonoxid)\b", t):
+        return "M"
+    if re.search(r"\bco2\b", t):
+        return "C"
+    if re.search(r"\b(co|carbon monoxide|kohlenmonoxid)\b", t):
+        return "c"
+    return "X"
 
 
 def parse_action_log(text: str) -> List[WikiEvent]:
-    """All 'HH:MM <code> …' lines of a page (HTML or raw wiki text), in page order."""
+    """All action-log lines of a page (HTML or raw wiki text), in page order.
+    'HH:MM <code> …' lines keep their code; 'HH:MM <initials> CHANGE: …' lines without a code get
+    one from infer_code (the original line is kept, so the dialog shows what was read)."""
     text = strip_html(text)
     events: List[WikiEvent] = []
     for line in text.splitlines():
         m = _LINE.match(line)
-        if not m:
+        if m:
+            hh, mm, _ss, code, rest = m.groups()
+            desc = re.sub(r"\s{2,}", " ", rest).strip(" :|")
+            events.append(WikiEvent(f"{int(hh):02d}:{mm}", code, desc, line.strip()))
             continue
-        hh, mm, _ss, code, rest = m.groups()
+        m = _FREE.match(line)
+        if not m or not re.match(r"^\s*[A-ZÄÖÜa-zäöü]", m.group(4)):      # a time followed by words, not by numbers / another time
+            continue
+        hh, mm, _ss, rest = m.groups()
+        if int(hh) > 23 or int(mm) > 59:
+            continue
+        code = infer_code(rest) or "-"
         desc = re.sub(r"\s{2,}", " ", rest).strip(" :|")
         events.append(WikiEvent(f"{int(hh):02d}:{mm}", code, desc, line.strip()))
     return events
@@ -195,7 +244,7 @@ def _num(s: str) -> float:
     return float(s.replace(",", "."))
 
 
-_MULT_VOL = re.compile(r"(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(µl|μl|ul|microliter|mikroliter|ml|milliliter|nl)\b", re.IGNORECASE)
+_MULT_VOL = re.compile(r"(?:(\d+)\s*[x×]\s*)?(\d+(?:[.,]\d+)?)\s*(µl|μl|ul|microliter|mikroliter|microl|mikrol|ml|milliliter|nl)\b", re.IGNORECASE)
 _FLOW = re.compile(r"(\d+(?:[.,]\d+)?)\s*(sccm|slpm|slm|l/min|ml/min)\b", re.IGNORECASE)
 _FC = re.compile(r"\bFC\s*(\d+(?:[.,]\d+)?)\s*l\b\s*(\d+(?:[.,]\d+)?)\s*%", re.IGNORECASE)      # FC 0.5l 62.5% → 0.5 L/min full scale at 62.5 %
 _BOTTLE = re.compile(r"\((\d+(?:[.,]\d+)?)\s*(ppm|%)\)", re.IGNORECASE)                            # Propene (1%), NO (3835ppm)

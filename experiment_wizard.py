@@ -77,7 +77,10 @@ WIKI_LINE_HELP = [
     "Read from it: the compound or mixture name, amounts (<code>23 ppb</code>, <code>ppm</code>, <code>180 µl</code>, "
     "<code>ml</code>, <code>sccm</code>, <code>FC 0.5l 62.5%</code>), bottle concentration <code>(1%)</code>, "
     "durations (<code>50 sec</code>, <code>5 min</code>) and <code>ppbC</code>.",
-    "Lines without time + code are skipped. Other codes are kept as notes and not modelled.",
+    "<b>No code?</b> Logs written as <code>08:01 A.N. CHANGE: Roof open</code> are read from the words: roof open / closed, "
+    "humidification on / off, seed, O3 / NO / NO2 / CO / CO2 additions, and any other injection → X. "
+    "<code>ZUSTAND:</code> / <code>STATUS:</code> lines and flushing, valves or fans stay notes. Check the Code column before importing.",
+    "Lines without a time are skipped. Lines that do not describe an action are kept as notes and not modelled.",
 ]
 
 
@@ -1535,7 +1538,9 @@ class WikiImportDialog(QDialog):
     def _set_events(self, events, source: str):
         self._events = events
         self.status.setStyleSheet("color: #4caf50;" if events else "color: #e05252;")
-        self.status.setText(f"{len(events)} action-log lines from {source}" if events else f"No 'HH:MM <code>' lines found in {source}")
+        guessed = sum(1 for e in events if e.description and not e.line.split(None, 2)[1:2] == [e.code])
+        self.status.setText((f"{len(events)} action-log lines from {source}" + (" — codes read from the words where the log has none; check the 'Code' column" if guessed else ""))
+                            if events else f"No time-stamped lines ('HH:MM …') found in {source}")
         self.table.blockSignals(True); self.table.setRowCount(0)
         for ev in events:
             r = self.table.rowCount(); self.table.insertRow(r)
