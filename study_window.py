@@ -305,18 +305,29 @@ class StudyWindow(QMainWindow):
             "coloured. Hatched = VOC-sensitive side. Red dotted: P(H2O2)/P(HNO3) = 0.35, the radical-budget indicator of the same "
             "split (high = NOx-sensitive). Four NOx values give a rough ridge — six or more per axis for a clean one.",
             "<b>log axes</b> for log-spaced sweeps (log 0.1 20 6). <b>Save image</b> writes PNG or SVG."], "ⓘ About this plot"))
-        hb = QHBoxLayout(); hb.addWidget(QLabel("Metric")); self.plot_metric = QComboBox(); self.plot_metric.currentIndexChanged.connect(self._plot); hb.addWidget(self.plot_metric)
-        self.plot_log = QCheckBox("log axes"); self.plot_log.toggled.connect(self._plot); hb.addWidget(self.plot_log)
+        hb = QHBoxLayout(); hb.addWidget(QLabel("Metric")); self.plot_metric = QComboBox(); self.plot_metric.currentIndexChanged.connect(self._plot)
+        self.plot_metric.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.plot_metric.setMinimumContentsLength(22); self.plot_metric.setProperty("noFit", True)   # long result names must not widen the panel
+        hb.addWidget(self.plot_metric, stretch=1)
+        self.plot_log = QCheckBox("log axes"); self.plot_log.toggled.connect(self._plot)
         self.show_regimes = QCheckBox("regimes"); self.show_regimes.setChecked(True); self.show_regimes.toggled.connect(self._plot)
+        self.show_runs = QCheckBox("runs"); self.show_runs.setChecked(True); self.show_runs.toggled.connect(self._plot)
+        self.show_runs.setToolTip("A circle per run, filled with its own value")
+        self.show_values = QCheckBox("values"); self.show_values.setChecked(True); self.show_values.toggled.connect(self._plot)
+        self.show_values.setToolTip("The run's value written next to its circle")
         self.show_regimes.setToolTip("Isopleths with a NOx axis: the ridge where the result stops rising with NOx, the NOx-sensitive and\n"
                                      "VOC-sensitive (NOx-saturated) sides, and the 0.35 contour of the regime indicator when it was computed.")
-        hb.addWidget(self.show_regimes)
+        pl.addLayout(hb)
+        hb = QHBoxLayout(); hb.addWidget(self.plot_log)
+        hb.addWidget(self.show_regimes); hb.addWidget(self.show_runs); hb.addWidget(self.show_values)
+        hb.addStretch(); pl.addLayout(hb); hb = QHBoxLayout()
         hb.addWidget(QLabel("Legend"))
         self.legend_pos = QComboBox()
-        self.legend_pos.addItems(["where dragged / automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
+        self.legend_pos.addItems(["automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
         self.legend_pos.setToolTip("Where the legend goes. You can also drag it with the mouse; double-click it to put it back.")
         self.legend_pos.currentIndexChanged.connect(self._legend_pos_changed); hb.addWidget(self.legend_pos)
-        b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b); hb.addStretch(); pl.addLayout(hb)
+        b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b)
+        hb.addStretch(); pl.addLayout(hb)
         self.fig = Figure(figsize=(8, 5.5)); self.canvas = FigureCanvas(self.fig); pl.addWidget(self.canvas, stretch=1)
         import plot_interaction                       # as in the results viewer: wheel = zoom, drag = pan, double-click = reset,
         plot_interaction.attach(self.canvas, hover=False)   # and the edges of the plot can be dragged to resize it (e.g. the x axis up)
@@ -1013,9 +1024,7 @@ class StudyWindow(QMainWindow):
                     ax.tricontour(xs, ys, z, levels=7, colors="white", linewidths=0.6, alpha=0.7)
                 except Exception:
                     sc = ax.scatter(xs, ys, c=z, cmap="viridis", s=60); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
-                self._run_markers(ax, xs, ys, z, cs)
-                for xi, yi, zi in zip(xs, ys, z):
-                    ax.annotate(f"{zi:.3g}", (xi, yi), fontsize=F["small"], color="white", xytext=(3, 3), textcoords="offset points")
+                self._run_markers(ax, xs, ys, z, cs, self.show_runs.isChecked(), self.show_values.isChecked())
                 regime_note = self._regimes(ax, st, sub, a1, a2, xs, ys, z, key, log) if self.show_regimes.isChecked() else ""
             else:
                 sc = ax.scatter(x, y, c=z, cmap="viridis", s=80); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
@@ -1068,12 +1077,19 @@ class StudyWindow(QMainWindow):
         hb.addWidget(QLabel("Quantity")); self.v_qty = QComboBox()
         for k, (lab, unit) in S.TS_QUANTITIES.items():
             self.v_qty.addItem(f"{lab} [{unit}]" if unit != "-" else lab, k)
-        self.v_qty.setCurrentIndex(self.v_qty.findData("O3")); self.v_qty.currentIndexChanged.connect(lambda *_: self._v_draw(rescale=True)); hb.addWidget(self.v_qty)
+        self.v_qty.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon); self.v_qty.setMinimumContentsLength(22)
+        self.v_qty.setCurrentIndex(self.v_qty.findData("O3")); self.v_qty.currentIndexChanged.connect(lambda *_: self._v_draw(rescale=True)); hb.addWidget(self.v_qty, stretch=1)
+        hb.addStretch(); vl.addLayout(hb); hb = QHBoxLayout()            # second row: scale and what is drawn on the frame
         self.v_log = QCheckBox("log axes"); self.v_log.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_log)
-        self.v_fixed = QCheckBox("one colour scale for the day"); self.v_fixed.setChecked(True); self.v_fixed.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_fixed)
+        self.v_fixed = QCheckBox("day-wide scale"); self.v_fixed.setToolTip("One colour scale for all frames of the day, so changes in time stay visible")
+        self.v_fixed.setChecked(True); self.v_fixed.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_fixed)
+        hb.addStretch(); vl.addLayout(hb); hb = QHBoxLayout()
         self.v_reg = QCheckBox("regimes"); self.v_reg.setChecked(True); self.v_reg.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_reg)
+        self.v_runs = QCheckBox("runs"); self.v_runs.setChecked(True); self.v_runs.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_runs)
+        self.v_values = QCheckBox("values"); self.v_values.setChecked(False); self.v_values.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_values)
+        hb.addStretch(); vl.addLayout(hb); hb = QHBoxLayout()
         hb.addWidget(QLabel("Legend")); self.v_legend = QComboBox()
-        self.v_legend.addItems(["where dragged / automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
+        self.v_legend.addItems(["automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
         self.v_legend.currentIndexChanged.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_legend)
         hb.addStretch(); vl.addLayout(hb)
         hb = QHBoxLayout()
@@ -1081,12 +1097,13 @@ class StudyWindow(QMainWindow):
         from PyQt6.QtWidgets import QSlider
         self.v_slider = QSlider(Qt.Orientation.Horizontal); self.v_slider.valueChanged.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_slider, stretch=1)
         self.v_time = QLabel("--:--"); self.v_time.setMinimumWidth(110); hb.addWidget(self.v_time)
+        b = QPushButton("Reload"); b.setToolTip("Re-reads the time series of the finished runs (normally automatic)."); b.clicked.connect(lambda: self._v_load(force=True)); hb.addWidget(b)
+        vl.addLayout(hb); hb = QHBoxLayout()
         hb.addWidget(QLabel("frames/s")); self.v_fps = QSpinBox(); self.v_fps.setRange(1, 30); self.v_fps.setValue(6); hb.addWidget(self.v_fps)
         hb.addWidget(QLabel("From")); self.v_from = QLineEdit(); self.v_from.setPlaceholderText("HH:MM"); self.v_from.setMaximumWidth(70); hb.addWidget(self.v_from)
         hb.addWidget(QLabel("To")); self.v_to = QLineEdit(); self.v_to.setPlaceholderText("HH:MM"); self.v_to.setMaximumWidth(70); hb.addWidget(self.v_to)
         b = QPushButton("Export video …"); b.clicked.connect(self._v_export); hb.addWidget(b)
-        b = QPushButton("Load / refresh"); b.setToolTip("Reads the time series of the finished runs (once; then from the study folder)."); b.clicked.connect(lambda: self._v_load(force=True)); hb.addWidget(b)
-        vl.addLayout(hb)
+        hb.addStretch(); vl.addLayout(hb)
         self.v_fig = Figure(figsize=(8, 5.5)); self.v_canvas = FigureCanvas(self.v_fig); vl.addWidget(self.v_canvas, stretch=1)
         import plot_interaction
         plot_interaction.attach(self.v_canvas, hover=False); plot_interaction.attach_dividers(self.v_canvas)
@@ -1165,7 +1182,7 @@ class StudyWindow(QMainWindow):
             fig.colorbar(cs, ax=ax, label=f"{lab} [{unit}]" if unit != "-" else lab)
         except Exception:
             sc = ax.scatter(xs, ys, c=z, cmap="viridis", s=60); fig.colorbar(sc, ax=ax)
-        self._run_markers(ax, xs, ys, z, cs)
+        self._run_markers(ax, xs, ys, z, cs, self.v_runs.isChecked(), self.v_values.isChecked())
         note = ""
         if self.v_reg.isChecked():
             note = self._v_ridge(ax, st, a1, a2, x, y, po3, log)
@@ -1296,13 +1313,20 @@ class StudyWindow(QMainWindow):
             else:
                 lg.set_bbox_to_anchor(None); lg.set_loc(choice)
 
-    def _run_markers(self, ax, xs, ys, z, cs):
+    def _run_markers(self, ax, xs, ys, z, cs, circles: bool = True, values: bool = True):
         """One circle per run, filled with that run's own value on the contour's colour scale, thin white edge:
-        a circle that stands out from its surroundings shows where the contour between runs is interpolated."""
-        if cs is not None:
-            ax.scatter(xs, ys, c=z, cmap=cs.cmap, norm=cs.norm, s=34, edgecolors="white", linewidths=0.8, zorder=5)
-        else:
-            ax.scatter(xs, ys, c="k", s=8, zorder=5)
+        a circle that stands out from its surroundings shows where the contour between runs is interpolated.
+        `values` writes each run's number next to it (white, dark outline so it reads on any colour)."""
+        if circles:
+            if cs is not None:
+                ax.scatter(xs, ys, c=z, cmap=cs.cmap, norm=cs.norm, s=34, edgecolors="white", linewidths=0.8, zorder=5)
+            else:
+                ax.scatter(xs, ys, c="k", s=8, zorder=5)
+        if values:
+            import matplotlib.patheffects as pe
+            for xi, yi, zi in zip(xs, ys, z):
+                ax.annotate(f"{zi:.3g}", (xi, yi), fontsize=F["small"], color="white", xytext=(4, 3), textcoords="offset points", zorder=6,
+                            path_effects=[pe.withStroke(linewidth=1.8, foreground="#333333")])
 
     def _ppb_scale(self, ax, which: str, total_ppb: float, log: bool):
         """Second scale on the opposite side of a factor axis: the total injected ppb that factor means."""
