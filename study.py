@@ -124,6 +124,7 @@ class Study:
     solver: Dict[str, object] = field(default_factory=dict)   # frozen at creation: identical for every run
     notes: str = ""
     created: str = ""
+    mode: str = ""                                      # "sweep" (one experiment, its own knobs) | "batch" (several experiments)
 
 
 def save_study(st: Study, path: str) -> str:
