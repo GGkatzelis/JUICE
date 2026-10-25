@@ -319,11 +319,11 @@ def clear_archive_cache() -> None:
 def _archive_has(path: str) -> bool:
     folder, name = os.path.split(path)
     if folder not in _DAY_LISTING:
-        try:
-            _DAY_LISTING[folder] = set(os.listdir(folder))
+        try:                                   # lower case: Windows file names ignore case (SAPHIR.SR.jNO2.nc vs .jno2.nc)
+            _DAY_LISTING[folder] = {f.lower() for f in os.listdir(folder)}
         except OSError:
             _DAY_LISTING[folder] = set()
-    return name in _DAY_LISTING[folder]
+    return name.lower() in _DAY_LISTING[folder]
 
 
 def _archive_read(path: str, var: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
