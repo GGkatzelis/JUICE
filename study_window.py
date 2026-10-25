@@ -694,10 +694,14 @@ class StudyWindow(QMainWindow):
         try:
             st = self._to_study(); n_pts = len(S.grid_points(st.axes)); n = len(st.experiments) * n_pts
             txt = f"{len(st.experiments)} experiment(s) × {n_pts} grid point(s) = {n} runs"
+            done = sum(1 for p in S.plan_runs(st) if S.is_done(p)) if st.folder and os.path.isdir(os.path.join(st.folder, "runs")) else 0
+            todo = n - done
+            if done:
+                txt += f" — {done} already done (kept), {todo} to run" if todo else f" — all {done} already done"
             prior = S.prior_seconds(st)
-            if prior:
-                txt += f";  last run time of the base experiment(s) ≈ {S.fmt_duration(prior)} → about {S.fmt_duration(S.estimate_seconds(n, prior, st.workers))} with {st.workers} workers (before a pilot)"
-            lvl, g = S.check_guards(n)
+            if prior and todo:
+                txt += f";  last run time of the base experiment(s) ≈ {S.fmt_duration(prior)} → about {S.fmt_duration(S.estimate_seconds(todo, prior, st.workers))} with {st.workers} workers (before a pilot)"
+            lvl, g = S.check_guards(todo or n)
             if lvl != "ok":
                 txt += f"   ⚠ {g}"
             self.count.setText(txt)
