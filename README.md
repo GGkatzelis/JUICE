@@ -125,3 +125,16 @@ Unknown columns are ignored and listed. Missing conditions fall back to the type
 the review's *Needs attention* says so. The *What goes into the input files* list states for every
 input whether it is measured, a constant, or modelled. Measurements for comparison in the results
 viewer are a separate file, `<date>.observations.csv` next to the result (`hour_utc,key,value`).
+
+## Studies: many experiments at once, or a parameter sweep
+
+File → "Study: several experiments at once, or a sweep …" (or `python study_window.py`). A study takes
+your saved experiments and runs them all with one consistent change — a reaction rate (expression or
+× factor), an extra add-on chemistry, a chamber parameter, scaled injections, initial values — and/or
+a sweep over one or two axes (e.g. initial NO 0.1 … 20 ppb log × injected VOC × 0.5 … 4) to draw an
+ozone isopleth or sensitivities. Every run gets its own folder under `<study>/runs/`, with provenance
+lines in its `.easy`; the base experiments are never modified. "Run pilot, then estimate" runs the
+first case alone, measures it and asks before starting the rest; finished runs are skipped when a
+study is repeated or extended. Results: a table and CSV of metrics (O3 maximum, Ox gain while lit,
+OH mean, NOx at the end, …), an isopleth plot for two axes, lines with normalised sensitivities for
+one axis. Headless: `python study_runner.py <name>.study.json --workers 4 --yes`.

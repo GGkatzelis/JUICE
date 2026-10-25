@@ -65,73 +65,7 @@ ACCENT, ACCENT_DARK, ACCENT_SOFT = theme.ACCENT, theme.ACCENT_DARK, theme.ACCENT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def load_paths(toml_path: str) -> Dict[str, str]:
-    """[paths] of the TOML (+ .local.toml overlay); defaults relative to this file."""
-    base = {"easy_root": os.path.join(HERE, "MCM_tested_scenarios", "IDL Input"),
-            "include_dir": os.path.join(HERE, "MCM_tested_scenarios", "IDL Input", "include files"),
-            "output_root": os.path.join(HERE, "MCM_tested_scenarios", "JUICE archive", "JUICE"),
-            "last_easy_dir": ""}
-    for p in (toml_path, toml_path[:-5] + ".local.toml" if toml_path.endswith(".toml") else ""):
-        if p and os.path.isfile(p):
-            try:
-                with open(p, "rb") as fh:
-                    base.update({k: str(v) for k, v in tomllib.load(fh).get("paths", {}).items()})
-            except Exception as e:
-                print(f"[juice_gui] could not read {p}: {e}")
-    return base
-
-
-def pick_toml(argv: List[str]) -> str:
-    for i, a in enumerate(argv):
-        if a in ("-t", "--toml") and i + 1 < len(argv):
-            p = argv[i + 1]
-            return p if os.path.isabs(p) else os.path.join(HERE, p)
-    for name in ("GG_GUI.toml", "FR_GUI.toml"):
-        if os.path.isfile(os.path.join(HERE, name)):
-            return os.path.join(HERE, name)
-    return ""
-
-
-def solver_from_toml(toml_path: str) -> dict:
-    """The solver keys scenario_runner reads from the scenario JSON (not from the TOML),
-    taken from the TOML's [solver] section so every run uses the validated set.
-    Fallbacks are the validated values, never the runner's own (python / linear / 1e-2)."""
-    sol: dict = {}
-    for p in (toml_path, toml_path[:-5] + ".local.toml" if toml_path.endswith(".toml") else ""):
-        if p and os.path.isfile(p):
-            try:
-                with open(p, "rb") as fh:
-                    sol.update(tomllib.load(fh).get("solver", {}))
-            except Exception as e:
-                print(f"[juice_gui] could not read {p}: {e}")
-
-    def _f(key, default):
-        try:
-            return float(sol.get(key, default))
-        except (TypeError, ValueError):
-            return default
-    return {"rtol": _f("rtol_default", 1e-4),
-            "ode_backend": str(sol.get("ode_backend", "numba")),
-            "solver_method": str(sol.get("solver_method", "BDF")),
-            "jac_mode": str(sol.get("jac_mode", "analytic")),
-            "interpolation": str(sol.get("interpolation", "piecewise")),
-            "first_step": _f("first_step", 1e-6)}
-
-
-def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, toml_path: str = "") -> str:
-    """EASY + ENZ (from write_all) → canonical elog → scenario JSON next to them.
-    Returns the JSON path.  The JSON stem = experiment name, so the runner writes <name>.cs."""
-    out = os.path.dirname(res["easy"])
-    raw, canon = generate_both(res["easy"], search_dirs=[out, os.path.join(out, "chemistry"), include_dir], output_dir=out)
-    cfg = parse_idl_easy(canon, enz_path=res["enz"], chemistry_folder=out,
-                         include_fallbacks=[os.path.join(out, "chemistry"), include_dir])
-    cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon, "export_kv_pd": bool(export_kv_pd)})
-    cfg.update(solver_from_toml(toml_path))
-    name = os.path.splitext(os.path.basename(res["easy"]))[0]
-    path = os.path.join(out, name + ".json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(cfg, fh, indent=1, default=str)
-    return path
+from scenario_prep import load_paths, pick_toml, solver_from_toml, prepare_scenario   # no-Qt helpers shared with study_runner
 
 
 def blank_spec() -> ExperimentSpec:
@@ -607,6 +541,13 @@ class RunPage(QWidget):
     def _on_finished(self, code, _status):
         el = int(time.monotonic() - self._t0); mm, ss = divmod(el, 60)
         ok = code == 0 and os.path.isfile(self.cs_path())
+        try:                                   # <name>.run.json: the study window uses the time as its first estimate
+            info = {"exit": code, "elapsed": time.monotonic() - self._t0, "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "cs_bytes": os.path.getsize(self.cs_path()) if ok else 0}
+            with open(self.json_path[:-5] + ".run.json", "w", encoding="utf-8") as fh:
+                json.dump(info, fh, indent=1)
+        except Exception:
+            pass
         self.bar.setValue(100 if ok else self.bar.value())
         self.bar.setFormat(f"done   {mm}m {ss:02d}s" if ok else f"failed (exit {code})   {mm}m {ss:02d}s")
         self.run_btn.setEnabled(True); self.prep_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.view_btn.setEnabled(ok)
@@ -683,6 +624,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         m.addAction("Open experiment folder", self._open_folder)
         m.addSeparator()
         m.addAction("Open results of an earlier run in the viewer …", self._open_results_file)
+        m.addAction("Study: several experiments at once, or a sweep …", self._study)
         m.addSeparator()
         m.addAction("Settings …", self._settings)
         m.addSeparator()
@@ -842,6 +784,11 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             _open_path(self.out_dir())
         else:
             QMessageBox.information(self, "Experiment folder", f"{self.out_dir()} does not exist yet — save the experiment first.")
+
+    def _study(self):
+        """The study window (study_window.py): many experiments with one consistent change, or a parameter sweep."""
+        args = [os.path.join(HERE, "study_window.py")] + (["--toml", self.toml_path] if self.toml_path else [])
+        p = QProcess(self); p.start(sys.executable, args); self._studies = getattr(self, "_studies", []) + [p]
 
     def _settings(self):
         """Where JUICE reads and writes, and the solver every run uses — from the settings file (TOML)."""
