@@ -305,6 +305,40 @@ ARCHIVE_OLD_NAMES: Dict[str, List[Tuple[str, str]]] = {
 }
 
 
+# The archive is on a network drive: a file-existence check costs ~50 ms and a NetCDF read 0.1–0.2 s.
+# The live review refreshes after every edit, so every day folder is listed once and every
+# (file, variable) read once per session; clear_archive_cache() forgets both (e.g. after new data arrived).
+_DAY_LISTING: Dict[str, set] = {}
+_NC_READS: Dict[Tuple[str, str], Optional[Tuple[np.ndarray, np.ndarray]]] = {}
+
+
+def clear_archive_cache() -> None:
+    _DAY_LISTING.clear(); _NC_READS.clear()
+
+
+def _archive_has(path: str) -> bool:
+    folder, name = os.path.split(path)
+    if folder not in _DAY_LISTING:
+        try:
+            _DAY_LISTING[folder] = set(os.listdir(folder))
+        except OSError:
+            _DAY_LISTING[folder] = set()
+    return name in _DAY_LISTING[folder]
+
+
+def _archive_read(path: str, var: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """(times in ENZ seconds, values) of one variable, read once per session; None if it is not there."""
+    key = (path, var)
+    if key not in _NC_READS:
+        try:
+            from enz_builder import read_nc_variable
+            t, vals = read_nc_variable(path, var)
+            _NC_READS[key] = (np.asarray(t, dtype=float), np.asarray(vals, dtype=float))
+        except Exception:
+            _NC_READS[key] = None
+    return _NC_READS[key]
+
+
 def archive_sources(c: Conditions, enz_col: str) -> List[Tuple[str, List[str]]]:
     """(path, variable candidates) for one ENZ column: the current archive name first, then the older ones."""
     try:
@@ -326,18 +360,16 @@ def _archive_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) 
     """Read one standard ENZ column from the SAPHIR NetCDF archive (None if unavailable).
     Current file names first, then the older naming of the archive (ARCHIVE_OLD_NAMES)."""
     try:
-        from enz_builder import read_nc_variable, interpolate_to_grid
+        from enz_builder import interpolate_to_grid
     except Exception:
         return None
     for path, candidates in archive_sources(c, enz_col):
-        if not os.path.isfile(path):
+        if not _archive_has(path):
             continue
         for v in candidates:
-            try:
-                t, vals = read_nc_variable(path, v)
-                return np.asarray(interpolate_to_grid(t, vals, grid, fill), dtype=float)
-            except Exception:
-                continue
+            got = _archive_read(path, v)
+            if got is not None:
+                return np.asarray(interpolate_to_grid(got[0], got[1], grid, fill), dtype=float)
     if enz_col == "H2O":
         return _archive_h2o_from_rh(c, grid, fill)
     return None
@@ -348,22 +380,20 @@ def _archive_h2o_from_rh(c: Conditions, grid: np.ndarray, fill: float) -> Option
     collected file — for days without a Picarro water file (e.g. 2026-05-27).  Magnus formula, as in
     measured_inputs; negative RH readings of a dry chamber are taken as 0."""
     try:
-        from enz_builder import read_nc_variable, interpolate_to_grid
+        from enz_builder import interpolate_to_grid
         from measured_inputs import _es_hpa
     except Exception:
         return None
     y, m, d = c.date.split("-")
     path = os.path.join(c.archive_root, y, m, d, f"{c.date}.SAPHIR.collected.all_param.nc")
-    if not os.path.isfile(path):
+    if not _archive_has(path):
         return None
 
     def col(names, default=None):
         for v in names:
-            try:
-                t, vals = read_nc_variable(path, v)
-                return np.asarray(interpolate_to_grid(t, vals, grid, np.nan), dtype=float)
-            except Exception:
-                continue
+            got = _archive_read(path, v)
+            if got is not None:
+                return np.asarray(interpolate_to_grid(got[0], got[1], grid, np.nan), dtype=float)
         return default
     rh = col(["RH_SAPHIR_VAISALA2", "MT401B_RH_SAPHIR"])
     T = col(["TK_M_SAPHIR"])
