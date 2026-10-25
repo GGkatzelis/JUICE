@@ -1078,6 +1078,32 @@ def nox_axis(axes: List[Axis]) -> int:
     return -1
 
 
+def ozone_ridge(rows: List[dict], nox_axis_name: str, other_axis_name: str, key: str, log: bool) -> List[dict]:
+    """Where ozone (result `key`) peaks along the NOx axis, for every value of the other axis.
+    Per level: the three sampled NOx values around the maximum, a parabola through them (in log NOx
+    when `log`), its vertex = ridge.  'inside' when the maximum is interior; 'above' when ozone is
+    still rising at the highest NOx sampled (ridge beyond the range → the whole level is NOx-sensitive);
+    'below' when it falls from the lowest NOx on (whole level VOC-sensitive).
+    Returns [{"level": v, "ridge": x or None, "status": inside|above|below, "n": points}] sorted by level."""
+    out = []
+    for lvl in sorted({r[other_axis_name] for r in rows}):
+        pts = sorted((r[nox_axis_name], r[key]) for r in rows if r[other_axis_name] == lvl and r.get(key) is not None and np.isfinite(r[key]))
+        if len(pts) < 2:
+            continue
+        xs = np.array([p[0] for p in pts], float); zs = np.array([p[1] for p in pts], float)
+        xt = np.log10(xs) if log else xs
+        i = int(np.argmax(zs))
+        if i == len(xs) - 1:
+            out.append({"level": lvl, "ridge": None, "status": "above", "n": len(xs)}); continue
+        if i == 0:
+            out.append({"level": lvl, "ridge": None, "status": "below", "n": len(xs)}); continue
+        a, b, c = np.polyfit(xt[i - 1:i + 2], zs[i - 1:i + 2], 2)
+        xv = -b / (2 * a) if a < 0 else xt[i]
+        xv = float(np.clip(xv, xt[i - 1], xt[i + 1]))
+        out.append({"level": lvl, "ridge": (10 ** xv if log else xv), "status": "inside", "n": len(xs)})
+    return out
+
+
 def regime_map(x: np.ndarray, y: np.ndarray, z: np.ndarray, nox_on_x: bool, n: int = 80):
     """Interpolate a result onto a regular grid and its derivative along the NOx axis.
     Returns (X, Y, Z, dZ/dNOx) on the grid; NaN outside the sampled area.  The ridge (dZ/dNOx = 0)

@@ -299,8 +299,11 @@ class StudyWindow(QMainWindow):
             "<b>No axis</b> (several experiments, one change): one bar per experiment; compare each with its original run in the viewer.",
             "<b>Regimes</b> (two axes, one of them NOx): <i>NOx-sensitive</i> = the result rises with NOx (little NOx; radicals end as "
             "peroxides); <i>VOC-sensitive / NOx-saturated</i> = it rises with VOC and falls with more NOx (radicals end as HNO3). The dashed "
-            "ridge is where the result stops changing with NOx. Red dotted: P(H2O2)/P(HNO3) = 0.35, the chemical indicator of the "
-            "same split (high = NOx-sensitive). Few grid points give a coarse ridge — 6 × 6 or more for a clean one.",
+            "ridge (dashed) is where ozone production peaks along the NOx axis: for every VOC level a parabola through the three sampled "
+            "NOx values around the maximum; where ozone is still rising at the highest NOx sampled the level is NOx-sensitive throughout "
+            "and the note says so. The ridge comes from ozone production, so it is the same on every plot of the study, whatever is "
+            "coloured. Hatched = VOC-sensitive side. Red dotted: P(H2O2)/P(HNO3) = 0.35, the radical-budget indicator of the same "
+            "split (high = NOx-sensitive). Four NOx values give a rough ridge — six or more per axis for a clean one.",
             "<b>log axes</b> for log-spaced sweeps (log 0.1 20 6). <b>Save image</b> writes PNG or SVG."], "ⓘ About this plot"))
         hb = QHBoxLayout(); hb.addWidget(QLabel("Metric")); self.plot_metric = QComboBox(); self.plot_metric.currentIndexChanged.connect(self._plot); hb.addWidget(self.plot_metric)
         self.plot_log = QCheckBox("log axes"); self.plot_log.toggled.connect(self._plot); hb.addWidget(self.plot_log)
@@ -310,6 +313,11 @@ class StudyWindow(QMainWindow):
         hb.addWidget(self.show_regimes)
         b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b); hb.addStretch(); pl.addLayout(hb)
         self.fig = Figure(figsize=(8, 5.5)); self.canvas = FigureCanvas(self.fig); pl.addWidget(self.canvas, stretch=1)
+        import plot_interaction                       # as in the results viewer: wheel = zoom, drag = pan, double-click = reset,
+        plot_interaction.attach(self.canvas, hover=False)   # and the edges of the plot can be dragged to resize it (e.g. the x axis up)
+        plot_interaction.attach_dividers(self.canvas)
+        self.canvas.setToolTip("Wheel: zoom the x axis - Ctrl+wheel or right-drag: zoom the values - drag: pan - double-click: reset\n"
+                               "Drag an edge of the plot (resize cursor) to move it, e.g. the bottom axis further up.")
         self.plot_note = QLabel(""); self.plot_note.setWordWrap(True); self.plot_note.setStyleSheet("color:#555"); pl.addWidget(self.plot_note)
         self.tabs.addTab(pw, "Plot")
         self.msgs = QTextEdit(); self.msgs.setReadOnly(True); self.tabs.addTab(self.msgs, "Messages")
@@ -1026,47 +1034,65 @@ class StudyWindow(QMainWindow):
                (f"  What to expect: {expect}" if expect else "")
 
     def _regimes(self, ax, st, sub, a1, a2, xs, ys, z, key, log) -> str:
-        """Ridge line and regime labels on a two-axis isopleth with a NOx axis."""
+        """Ozone ridge, VOC-sensitive side (hatched) and the indicator contour on a two-axis isopleth with a NOx axis.
+        The ridge comes from ozone production (not from the coloured result), so it is the same on every plot of the study."""
+        from matplotlib.patches import Patch
+        from matplotlib.lines import Line2D
         i_nox = S.nox_axis(st.axes[:2])
         if i_nox < 0:
             return "regimes: no axis varies NOx (NO/NO2 injection or initial value), so the regimes are not drawn"
-        # the regimes are defined by ozone: the ridge comes from an ozone result, whatever is coloured
         okey = next((k for k in ("po3_lit_int", "ox_lit_delta", "o3_max") if all(r.get(k) is not None and np.isfinite(r[k]) for r in sub)), None)
         if okey is None:
             return "regimes: no ozone result available for the runs (P(O3), Ox gain or O3 maximum)"
-        zo = np.array([r[okey] for r in sub], float)
-        try:
-            X, Y, Z, dN = S.regime_map(xs, ys, zo, nox_on_x=(i_nox == 0))
-        except Exception as e:
-            return f"regimes: not drawn ({e})"
-        if not np.isfinite(dN).any():
-            return "regimes: too few grid points to tell the slopes apart"
-        scale = np.nanmax(np.abs(dN)) or 1.0
-        pos, neg = np.nansum(dN > 0.02 * scale), np.nansum(dN < -0.02 * scale)
-        try:
-            ax.contour(X, Y, dN, levels=[0.0], colors="black", linewidths=1.6, linestyles="--")
-        except Exception:
-            pass
-        for sign, text in ((1, "NOx-sensitive"), (-1, "VOC-sensitive\n(NOx-saturated)")):
-            m = (np.sign(dN) == sign) & np.isfinite(dN) & (np.abs(dN) > 0.02 * scale)
-            if m.sum() > 20:
-                ax.text(float(np.nanmean(X[m])), float(np.nanmean(Y[m])), text, ha="center", va="center", fontsize=F["small"] + 1,
-                        color="black", bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="none", alpha=0.75))
-        note = (f"regimes from the slope of {S.METRICS[okey][0]} along the NOx axis ({st.axes[i_nox].name()}): dashed = ridge (no change with NOx); "
-                f"{100 * pos / max(1, pos + neg):.0f} % of the sampled area NOx-sensitive")
+        a_nox, a_oth = (a1, a2) if i_nox == 0 else (a2, a1)
+        ridge = S.ozone_ridge(sub, a_nox, a_oth, okey, log)
+        if not ridge:
+            return "regimes: too few grid points"
+        tr = (lambda v: np.log10(v)) if log else (lambda v: v)
+        nox_vals = sorted({r[a_nox] for r in sub}); nmin, nmax = tr(nox_vals[0]), tr(nox_vals[-1])
+        handles = []
+        # ridge through the per-level maxima (interior ones); levels with the maximum at an edge extend the line to that edge
+        pts = []
+        for d in ridge:
+            xr = tr(d["ridge"]) if d["status"] == "inside" else (nmax if d["status"] == "above" else nmin)
+            pts.append((tr(d["level"]), xr, d["status"]))
+        inside = [p for p in pts if p[2] == "inside"]
+        if inside:
+            lv = [p[0] for p in pts]; xr = [p[1] for p in pts]
+            line = (xr, lv) if i_nox == 0 else (lv, xr)
+            ax.plot(*line, "k--", lw=1.8)
+            handles.append(Line2D([], [], color="k", ls="--", lw=1.8, label="ozone ridge: NOx of maximum ozone production"))
+        # VOC-sensitive side = between the ridge and the highest NOx sampled
+        lv = np.array([p[0] for p in pts]); xr = np.array([p[1] for p in pts])
+        if np.any(xr < nmax - 1e-9):
+            if i_nox == 0:
+                ax.fill_betweenx(lv, xr, nmax, facecolor="none", hatch="///", edgecolor="k", alpha=0.35, linewidth=0)
+            else:
+                ax.fill_between(lv, xr, nmax, facecolor="none", hatch="///", edgecolor="k", alpha=0.35, linewidth=0)
+            handles.append(Patch(facecolor="none", hatch="///", edgecolor="k", alpha=0.5, label="VOC-sensitive (NOx-saturated): ozone falls with more NOx"))
+        handles.append(Patch(facecolor="none", edgecolor="none", label="elsewhere NOx-sensitive: ozone rises with NOx"))
+        # chemical indicator contour, with its own legend entry
         rows_r = [r for r in sub if r.get("regime") is not None and np.isfinite(r["regime"])]
+        ind = ""
         if len(rows_r) >= 4:
-            xr = np.array([r[a1] for r in rows_r], float); yr = np.array([r[a2] for r in rows_r], float)
-            if log:
-                xr, yr = np.log10(xr), np.log10(yr)
-            try:
-                c = ax.tricontour(xr, yr, np.array([r["regime"] for r in rows_r], float), levels=[0.35], colors="#d62728", linewidths=1.2, linestyles=":")
-                ax.clabel(c, fmt={0.35: "P(H2O2)/P(HNO3) = 0.35"}, fontsize=F["small"])
-                note += "; red dotted = regime indicator 0.35"
-            except Exception:
-                pass
-        elif "regime" not in st.metrics:
-            note += "; tick 'Regime P(H2O2)/P(HNO3)' to compare with the indicator"
+            xr_ = np.array([tr(r[a1]) for r in rows_r]); yr_ = np.array([tr(r[a2]) for r in rows_r]); zr = np.array([r["regime"] for r in rows_r], float)
+            if np.nanmin(zr) < 0.35 < np.nanmax(zr):
+                try:
+                    ax.tricontour(xr_, yr_, zr, levels=[0.35], colors="#d62728", linewidths=1.3, linestyles=":")
+                    handles.append(Line2D([], [], color="#d62728", ls=":", lw=1.3, label="P(H2O2)/P(HNO3) = 0.35 (radical-budget indicator)"))
+                    ind = "; red dotted = indicator 0.35"
+                except Exception:
+                    pass
+            else:
+                ind = f"; indicator {np.nanmin(zr):.2g}–{np.nanmax(zr):.2g} everywhere, no 0.35 contour"
+        ax.legend(handles=handles, fontsize=F["small"], loc="upper left", framealpha=0.85)
+        above = [f"{d['level']:g}" for d in ridge if d["status"] == "above"]; below = [f"{d['level']:g}" for d in ridge if d["status"] == "below"]
+        fmt = lambda d: f"{a_oth} = {d['level']:g}: {d['ridge']:.3g}"
+        note = (f"regimes from {S.METRICS[okey][0]} along {a_nox} (same on every plot of this study); ridge at " +
+                ("; ".join(fmt(d) for d in ridge if d["status"] == "inside") or "no interior maximum") +
+                (f"; still rising at the highest {a_nox} sampled for {a_oth} = {', '.join(above)} (NOx-sensitive throughout)" if above else "") +
+                (f"; falling from the lowest {a_nox} on for {a_oth} = {', '.join(below)} (VOC-sensitive throughout)" if below else "") + ind +
+                (f"; only {ridge[0]['n']} NOx values per level — the ridge is a parabola through the three points around the maximum, extend the axis or add points to sharpen it" if ridge[0]['n'] <= 4 else ""))
         return note
 
     def _save_image(self):
