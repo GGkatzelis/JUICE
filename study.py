@@ -1155,6 +1155,72 @@ def axis_description(st: Study, ax: Axis) -> Tuple[str, float, str]:
     return lab, base_ppb, short
 
 
+# Quantities of the isopleth video: key → (label, unit)
+TS_QUANTITIES: Dict[str, Tuple[str, str]] = {
+    "O3": ("O3", "ppb"), "Ox": ("Ox = O3 + NO2", "ppb"), "NO": ("NO", "ppb"), "NO2": ("NO2", "ppb"), "NOx": ("NOx", "ppb"),
+    "OH": ("OH", "cm-3"), "HO2": ("HO2", "cm-3"), "RO2": ("RO2", "cm-3"),
+    "PO3": ("P(O3) instantaneous", "ppb/h"), "REGIME": ("P(H2O2)/P(HNO3) instantaneous", "-"),
+}
+
+
+def time_series(st: Study, plans: List[RunPlan], step_min: float = 5.0, progress: Callable = None) -> Optional[dict]:
+    """Every finished run's time series on one time grid (minutes step), for the isopleth video.
+    Kept in <study>/<name>.timeseries.npz and reused while the runs are unchanged.
+    Returns {"hours": (nt,), "runs": [names], "axes": {axis name: (nrun,)}, "hv": (nt,), key: (nrun, nt) …}."""
+    done = [p for p in plans if is_done(p)]
+    if not done:
+        return None
+    sig = json.dumps([[p.name, round(os.path.getmtime(p.cs_path))] for p in done] + [step_min])
+    cache = os.path.join(st.folder, f"{st.name}.timeseries.npz")
+    if os.path.isfile(cache):
+        try:
+            z = np.load(cache, allow_pickle=False)
+            if str(z["sig"]) == sig:
+                out = {k: z[k] for k in z.files if k not in ("sig", "runs", "axis_names")}
+                out["runs"] = list(z["runs"]); out["axes"] = {n: z["axis_" + n] for n in z["axis_names"]}
+                return out
+        except Exception:
+            pass
+    from experiment_plots import read_columns
+    names = ["M", "T", "H2O", "HV", "O3", "NO", "NO2", "OH", "HO2", "RO2"]
+    grid = None; series = {k: [] for k in TS_QUANTITIES}; hv = None
+    for i, p in enumerate(done):
+        if progress:
+            progress(i, len(done), p.name)
+        t, d = read_columns(p.cs_path, names)
+        t = np.asarray(t, float)
+        if grid is None:
+            grid = np.arange(t[0], t[-1] + 1, step_min * 60.0)
+            hv = np.interp(grid, t, np.asarray(d.get("HV", np.zeros(len(t))), float))
+        on = lambda a: np.interp(grid, t, np.asarray(a, float))
+        M = on(d["M"]); T = on(d["T"]) if "T" in d else np.full(len(grid), 298.0)
+        ppb = lambda n: on(d[n]) / M * 1e9 if n in d else np.full(len(grid), np.nan)
+        raw = lambda n: on(d[n]) if n in d else np.full(len(grid), np.nan)
+        o3, no, no2, oh, ho2, ro2 = ppb("O3"), ppb("NO"), ppb("NO2"), raw("OH"), raw("HO2"), raw("RO2")
+        no_c = raw("NO")
+        po3 = (3.45e-12 * np.exp(270.0 / T) * ho2 * no_c + 2.7e-12 * np.exp(360.0 / T) * ro2 * no_c) / M * 1e9 * 3600.0
+        h2o = raw("H2O") if "H2O" in d else 0.01 * M
+        kmt06 = 1 + 1.40e-21 * np.exp(2200.0 / T) * h2o
+        p_h2o2 = (2.20e-13 * kmt06 * np.exp(600.0 / T) + 1.90e-33 * M * kmt06 * np.exp(980.0 / T)) * ho2 ** 2
+        p_hno3 = _kmt08(T, M) * oh * raw("NO2")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            regime = np.where(p_hno3 > 0, p_h2o2 / p_hno3, np.nan)
+        for k, v in (("O3", o3), ("Ox", o3 + no2), ("NO", no), ("NO2", no2), ("NOx", no + no2), ("OH", oh), ("HO2", ho2),
+                     ("RO2", ro2), ("PO3", po3), ("REGIME", regime)):
+            series[k].append(v)
+    day0 = math.floor((grid[0] + 946684800.0) / 86400.0) * 86400.0 - 946684800.0
+    out = {"hours": (grid - day0) / 3600.0, "hv": hv, "runs": [p.name for p in done],
+           "axes": {ax.name(): np.array([p.point.get(ax.name(), np.nan) for p in done], float) for ax in st.axes}}
+    out.update({k: np.vstack(v) for k, v in series.items()})
+    try:
+        np.savez_compressed(cache, sig=sig, runs=np.array(out["runs"]), axis_names=np.array(list(out["axes"])),
+                            **{"axis_" + n: v for n, v in out["axes"].items()},
+                            **{k: v for k, v in out.items() if k not in ("runs", "axes")})
+    except Exception:
+        pass
+    return out
+
+
 def normalised_sensitivity(xs: List[float], ys: List[float]) -> List[float]:
     """d ln y / d ln x between neighbouring grid points (percent change of the metric per percent
     change of the parameter); NaN where a log is undefined."""

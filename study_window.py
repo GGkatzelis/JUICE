@@ -311,6 +311,11 @@ class StudyWindow(QMainWindow):
         self.show_regimes.setToolTip("Isopleths with a NOx axis: the ridge where the result stops rising with NOx, the NOx-sensitive and\n"
                                      "VOC-sensitive (NOx-saturated) sides, and the 0.35 contour of the regime indicator when it was computed.")
         hb.addWidget(self.show_regimes)
+        hb.addWidget(QLabel("Legend"))
+        self.legend_pos = QComboBox()
+        self.legend_pos.addItems(["where dragged / automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
+        self.legend_pos.setToolTip("Where the legend goes. You can also drag it with the mouse; double-click it to put it back.")
+        self.legend_pos.currentIndexChanged.connect(self._legend_pos_changed); hb.addWidget(self.legend_pos)
         b = QPushButton("Save image …"); b.clicked.connect(self._save_image); hb.addWidget(b); hb.addStretch(); pl.addLayout(hb)
         self.fig = Figure(figsize=(8, 5.5)); self.canvas = FigureCanvas(self.fig); pl.addWidget(self.canvas, stretch=1)
         import plot_interaction                       # as in the results viewer: wheel = zoom, drag = pan, double-click = reset,
@@ -320,6 +325,7 @@ class StudyWindow(QMainWindow):
                                "Drag an edge of the plot (resize cursor) to move it, e.g. the bottom axis further up.")
         self.plot_note = QLabel(""); self.plot_note.setWordWrap(True); self.plot_note.setStyleSheet("color:#555"); pl.addWidget(self.plot_note)
         self.tabs.addTab(pw, "Plot")
+        self.tabs.addTab(self._build_video_tab(), "Isopleth in time")
         self.msgs = QTextEdit(); self.msgs.setReadOnly(True); self.tabs.addTab(self.msgs, "Messages")
 
         split = QSplitter(); split.addWidget(scroll); split.addWidget(self.tabs); split.setStretchFactor(0, 65); split.setStretchFactor(1, 35)
@@ -1035,7 +1041,243 @@ class StudyWindow(QMainWindow):
             ax.bar(range(len(exps)), ys, color="#6a4c93"); ax.set_xticks(range(len(exps))); ax.set_xticklabels(exps, rotation=20, ha="right", fontsize=F["tick"])
             ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (change applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
             self.plot_note.setText(self._meaning(key, "Bars") + "\none value per experiment; compare with the base runs in the viewer's Comparison tab")
+        self._apply_legend_pos(self.fig)
         self.fig.tight_layout(); self.canvas.draw()
+
+    # ── isopleth in time (video) ──
+    def _build_video_tab(self) -> QWidget:
+        vw = QWidget(); vl = QVBoxLayout(vw); vl.setContentsMargins(0, 0, 0, 0)
+        vl.addWidget(_more_info("The isopleth at every moment of the day: one frame per time step, the same colour scale for the whole "
+                                "day, so the evolution through the injections and the lit period is visible.", [
+            "Needs two axes. The first opening reads every run's time series once and keeps them in the study folder "
+            "(&lt;study&gt;.timeseries.npz); after that frames are instant.",
+            "<b>P(O3) instantaneous</b> = k(HO2+NO)[HO2][NO] + k(RO2+NO)[RO2][NO] at that time; <b>P(H2O2)/P(HNO3) instantaneous</b> "
+            "= the regime indicator at that time (high = NOx-sensitive, ~0.35 transition).",
+            "<b>regimes</b>: the ozone ridge of that moment, from the instantaneous P(O3) along the NOx axis (dashed), VOC-sensitive "
+            "side hatched — it moves through the day as NOx is consumed and radicals change.",
+            "<b>Export video</b> writes MP4 (or GIF) of the frames between the From/To times at the chosen frames per second."],
+            "ⓘ About the video"))
+        hb = QHBoxLayout()
+        hb.addWidget(QLabel("Quantity")); self.v_qty = QComboBox()
+        for k, (lab, unit) in S.TS_QUANTITIES.items():
+            self.v_qty.addItem(f"{lab} [{unit}]" if unit != "-" else lab, k)
+        self.v_qty.setCurrentIndex(self.v_qty.findData("O3")); self.v_qty.currentIndexChanged.connect(lambda *_: self._v_draw(rescale=True)); hb.addWidget(self.v_qty)
+        self.v_log = QCheckBox("log axes"); self.v_log.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_log)
+        self.v_fixed = QCheckBox("one colour scale for the day"); self.v_fixed.setChecked(True); self.v_fixed.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_fixed)
+        self.v_reg = QCheckBox("regimes"); self.v_reg.setChecked(True); self.v_reg.toggled.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_reg)
+        hb.addWidget(QLabel("Legend")); self.v_legend = QComboBox()
+        self.v_legend.addItems(["where dragged / automatic", "upper left", "upper right", "lower left", "lower right", "below the plot", "hidden"])
+        self.v_legend.currentIndexChanged.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_legend)
+        hb.addStretch(); vl.addLayout(hb)
+        hb = QHBoxLayout()
+        self.v_play = QPushButton("▶ Play"); self.v_play.setCheckable(True); self.v_play.toggled.connect(self._v_toggle_play); hb.addWidget(self.v_play)
+        from PyQt6.QtWidgets import QSlider
+        self.v_slider = QSlider(Qt.Orientation.Horizontal); self.v_slider.valueChanged.connect(lambda *_: self._v_draw()); hb.addWidget(self.v_slider, stretch=1)
+        self.v_time = QLabel("--:--"); self.v_time.setMinimumWidth(110); hb.addWidget(self.v_time)
+        hb.addWidget(QLabel("frames/s")); self.v_fps = QSpinBox(); self.v_fps.setRange(1, 30); self.v_fps.setValue(6); hb.addWidget(self.v_fps)
+        hb.addWidget(QLabel("From")); self.v_from = QLineEdit(); self.v_from.setPlaceholderText("HH:MM"); self.v_from.setMaximumWidth(70); hb.addWidget(self.v_from)
+        hb.addWidget(QLabel("To")); self.v_to = QLineEdit(); self.v_to.setPlaceholderText("HH:MM"); self.v_to.setMaximumWidth(70); hb.addWidget(self.v_to)
+        b = QPushButton("Export video …"); b.clicked.connect(self._v_export); hb.addWidget(b)
+        b = QPushButton("Load / refresh"); b.setToolTip("Reads the time series of the finished runs (once; then from the study folder)."); b.clicked.connect(lambda: self._v_load(force=True)); hb.addWidget(b)
+        vl.addLayout(hb)
+        self.v_fig = Figure(figsize=(8, 5.5)); self.v_canvas = FigureCanvas(self.v_fig); vl.addWidget(self.v_canvas, stretch=1)
+        import plot_interaction
+        plot_interaction.attach(self.v_canvas, hover=False); plot_interaction.attach_dividers(self.v_canvas)
+        self.v_note = QLabel(""); self.v_note.setWordWrap(True); self.v_note.setStyleSheet("color:#555"); vl.addWidget(self.v_note)
+        self._v_data = None; self._v_scale = {}
+        from PyQt6.QtCore import QTimer
+        self._v_timer = QTimer(self); self._v_timer.timeout.connect(self._v_step)
+        self.tabs.currentChanged.connect(lambda i: self._v_load() if self.tabs.widget(i) is vw and self._v_data is None else None)
+        return vw
+
+    def _v_load(self, force: bool = False):
+        st = self._to_study()
+        if len(st.axes) < 2:
+            self.v_note.setText("The video needs a study with two axes (an isopleth)."); return
+        plans = self.runner.plans if self.runner else S.plan_runs(st)
+        from PyQt6.QtWidgets import QProgressDialog
+        dlg = QProgressDialog("Reading the runs' time series …", "Cancel", 0, len(plans), self); dlg.setMinimumDuration(300)
+
+        def prog(i, n, name):
+            dlg.setMaximum(n); dlg.setValue(i); dlg.setLabelText(f"Reading {i + 1}/{n}: {name}"); QApplication.processEvents()
+        if force:
+            try:
+                os.remove(os.path.join(st.folder, f"{st.name}.timeseries.npz"))
+            except OSError:
+                pass
+        self._v_data = S.time_series(st, plans, 5.0, prog); dlg.close()
+        if not self._v_data:
+            self.v_note.setText("No finished runs yet."); return
+        n = len(self._v_data["hours"]); self.v_slider.setRange(0, n - 1)
+        lit = np.where(self._v_data["hv"] > 0.5)[0]
+        self.v_slider.setValue(int(lit[len(lit) // 2]) if len(lit) else n // 2)
+        self._v_scale = {}; self._v_draw(rescale=True)
+
+    def _v_frame_values(self, key: str, i: int):
+        d = self._v_data; st = self.study
+        a1, a2 = st.axes[0].name(), st.axes[1].name()
+        x, y, z = d["axes"][a1], d["axes"][a2], d[key][:, i]
+        ok = np.isfinite(z) & np.isfinite(x) & np.isfinite(y)
+        if self.v_log.isChecked():
+            ok &= (x > 0) & (y > 0)
+        return a1, a2, x[ok], y[ok], z[ok], d["PO3"][ok, i], int((~ok).sum())
+
+    def _v_draw(self, rescale: bool = False, fig=None):
+        if not self._v_data:
+            return
+        fig = fig or self.v_fig; i = self.v_slider.value(); key = self.v_qty.currentData(); d = self._v_data; st = self.study
+        log = self.v_log.isChecked()
+        a1, a2, x, y, z, po3, dropped = self._v_frame_values(key, i)
+        hh = d["hours"][i]; lit = d["hv"][i] > 0.5
+        self.v_time.setText(f"{int(hh):02d}:{int(round(hh % 1 * 60)) % 60:02d} UTC" + (" ☀" if lit else ""))
+        fig.clear(); ax = fig.add_subplot(111)
+        lab, unit = S.TS_QUANTITIES[key]
+        if len(z) < 4:
+            ax.text(0.5, 0.5, "fewer than 4 runs with values at this time", ha="center", transform=ax.transAxes)
+            self.v_canvas.draw(); return
+        xs, ys = (np.log10(x), np.log10(y)) if log else (x, y)
+        levels = 14
+        if self.v_fixed.isChecked():
+            if key not in self._v_scale or rescale:
+                allv = d[key][np.isfinite(d[key])]
+                lo, hi = (np.nanpercentile(allv, 1), np.nanpercentile(allv, 99)) if allv.size else (0, 1)
+                self._v_scale[key] = (lo, hi if hi > lo else lo + 1)
+            lo, hi = self._v_scale[key]; levels = np.linspace(lo, hi, 15)
+        try:                                   # values beyond the day's scale: end colours (arrows on the colour bar), never holes
+            cs = ax.tricontourf(xs, ys, z, levels=levels, cmap="viridis", extend="both" if not isinstance(levels, int) else "neither")
+            fig.colorbar(cs, ax=ax, label=f"{lab} [{unit}]" if unit != "-" else lab)
+        except Exception:
+            sc = ax.scatter(xs, ys, c=z, cmap="viridis", s=60); fig.colorbar(sc, ax=ax)
+        ax.scatter(xs, ys, c="k", s=6)
+        note = ""
+        if self.v_reg.isChecked():
+            note = self._v_ridge(ax, st, a1, a2, x, y, po3, log)
+        (l1, t1, _), (l2, t2, _) = S.axis_description(st, st.axes[0]), S.axis_description(st, st.axes[1])
+        ax.set_xlabel(l1 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1); ax.set_ylabel(l2 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
+        self._ppb_scale(ax, "x", t1, log); self._ppb_scale(ax, "y", t2, log)
+        ax.set_title(f"{lab} at {int(hh):02d}:{int(round(hh % 1 * 60)) % 60:02d} UTC" + ("  (roof open)" if lit else "  (dark)"), loc="left")
+        self._apply_legend_pos(fig, self.v_legend)
+        fig.tight_layout()
+        if fig is self.v_fig:
+            self.v_canvas.draw()
+            self.v_note.setText(self._v_meaning(key) + (f"\n{note}" if note else "") +
+                                (f"\n{dropped} run(s) at 0 left out on log axes" if dropped else ""))
+
+    def _v_meaning(self, key: str) -> str:
+        return {"PO3": "Colour = gross ozone production at this moment (k[HO2][NO] + k[RO2][NO]); it peaks where NO meets enough peroxy radicals.",
+                "REGIME": "Colour = regime indicator at this moment: high = NOx-sensitive, low = VOC-sensitive, transition ~0.35.",
+                "O3": "Colour = O3 at this moment: the result of production so far, titration by NO and dilution.",
+                "Ox": "Colour = Ox = O3 + NO2 at this moment: ozone made so far without the NO titration effect."}.get(
+            key, f"Colour = {S.TS_QUANTITIES[key][0]} at this moment.")
+
+    def _v_ridge(self, ax, st, a1, a2, x, y, po3, log) -> str:
+        i_nox = S.nox_axis(st.axes[:2])
+        if i_nox < 0:
+            return "regimes: no axis varies NOx"
+        if np.nanmax(po3) <= 0:
+            return "regimes: no ozone production at this time (dark or no NO)"
+        rows = [{a1: xi, a2: yi, "po3": pi} for xi, yi, pi in zip(x, y, po3)]
+        a_nox, a_oth = (a1, a2) if i_nox == 0 else (a2, a1)
+        ridge = S.ozone_ridge(rows, a_nox, a_oth, "po3", log)
+        tr = (lambda v: np.log10(v)) if log else (lambda v: v)
+        nmax = tr(max(r[a_nox] for r in rows)); nmin = tr(min(r[a_nox] for r in rows))
+        pts = [(tr(d["level"]), tr(d["ridge"]) if d["status"] == "inside" else (nmax if d["status"] == "above" else nmin), d["status"]) for d in ridge]
+        if not pts:
+            return ""
+        lv = np.array([p[0] for p in pts]); xr = np.array([p[1] for p in pts])
+        if any(p[2] == "inside" for p in pts):
+            ax.plot(*((xr, lv) if i_nox == 0 else (lv, xr)), "k--", lw=1.6, label="ozone ridge (now)")
+        if np.any(xr < nmax - 1e-9):
+            (ax.fill_betweenx if i_nox == 0 else ax.fill_between)(lv, xr, nmax, facecolor="none", hatch="///", edgecolor="k", alpha=0.35,
+                                                                  linewidth=0, label="VOC-sensitive now")
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(fontsize=F["small"], loc="upper left", framealpha=0.85)
+        inside = [d for d in ridge if d["status"] == "inside"]
+        return ("ridge of the instantaneous P(O3): " + "; ".join(f"{a_oth} {d['level']:g} → {d['ridge']:.3g}" for d in inside)) if inside \
+            else "no ozone ridge inside the sampled NOx range at this time (NOx-sensitive everywhere)" if all(d["status"] == "above" for d in ridge) else ""
+
+    def _v_toggle_play(self, on: bool):
+        self.v_play.setText("❚❚ Pause" if on else "▶ Play")
+        if on and self._v_data:
+            self._v_timer.start(int(1000 / self.v_fps.value()))
+        else:
+            self._v_timer.stop()
+
+    def _v_step(self):
+        v = self.v_slider.value() + 1
+        self.v_slider.setValue(v if v <= self.v_slider.maximum() else 0)
+
+    def _v_range(self):
+        h = self._v_data["hours"]
+
+        def idx(txt, default):
+            try:
+                hh, mm = txt.strip().split(":"); return int(np.argmin(abs(h - (int(hh) + int(mm) / 60.0))))
+            except Exception:
+                return default
+        return idx(self.v_from.text(), 0), idx(self.v_to.text(), len(h) - 1)
+
+    def _v_export(self):
+        if not self._v_data:
+            self._v_load()
+            if not self._v_data:
+                return
+        try:
+            import imageio.v2 as imageio
+        except ImportError:
+            QMessageBox.warning(self, "Video", "Saving a video needs the imageio package (pip install imageio imageio-ffmpeg)."); return
+        key = self.v_qty.currentData()
+        p, _ = QFileDialog.getSaveFileName(self, "Export video", os.path.join(self.study.folder, f"{self.study.name}_{key}_isopleth.mp4"),
+                                           "MP4 video (*.mp4);;GIF animation (*.gif)")
+        if not p:
+            return
+        i0, i1 = self._v_range()
+        frames = list(range(min(i0, i1), max(i0, i1) + 1))
+        fps = self.v_fps.value()
+        try:
+            writer = imageio.get_writer(p, mode="I", duration=1.0 / fps, loop=0) if p.lower().endswith(".gif") else \
+                imageio.get_writer(p, fps=fps, codec="libx264", quality=8, pixelformat="yuv420p", macro_block_size=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Video", f"Could not open {p}: {e}"); return
+        from PyQt6.QtWidgets import QProgressDialog
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        dlg = QProgressDialog("Writing frames …", "Cancel", 0, len(frames), self); dlg.setMinimumDuration(0)
+        fig = Figure(figsize=(10, 6.6), dpi=110); FigureCanvasAgg(fig)
+        keep = self.v_slider.value()
+        try:
+            for n, i in enumerate(frames):
+                if dlg.wasCanceled():
+                    break
+                self.v_slider.blockSignals(True); self.v_slider.setValue(i); self.v_slider.blockSignals(False)
+                self._v_draw(fig=fig); fig.canvas.draw()
+                frame = np.asarray(fig.canvas.buffer_rgba())[:, :, :3]
+                writer.append_data(frame.copy()); dlg.setValue(n + 1); QApplication.processEvents()
+        finally:
+            writer.close(); dlg.close()
+            self.v_slider.setValue(keep); self._v_draw()
+        self.statusBar().showMessage(f"video written: {p} ({len(frames)} frames at {fps} frames/s)", 10000)
+
+    def _legend_pos_changed(self, *_a):
+        lg = getattr(self.canvas, "_juice_legends", None)
+        if lg is not None and self.legend_pos.currentIndex() > 0:
+            lg.ops.clear(); lg._orig.clear()          # a chosen position replaces a dragged one
+        self._plot()
+
+    def _apply_legend_pos(self, fig, combo=None):
+        combo = combo or self.legend_pos
+        choice = combo.currentText()
+        if combo.currentIndex() == 0:
+            return
+        for ax in fig.axes:
+            lg = ax.get_legend()
+            if lg is None:
+                continue
+            if choice == "hidden":
+                lg.set_visible(False); continue
+            if choice == "below the plot":
+                lg.set_bbox_to_anchor((0.5, -0.16), transform=ax.transAxes); lg.set_loc("upper center")
+            else:
+                lg.set_bbox_to_anchor(None); lg.set_loc(choice)
 
     def _ppb_scale(self, ax, which: str, total_ppb: float, log: bool):
         """Second scale on the opposite side of a factor axis: the total injected ppb that factor means."""
