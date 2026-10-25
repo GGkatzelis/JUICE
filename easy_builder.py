@@ -124,7 +124,7 @@ class EasyForm:
     hcho_lhs: str = "qSHCHO+HV"
     hcho_rhs: str = "HCHO"
     hcho_const: str = "1"
-    hcho_const_name: str = "SHCHO"      # constant may be named differently from the reactant (scene_09)
+    hcho_const_name: str = "qSHCHO"     # must match the reactant (scene_09's 'SHCHO' leaves qSHCHO undefined → source inert)
     hcho_rate: str = HCHO_RATE
     bgreac: bool = True
     y_name: str = "qY"

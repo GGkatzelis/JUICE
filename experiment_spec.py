@@ -186,7 +186,7 @@ class ChamberEffects:
     hcho: bool = True
     hcho_lhs: str = "qSHCHO+HV"
     hcho_rhs: str = "HCHO"
-    hcho_const_name: str = "SHCHO"
+    hcho_const_name: str = "qSHCHO"     # must match the reactant: scene_09 writes SHCHO here, which leaves qSHCHO an undefined species → source inert (FACSIMILE too)
     hcho_const: str = "1"
     hcho_rate: str = HCHO_RATE
     bgreac: bool = True
@@ -803,7 +803,7 @@ def spec_scene_05() -> ExperimentSpec:
 
 def spec_scene_09() -> ExperimentSpec:
     cond = Conditions(date="2024-08-05", start="04:00", end="21:59", roof_open=[("09:33", "18:37")])
-    ch = ChamberEffects(light_source=True)
+    ch = ChamberEffects(light_source=True, hcho_const_name="SHCHO")   # scene_09's mismatched constant name, kept so the golden stays statement-equivalent
     mix = {
         "VCP2": ("0.016042*LIMONENE+0.107333*PROPGLY+0.002273*APINENE+0.002273*BPINENE+0.469732*C2H5OH"
                  "+0.027435*ETHGLY+0.067800*NC12H26+0.209843*IPROPOL+0.026511*TOLUENE+0.035807*MXYL"
