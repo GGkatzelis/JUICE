@@ -786,6 +786,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
 
     # ── file menu ──
     def _new(self):
+        self.wiki_memory = None                        # a new experiment starts without the last import
         self.load_spec(blank_spec()); self.steps.setCurrentRow(0); self.review.refresh()
 
     def _open(self):
@@ -796,6 +797,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
             spec = load_spec(p)
         except Exception as e:
             QMessageBox.critical(self, "Open failed", str(e)); return
+        self.wiki_memory = None                        # another experiment: forget the last import
         self.load_spec(spec)
         self.page_start.out_edit.setText(os.path.dirname(os.path.dirname(p)) or self.easy_root)
         self.steps.setCurrentRow(0); self.review.refresh()

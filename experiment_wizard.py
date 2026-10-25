@@ -279,6 +279,7 @@ class StartPage(QWizardPage):
             self.out_edit.setText(d)
 
     def _template_chosen(self, _idx: int = 0):
+        self.wiz.wiki_memory = None                    # another experiment: forget the last import
         path = self.tpl_combo.currentData()
         if path:
             try:
@@ -1535,7 +1536,38 @@ class WikiImportDialog(QDialog):
     def _parse_paste(self):
         self._set_events(saphir_wiki.parse_action_log(self.paste.toPlainText()), "pasted text")
 
+    def memory(self) -> dict:
+        """What the dialog holds, to reopen it as it was within the same experiment (no password)."""
+        return {"date": self.date.text().strip(), "user": self.user.text().strip(), "text": self.paste.toPlainText(),
+                "source": getattr(self, "_source", "pasted text"),
+                "use": [self.table.item(r, 0).checkState() == Qt.CheckState.Checked for r in range(self.table.rowCount())],
+                "replace": self.replace_box.isChecked()}
+
+    def restore(self, mem: dict):
+        """Reopen with the text, ticks and options of the last import of this experiment."""
+        if not mem:
+            return
+        if mem.get("date"):
+            self.date.setText(mem["date"])
+        if mem.get("user"):
+            self.user.setText(mem["user"])
+        self.replace_box.setChecked(bool(mem.get("replace", True)))
+        text = mem.get("text") or ""
+        if not text.strip():
+            return
+        self.paste.setPlainText(text)
+        self._set_events(saphir_wiki.parse_action_log(text), mem.get("source", "pasted text"))
+        use = mem.get("use") or []
+        if len(use) == self.table.rowCount():
+            self.table.blockSignals(True)
+            for r, on in enumerate(use):
+                self.table.item(r, 0).setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            self.table.blockSignals(False)
+            self._preview()
+        self.status.setText(self.status.text() + "  — restored from the last import of this experiment")
+
     def _set_events(self, events, source: str):
+        self._source = source
         self._events = events
         self.status.setStyleSheet("color: #4caf50;" if events else "color: #e05252;")
         guessed = sum(1 for e in events if e.description and not e.line.split(None, 2)[1:2] == [e.code])
@@ -1643,6 +1675,7 @@ class ExperimentHost:
 
     def _init_host(self, include_dir: str, easy_root: str):
         self.include_dir, self.easy_root = include_dir, easy_root or os.getcwd()
+        self.wiki_memory: Optional[dict] = None       # last import dialog state of the open experiment (cleared by new / open / template)
         self._base = ExperimentSpec()
         self.page_start = StartPage(self); self.page_cond = ConditionsPage(self); self.page_chem = ChemistryPage(self)
         self.page_inj = InjectionsPage(self); self.page_chamber = ChamberPage(self); self.page_init = InitialsPage(self)
@@ -1688,9 +1721,12 @@ class ExperimentHost:
         cond = self.page_cond.get()
         dlg = WikiImportDialog(parent or self, date=cond.date, archive_root=cond.archive_root,
                                T_K=cond.temperature_K, P_hPa=cond.pressure_hPa, chamber_name=cond.chamber_name)
+        dlg.restore(getattr(self, "wiki_memory", None))
         if paste:
             dlg.paste.setFocus()
-        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_import is None:
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        self.wiki_memory = dlg.memory()                # kept also when cancelled: the text and ticks are work in progress
+        if not accepted or dlg.result_import is None:
             return
         self.apply_wiki_import(dlg.result_import, replace=dlg.replace_box.isChecked())
 
