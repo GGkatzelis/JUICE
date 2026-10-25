@@ -20,7 +20,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel
-from PyQt6.QtGui import QStandardItemModel, QStandardItem
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor
 from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
@@ -689,8 +689,9 @@ class ChemistryPage(QWizardPage):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-INJ_HEADERS = ["Action", "Name", "Product(s) — empty = recorded only", "Total [ppb]", "Start HH:MM", "Duration [min]",
+INJ_HEADERS = ["Action", "Name", "Product(s) — empty = recorded only", "Total [ppb]", "kOH [s⁻¹]", "Start HH:MM", "Duration [min]",
                "ENZ column", "Switch", "Comment"]
+KOH_COL = 4          # computed, read-only: OH reactivity of the row's amount (oh_reactivity.injection_koh)
 _ACTION_LABELS = [ACTIONS[k]["label"] for k in ACTION_ORDER]
 
 
@@ -700,12 +701,30 @@ def _action_combo(key: str) -> QComboBox:
     return cb
 
 
+def _inj_cols() -> List[int]:
+    """Editable columns after Action, in the order of the row values (the kOH column is skipped)."""
+    return [c for c in range(1, len(INJ_HEADERS)) if c != KOH_COL]
+
+
+def _koh_item(text: str = "", tip: str = "") -> QTableWidgetItem:
+    it = QTableWidgetItem(text); it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+    it.setForeground(QColor("#555555")); it.setTextAlignment(int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
+    if tip:
+        it.setToolTip(tip)
+    return it
+
+
 def _inj_add_row(t: QTableWidget, action: str, vals: List[str]):
-    """Append an injection row: combo box in the Action column, text in the others."""
+    """Append an injection row: combo box in the Action column, text in the others, kOH computed."""
     r = t.rowCount(); t.insertRow(r)
     t.setCellWidget(r, 0, _action_combo(action))
-    for c, v in enumerate(vals, start=1):
+    t.blockSignals(True)
+    for c, v in zip(_inj_cols(), vals):
         t.setItem(r, c, QTableWidgetItem(str(v)))
+    t.setItem(r, KOH_COL, _koh_item())
+    t.blockSignals(False)
+    if t.rowCount():
+        t.itemChanged.emit(t.item(r, 3) or t.item(r, 1))
 
 
 def _inj_rows(t: QTableWidget) -> List[List[str]]:
@@ -714,7 +733,7 @@ def _inj_rows(t: QTableWidget) -> List[List[str]]:
     for r in range(t.rowCount()):
         cb = t.cellWidget(r, 0)
         key = ACTION_ORDER[cb.currentIndex()] if isinstance(cb, QComboBox) else "other"
-        vals = [(t.item(r, c).text().strip() if t.item(r, c) else "") for c in range(1, t.columnCount())]
+        vals = [(t.item(r, c).text().strip() if t.item(r, c) else "") for c in _inj_cols()]
         if any(vals):
             out.append([key] + vals)
     return out
@@ -735,6 +754,10 @@ class InjectionsPage(QWizardPage):
         self.table.setMinimumHeight(26 * 10 + 30)          # ten rows visible without scrolling
         self._species_delegate = MCMSpeciesDelegate(self.table)
         self.table.setItemDelegateForColumn(2, self._species_delegate)   # product: MCM name, common name or formula
+        self.table.horizontalHeaderItem(KOH_COL).setToolTip(
+            "OH reactivity of this row's amount just after the injection: Σ k_OH(T) × concentration, fully mixed, before any reaction.\n"
+            "k_OH from the base MCM's own rate expressions at the experiment temperature. Computed, not an input.")
+        self.table.itemChanged.connect(self._koh_changed)
         hb = QHBoxLayout()
         hb.addWidget(QLabel("Add action:"))
         self.action_pick = QComboBox(); self.action_pick.addItems(_ACTION_LABELS); hb.addWidget(self.action_pick)
@@ -745,6 +768,7 @@ class InjectionsPage(QWizardPage):
                           ("− row", lambda: _del_row(self.table))]:
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); lay.addLayout(hb)
+        self.koh_total = QLabel(""); self.koh_total.setStyleSheet("color:#555"); self.koh_total.setWordWrap(True); lay.addWidget(self.koh_total)
         self.help = _more_info("Amount = total ppb injected, spread over the duration. Product = MCM species, or mole fractions (0.9*A+0.1*B).", [
             "<b>Product cell</b>: type a name (isoprene), an MCM name or a formula (C5H8) and pick from the list "
             "(formula, molar mass and SMILES are shown).",
@@ -771,6 +795,59 @@ class InjectionsPage(QWizardPage):
         self.chain_box.toggled.connect(lambda on: [w.setVisible(on) for w in self._chain_widgets])
         self.chain_box.toggled.emit(False)
         lay.addWidget(self.chain_box)
+
+    # ── OH reactivity per row ──
+    def _koh_conditions(self) -> Tuple[float, float]:
+        try:
+            c = self.wiz.page_cond.get()
+            return float(c.temperature_K or 298.0), float(c.pressure_hPa or 1013.25)
+        except Exception:
+            return 298.0, 1013.25
+
+    def _koh_changed(self, item: QTableWidgetItem):
+        if item is None or item.column() not in (1, 2, 3):
+            return
+        self._koh_row(item.row()); self._koh_sum()
+
+    def _koh_row(self, r: int, T: float = None, p: float = None):
+        import oh_reactivity as R
+        if T is None:
+            T, p = self._koh_conditions()
+        prod = self.table.item(r, 2).text().strip() if self.table.item(r, 2) else ""
+        ppb = self.table.item(r, 3).text().strip() if self.table.item(r, 3) else ""
+        text, tip = "", ""
+        if prod and ppb:
+            try:
+                val, missing = R.injection_koh(prod, ppb, T, p)
+            except Exception as e:
+                val, missing = None, [str(e)]
+            if val is not None:
+                text = "0" if val == 0 else (f"{val:.3g}" if val >= 0.01 else f"{val:.1e}")
+                tip = f"{ppb} ppb of {prod} at {T:.0f} K, {p:.0f} hPa"
+                if missing:
+                    text += " *"; tip += "\n* no OH reaction in the base MCM for: " + ", ".join(missing) + " (counted as 0)"
+        self.table.blockSignals(True)
+        self.table.setItem(r, KOH_COL, _koh_item(text, tip))
+        self.table.blockSignals(False)
+
+    def _koh_sum(self):
+        total, n = 0.0, 0
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, KOH_COL)
+            try:
+                total += float(it.text().replace("*", "").strip()); n += 1
+            except (AttributeError, ValueError):
+                continue
+        T, p = self._koh_conditions()
+        self.koh_total.setText(f"OH reactivity of all injections together: {total:.3g} s⁻¹ — the sum of each injection just after it is made, "
+                               f"fully mixed and before any reaction or dilution, at {T:.0f} K (rows with an amount and an MCM product: {n})."
+                               if n else "")
+
+    def refresh_koh(self):
+        T, p = self._koh_conditions()
+        for r in range(self.table.rowCount()):
+            self._koh_row(r, T, p)
+        self._koh_sum()
 
     def _add_compounds(self):
         page = self.wiz.page_chem
@@ -812,9 +889,9 @@ class InjectionsPage(QWizardPage):
         if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_ppb is None:
             return
         self.table.setItem(r, 3, QTableWidgetItem(f"{dlg.result_ppb:.4g}"))
-        old = self.table.item(r, 8).text() if self.table.item(r, 8) else ""
+        old = self.table.item(r, 9).text() if self.table.item(r, 9) else ""
         old = re.sub(r"\s*\|\s*calc:.*$", "", old)
-        self.table.setItem(r, 8, QTableWidgetItem((old + " | " if old else "") + "calc: " + dlg.result_expl))
+        self.table.setItem(r, 9, QTableWidgetItem((old + " | " if old else "") + "calc: " + dlg.result_expl))
         self._delivery[name] = dlg.result_delivery
 
     def _edit_mixture(self):
@@ -829,13 +906,13 @@ class InjectionsPage(QWizardPage):
             QMessageBox.information(self, "Edit mixture", f"Recipe '{d.get('mixture', '')}' not found in {ic.MIXTURE_DIR}"); return
         cond = self.wiz.page_cond.get()
         dlg = MixtureDialog(self, cond=cond)
-        dlg.preload(m, d.get("injected_ul", ""), self.table.item(r, 4).text() if self.table.item(r, 4) else "",
-                    self.table.item(r, 5).text() if self.table.item(r, 5) else "")
+        dlg.preload(m, d.get("injected_ul", ""), self.table.item(r, 5).text() if self.table.item(r, 5) else "",
+                    self.table.item(r, 6).text() if self.table.item(r, 6) else "")
         if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_event is None:
             return
         ev = dlg.result_event
         self.table.setItem(r, 2, QTableWidgetItem(ev.products)); self.table.setItem(r, 3, QTableWidgetItem(ev.total_ppb))
-        self.table.setItem(r, 8, QTableWidgetItem(ev.comment))
+        self.table.setItem(r, 9, QTableWidgetItem(ev.comment))
         self._delivery[name] = ev.delivery
         chem = self.wiz.page_chem
         have = {chem.chosen.item(i).text() for i in range(chem.chosen.count())}
@@ -877,6 +954,7 @@ class InjectionsPage(QWizardPage):
                 _inj_add_row(self.table, key, [inj.name, prod, ppb, "", "", inj.column, inj.switch, f"↳ extra channel of '{inj.name}'"])
         _set_rows(self.chain, [[a, b, c] for inj in spec.injections for a, b, c in inj.chain])
         self.chain_box.setChecked(self.chain.rowCount() > 0)
+        self.refresh_koh()
 
     def get(self) -> List[InjectionEvent]:
         events: Dict[str, InjectionEvent] = {}

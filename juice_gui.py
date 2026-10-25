@@ -711,6 +711,8 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         msgs = self.review.refresh()
         self._update_states(msgs or [])
         self._mark_missing()
+        if self.steps.currentRow() == 2:                 # kOH column follows the temperature typed on the Experiment step
+            self.page_inj.refresh_koh()
         plot = {0: self.plot_cond, 2: self.plot_inj, 3: self.plot_chamber}.get(self.steps.currentRow())
         if plot is not None and not is_blank(self.collect_spec()):
             plot.plot()
