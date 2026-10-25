@@ -287,26 +287,91 @@ def _roof(grid: np.ndarray, c: Conditions) -> np.ndarray:
     return hv
 
 
-def _archive_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:
-    """Read one standard ENZ column from the SAPHIR NetCDF archive (None if unavailable)."""
+# Older SAPHIR archive naming (e.g. 2017): same quantities, other file and variable names.
+# Tried in order after the current name (enz_builder.ARCHIVE_MAP); units are the ENZ units already.
+ARCHIVE_OLD_NAMES: Dict[str, List[Tuple[str, str]]] = {
+    "t":       [("saphir_collected.selected_param.60sec.nc", "tk_m")],
+    "dilute":  [("saphir_collected.selected_param.60sec.nc", "FIC401501601t")],
+    "H2O":     [("NOxContainer_PICARRO.H2O.nc", "H2O")],
+    "NO":      [("NOxContainer.no.nc", "NO")],
+    "NO2":     [("NOxContainer.no2.nc", "NO2")],
+    "O3":      [("NOxContainer.o3_uv.nc", "O3")],
+    "jNO2":    [("saphir_photolysis.jno2.nc", "jNO2")],
+    "jO1D":    [("saphir_photolysis.jo1d.nc", "jO1D")],
+    "jHONO":   [("saphir_photolysis.jhono.nc", "jHONO")],
+    "jH2O2":   [("saphir_photolysis.jh2o2.nc", "jH2O2")],
+    "jHCHO_r": [("saphir_photolysis.jhchor.nc", "jHCHOR")],
+    "jHCHO_m": [("saphir_photolysis.jhchom.nc", "jHCHOM")],
+}
+
+
+def archive_sources(c: Conditions, enz_col: str) -> List[Tuple[str, List[str]]]:
+    """(path, variable candidates) for one ENZ column: the current archive name first, then the older ones."""
     try:
-        from enz_builder import ARCHIVE_MAP, ARCHIVE_MAP_ALTS, read_nc_variable, interpolate_to_grid
+        from enz_builder import ARCHIVE_MAP, ARCHIVE_MAP_ALTS
+    except Exception:
+        return []
+    y, m, d = c.date.split("-")
+    day = os.path.join(c.archive_root, y, m, d)
+    out = []
+    if enz_col in ARCHIVE_MAP:
+        suffix, var, _f = ARCHIVE_MAP[enz_col]
+        out.append((os.path.join(day, f"{c.date}.{suffix}"), [var] + ARCHIVE_MAP_ALTS.get(var, [])))
+    for suffix, var in ARCHIVE_OLD_NAMES.get(enz_col, []):
+        out.append((os.path.join(day, f"{c.date}.{suffix}"), [var]))
+    return out
+
+
+def _archive_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:
+    """Read one standard ENZ column from the SAPHIR NetCDF archive (None if unavailable).
+    Current file names first, then the older naming of the archive (ARCHIVE_OLD_NAMES)."""
+    try:
+        from enz_builder import read_nc_variable, interpolate_to_grid
     except Exception:
         return None
-    if enz_col not in ARCHIVE_MAP:
+    for path, candidates in archive_sources(c, enz_col):
+        if not os.path.isfile(path):
+            continue
+        for v in candidates:
+            try:
+                t, vals = read_nc_variable(path, v)
+                return np.asarray(interpolate_to_grid(t, vals, grid, fill), dtype=float)
+            except Exception:
+                continue
+    if enz_col == "H2O":
+        return _archive_h2o_from_rh(c, grid, fill)
+    return None
+
+
+def _archive_h2o_from_rh(c: Conditions, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:
+    """Water vapour [vol-%] from the chamber's relative humidity, temperature and pressure in the
+    collected file — for days without a Picarro water file (e.g. 2026-05-27).  Magnus formula, as in
+    measured_inputs; negative RH readings of a dry chamber are taken as 0."""
+    try:
+        from enz_builder import read_nc_variable, interpolate_to_grid
+        from measured_inputs import _es_hpa
+    except Exception:
         return None
-    suffix, var, _f = ARCHIVE_MAP[enz_col]
     y, m, d = c.date.split("-")
-    path = os.path.join(c.archive_root, y, m, d, f"{c.date}.{suffix}")
+    path = os.path.join(c.archive_root, y, m, d, f"{c.date}.SAPHIR.collected.all_param.nc")
     if not os.path.isfile(path):
         return None
-    for v in [var] + ARCHIVE_MAP_ALTS.get(var, []):
-        try:
-            t, vals = read_nc_variable(path, v)
-            return np.asarray(interpolate_to_grid(t, vals, grid, fill), dtype=float)
-        except Exception:
-            continue
-    return None
+
+    def col(names, default=None):
+        for v in names:
+            try:
+                t, vals = read_nc_variable(path, v)
+                return np.asarray(interpolate_to_grid(t, vals, grid, np.nan), dtype=float)
+            except Exception:
+                continue
+        return default
+    rh = col(["RH_SAPHIR_VAISALA2", "MT401B_RH_SAPHIR"])
+    T = col(["TK_M_SAPHIR"])
+    if rh is None or T is None:
+        return None
+    p = col(["p_SAPHIR"], np.full(len(grid), c.pressure_hPa))
+    h2o = np.clip(rh, 0.0, None) / 100.0 * _es_hpa(T) / p * 100.0
+    return np.where(np.isfinite(h2o), h2o, fill)
 
 
 def _file_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float) -> Optional[np.ndarray]:

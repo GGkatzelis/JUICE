@@ -39,6 +39,18 @@ OBS_MAP: Dict[str, Tuple[str, str, str, float, str, str]] = {
     "kOH":  ("SAPHIR.LP_LIF.kOH.nc",                         "kOH",     "s-1",  1.0,    "kOH (LP-LIF)",     "s-1"),
     "jNO2": ("SAPHIR.SR.jNO2.nc",                            "jNO2",    "s-1",  1.0,    "jNO2 (SR)",        "s-1"),
 }
+# Older archive naming (e.g. 2017): tried after the OBS_MAP file; same variable unit as there.
+OBS_OLD_NAMES: Dict[str, List[Tuple[str, str]]] = {
+    "NO":  [("NOxContainer.no.nc", "NO")],
+    "NO2": [("NOxContainer.no2.nc", "NO2")],
+    "O3":  [("NOxContainer.o3_uv.nc", "O3")],
+    "CO":  [("NOxContainer_PICARRO.CO.nc", "CO")],
+    "OH":  [("LIF_SAPHIR.ROx.nc", "OH_LIF")],
+    "HO2": [("LIF_SAPHIR.ROx.nc", "HO2_LIF")],
+    "RO2": [("LIF_SAPHIR.ROx.nc", "RO2_LIF")],
+    "kOH": [("LIF_SAPHIR.kOH.nc", "kOH")],
+    "jNO2": [("saphir_photolysis.jno2.nc", "jNO2")],
+}
 ENZ_EPOCH_UNIX = 946684800.0            # 2000-01-01 00:00 UTC
 
 
@@ -134,12 +146,17 @@ def extract_observations(archive_root: str, date: str, keys: Optional[List[str]]
     midnight = _midnight_of(date)
     for key in keys:
         suffix, var, _unit, factor, label, kind = OBS_MAP[key]
-        p = os.path.join(day, f"{date}.{suffix}")
-        if not os.path.isfile(p):
-            continue
-        try:
-            t_s, vals = read_nc_variable(p, var)                 # seconds since 2000-01-01 (ENZ epoch)
-        except Exception:
+        t_s = vals = None
+        for suf, vname in [(suffix, var)] + OBS_OLD_NAMES.get(key, []):      # current name, then the older archive naming
+            p = os.path.join(day, f"{date}.{suf}")
+            if not os.path.isfile(p):
+                continue
+            try:
+                t_s, vals = read_nc_variable(p, vname)           # seconds since 2000-01-01 (ENZ epoch)
+                break
+            except Exception:
+                continue
+        if t_s is None:
             continue
         hours = (np.asarray(t_s, dtype=float) + ENZ_EPOCH_UNIX - midnight) / 3600.0
         v = np.asarray(vals, dtype=float) * factor
