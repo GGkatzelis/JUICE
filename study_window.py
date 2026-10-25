@@ -1,23 +1,30 @@
 """
-study_window.py — run several experiments at once, with one consistent change, or sweep a
-parameter grid of one experiment (isopleths, sensitivities).  Separate window, same look as the
-step GUI and the results viewer; the engine is study.py (no Qt), also driven by study_runner.py.
+study_window.py — two kinds of multi-run studies, one window:
 
-    python study_window.py [<name>.study.json] [-t <toml>]
+  • Sweep one experiment: its injections, chamber sources and initial values are listed; tick what
+    goes on axis 1 / axis 2 (× factor or = value), give the values → a grid of runs (isopleths,
+    sensitivities).
+  • Several experiments, one change: a list of saved experiments and one generic change applied to
+    all of them (reaction rate, add-on, MCM version, chamber parameter, injections by class).
+
+The engine is study.py (no Qt); study_runner.py drives the same study files from the command line.
+
+    python study_window.py [<name>.study.json] [--mode sweep|batch] [--experiment <path> …] [-t <toml>]
 """
 from __future__ import annotations
 
+import csv
 import math
 import os
 import sys
 import threading
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, QProcess, pyqtSignal, QObject
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
                              QPushButton, QListWidget, QTableWidget, QTableWidgetItem, QComboBox, QSpinBox, QCheckBox,
                              QGroupBox, QTabWidget, QFileDialog, QMessageBox, QSplitter, QScrollArea, QHeaderView,
-                             QProgressBar, QTextEdit, QAbstractItemView, QSizePolicy)
+                             QProgressBar, QTextEdit, QAbstractItemView, QSizePolicy, QRadioButton, QInputDialog)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
@@ -25,9 +32,19 @@ import numpy as np
 import juice_theme as theme
 import study as S
 from scenario_prep import pick_toml, load_paths, HERE
+from experiment_spec import load_spec, ACTIONS
 from experiment_wizard import _info, _more_info
 
 F = theme.PLOT_FONT
+AXIS_CHOICES = ["—", "Axis 1", "Axis 2"]
+
+# rows of the "what to vary" table that come from the chamber, not from an injection
+CHAMBER_ROWS = [  # (label, field, base-value field, scale kind, set kind)
+    ("Chamber HONO source (light, SHONO)", "hono_const", "chamber_scale", "chamber"),
+    ("Dark HONO source rate", "dark_hono_rate", "chamber_scale", "chamber"),
+    ("Chamber HCHO source (light)", "hcho_const", "chamber_scale", "chamber"),
+    ("Wall loss factor (WALLDEP)", "walldep_value", "chamber_scale", "chamber"),
+]
 
 
 def _table(headers: List[str]) -> QTableWidget:
@@ -38,11 +55,11 @@ def _table(headers: List[str]) -> QTableWidget:
 
 
 class _Events(QObject):
-    event = pyqtSignal(str, object)       # kind, RunPlan (or None)
+    event = pyqtSignal(str, object)       # kind, RunPlan (or payload)
 
 
 class StudyWindow(QMainWindow):
-    def __init__(self, toml_path: str = "", study_path: str = "", experiment: str = ""):
+    def __init__(self, toml_path: str = "", study_path: str = "", experiments: List[str] = None, mode: str = ""):
         super().__init__()
         self.toml_path = toml_path
         self.paths = load_paths(toml_path)
@@ -50,72 +67,108 @@ class StudyWindow(QMainWindow):
         self.study_path = ""
         self.runner: Optional[S.StudyRunner] = None
         self._events = _Events(); self._events.event.connect(self._on_event)
-        self._pilot: Optional[S.RunPlan] = None
         self._viewers: list = []
-        self.setWindowTitle("JUICE — Study: several experiments or a sweep")
-        self.setWindowIcon(theme.app_icon()); self.resize(1600, 940)
+        self._vary_rows: List[dict] = []          # sweep mode: one dict per table row (kinds, target, widgets)
+        self._loading = False
+        self.setWindowTitle("JUICE — Study")
+        self.setWindowIcon(theme.app_icon()); self.resize(1640, 960)
         self._build()
         m = self.menuBar().addMenu("File")
         m.addAction("New study", self._new); m.addAction("Open study …", self._open); m.addAction("Save study", self._save)
         m.addAction("Save study as …", self._save_as); m.addSeparator()
         m.addAction("Open study folder", lambda: self._open_path(self.study.folder)); m.addSeparator(); m.addAction("Quit", self.close)
+        experiments = [e for e in (experiments or []) if e and os.path.isfile(e)]
         if study_path:
             self._load(study_path)
         else:
-            if experiment and os.path.isfile(experiment):      # opened from the step window: start from that experiment
-                self.study.experiments = [experiment]
-                base = os.path.basename(experiment)[:-len(".experiment.json")]
-                self.study.name = f"{base}_study"
-                self.study.folder = os.path.join(os.path.dirname(experiment), "studies", self.study.name)
-            self._from_study()
+            if experiments:
+                self.study.experiments = experiments
+                base = os.path.basename(experiments[0])[:-len(".experiment.json")]
+                self.study.name = f"{base}_sweep" if (mode == "sweep" or len(experiments) == 1 and mode != "batch") else "batch_" + base
+                self.study.folder = os.path.join(os.path.dirname(experiments[0]), "studies", self.study.name)
+            self._from_study(mode or ("sweep" if len(experiments) <= 1 else "batch"))
         self._readiness()
 
     # ── layout ──
     def _build(self):
         left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6, 6, 6, 6)
-        ll.addWidget(_more_info("A study reruns saved experiments many times without touching them: pick the experiments, "
-                                "optionally one change for all of them, optionally a sweep — then pilot, estimate, run.", [
-            "<b>One experiment, a sweep</b>: add the experiment, leave the variant empty, switch on one or two axes "
-            "(e.g. initial NO log 0.1 … 20 ppb × injected VOC × 0.5 … 4) → an ozone isopleth or a sensitivity curve.",
-            "<b>Many experiments, one change</b>: add the experiments, put the change in the variant table "
-            "(a reaction rate, an add-on, a chamber parameter, scaled injections) → every experiment is rerun with it; "
-            "compare against the original runs in the viewer.",
-            "<b>Both</b>: the sweep is applied to every experiment; the plot shows the first one, the table all of them.",
-            "<b>Nothing changed</b>: just reruns the experiments with this study's solver settings (useful after a mechanism update).",
-            "Yellow fields still need input. 'Check' lists what the study would do and what it cannot do (e.g. a reaction that is "
-            "not in an experiment's subset). 'Run pilot, then estimate' runs one case alone, measures it and asks before the rest.",
+        ll.addWidget(_more_info("A study reruns saved experiments many times without touching them. Choose the kind of study, fill "
+                                "the yellow fields, then Check → pilot → run.", [
+            "<b>Sweep one experiment</b>: its injections, chamber sources and initial values are listed. Put what you want to vary on "
+            "axis 1 or axis 2 (× factor or = value), give the axis values → a grid of runs: an ozone isopleth or a sensitivity curve. "
+            "Several rows on the same axis are varied together (e.g. all VOC injections × the same factor).",
+            "<b>Several experiments, one change</b>: a list of saved experiments and one change applied to every one of them — a reaction "
+            "rate, an add-on, another MCM version, a chamber parameter, injections by class (voc, nox, …). Every experiment keeps its own "
+            "steps; compare with the original runs in the viewer. A generic sweep can be added on top.",
+            "<b>No change at all</b> is also possible: the experiments are rerun with their own chemistry files and this study's solver "
+            "settings — a reproduction, not a mechanism update. A new MCM version is a chemistry change: use 'Base mechanism' in the variant.",
+            "'Check' lists what the study will do and what it cannot do (a reaction that is not in an experiment's subset, an injection "
+            "class that does not exist there). 'Run pilot, then estimate' runs one case alone, measures it and asks before the rest.",
             "Every run lives in &lt;study folder&gt;/runs/&lt;experiment&gt;__&lt;axis&gt;-&lt;value&gt;/ with provenance lines in its .easy; "
-            "finished runs are skipped when the study is repeated or extended."], "ⓘ How a study works"))
+            "finished runs are skipped when a study is repeated or extended."], "ⓘ How a study works"))
+
         g = QGroupBox("Study"); gl = QGridLayout(g)
-        gl.addWidget(QLabel("Name"), 0, 0); self.name = QLineEdit(); gl.addWidget(self.name, 0, 1, 1, 2)
-        gl.addWidget(QLabel("Folder"), 1, 0); self.folder = QLineEdit(); gl.addWidget(self.folder, 1, 1)
-        b = QPushButton("Browse …"); b.clicked.connect(self._browse_folder); gl.addWidget(b, 1, 2)
-        gl.addWidget(QLabel("Notes"), 2, 0); self.notes = QLineEdit(); gl.addWidget(self.notes, 2, 1, 1, 2)
+        self.mode_sweep = QRadioButton("Sweep one experiment"); self.mode_batch = QRadioButton("Several experiments, one change")
+        self.mode_sweep.setChecked(True); self.mode_sweep.toggled.connect(self._mode_changed)
+        hb = QHBoxLayout(); hb.addWidget(self.mode_sweep); hb.addWidget(self.mode_batch); hb.addStretch(); gl.addLayout(hb, 0, 0, 1, 3)
+        gl.addWidget(QLabel("Name"), 1, 0); self.name = QLineEdit(); gl.addWidget(self.name, 1, 1, 1, 2)
+        gl.addWidget(QLabel("Folder"), 2, 0); self.folder = QLineEdit(); gl.addWidget(self.folder, 2, 1)
+        b = QPushButton("Browse …"); b.clicked.connect(self._browse_folder); gl.addWidget(b, 2, 2)
+        gl.addWidget(QLabel("Notes"), 3, 0); self.notes = QLineEdit(); gl.addWidget(self.notes, 3, 1, 1, 2)
         ll.addWidget(g)
 
-        g = QGroupBox("Base experiments (.experiment.json written by the step window)"); gl = QVBoxLayout(g)
-        self.exps = QListWidget(); self.exps.setMaximumHeight(110); gl.addWidget(self.exps)
+        # ── sweep mode ──
+        self.sweep_box = QGroupBox("What to vary in this experiment"); sl = QVBoxLayout(self.sweep_box)
+        hb = QHBoxLayout(); hb.addWidget(QLabel("Experiment")); self.exp_path = QLineEdit(); self.exp_path.setReadOnly(True); hb.addWidget(self.exp_path, stretch=1)
+        b = QPushButton("Choose …"); b.clicked.connect(self._choose_exp); hb.addWidget(b); sl.addLayout(hb)
+        self.exp_status = _info("no experiment chosen"); sl.addWidget(self.exp_status)
+        self.vary = _table(["Vary on", "What", "Kind", "In the experiment", "How"])
+        self.vary.setMinimumHeight(230)
+        for c in (0, 2, 4):
+            self.vary.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        sl.addWidget(self.vary)
+        hb = QHBoxLayout()
+        b = QPushButton("+ initial value of a species …"); b.clicked.connect(self._add_initial_row); hb.addWidget(b)
+        b = QPushButton("+ reaction rate × factor …"); b.clicked.connect(self._add_rate_row); hb.addWidget(b)
+        b = QPushButton("− custom row"); b.clicked.connect(self._remove_custom_row); hb.addWidget(b)
+        hb.addStretch(); sl.addLayout(hb)
+        vg = QGridLayout()
+        self.axis_values = []
+        for i in range(2):
+            vg.addWidget(QLabel(f"Axis {i + 1} values"), i, 0)
+            e = QLineEdit(); e.setPlaceholderText("0.5, 1, 2   |   lin 0 20 5   |   log 0.1 20 6"); e.textChanged.connect(self._count)
+            vg.addWidget(e, i, 1); self.axis_values.append(e)
+            lb = QLabel(""); lb.setStyleSheet("color:#555"); vg.addWidget(lb, i, 2); setattr(self, f"axis_desc{i}", lb)
+        vg.setColumnStretch(1, 2); vg.setColumnStretch(2, 2); sl.addLayout(vg)
+        sl.addWidget(_info("× factor multiplies what the experiment has (1 = unchanged); = value replaces it (ppb for injections and "
+                           "initial values). 'All VOC injections together' keeps the VOC mix and scales it as a whole. "
+                           "The chamber HONO source is the main dark/light NO source besides injections — vary it here, not as an injection."))
+        ll.addWidget(self.sweep_box)
+
+        # ── batch mode ──
+        self.batch_box = QGroupBox("Experiments and the change applied to all of them"); bl = QVBoxLayout(self.batch_box)
+        self.exps = QListWidget(); self.exps.setMaximumHeight(110); bl.addWidget(self.exps)
         self.exps.model().rowsInserted.connect(self._readiness); self.exps.model().rowsRemoved.connect(self._readiness)
         hb = QHBoxLayout()
         for label, fn in (("Add …", self._add_exps), ("Add all in a folder …", self._add_folder), ("Remove", self._remove_exp)):
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
-        hb.addStretch(); gl.addLayout(hb); ll.addWidget(g)
-
-        g = QGroupBox("Variant — applied identically to every experiment (leave empty to run them as they are)"); gl = QVBoxLayout(g)
+        hb.addStretch(); bl.addLayout(hb)
+        bl.addWidget(QLabel("Change applied to every experiment (empty = rerun as they are)"))
         self.mods = _table(["Change", "Target", "Value", "Comment"]); self.mods.setMaximumHeight(150)
-        self.mods.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents); gl.addWidget(self.mods)
+        self.mods.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents); bl.addWidget(self.mods)
+        self.mods.itemChanged.connect(self._readiness)
         hb = QHBoxLayout()
         b = QPushButton("+ change"); b.clicked.connect(lambda: self._add_mod()); hb.addWidget(b)
         b = QPushButton("− row"); b.clicked.connect(lambda: self.mods.removeRow(self.mods.currentRow()) if self.mods.currentRow() >= 0 else None); hb.addWidget(b)
-        hb.addStretch(); gl.addLayout(hb)
-        gl.addWidget(_more_info("Reaction rate (expression or × factor), extra add-on, chamber parameter, injected amounts, initial values, a condition.",
+        hb.addStretch(); bl.addLayout(hb)
+        bl.addWidget(_more_info("Targets are generic because every experiment has its own steps: a reaction, an add-on id, a chamber "
+                                "field, an injection class (voc, nox, no, o3, mixture, all) or an injection name present in all of them.",
                                 [f"<b>{v[0]}</b>: target = {v[1]}; value = {v[2]}" for v in S.MOD_KINDS.values()] +
-                                ["A rate change is written as k[reaction] = CONST(expression) after the mechanism — exactly the EASY way (last definition wins).",
-                                 "An add-on rebuilds the MCM subset once per experiment in &lt;study&gt;/chemistry/."], "ⓘ What can be changed"))
-        ll.addWidget(g)
-
-        g = QGroupBox("Sweep — one or two axes (every experiment × every grid point)"); gl = QGridLayout(g)
-        self.axes_ui = []
+                                ["A rate change is written as k[reaction] = CONST(expression) after the mechanism — the EASY way (last definition wins).",
+                                 "An add-on or another base mechanism rebuilds the MCM subset once per experiment in &lt;study&gt;/chemistry/."],
+                                "ⓘ What can be changed"))
+        self.gen_sweep = QGroupBox("Also sweep a generic parameter in every experiment"); self.gen_sweep.setCheckable(True); self.gen_sweep.setChecked(False)
+        gl = QGridLayout(self.gen_sweep); self.axes_ui = []
         for i in range(2):
             on = QCheckBox(f"Axis {i + 1}"); kind = QComboBox(); kind.addItems(list(S.AXIS_KINDS)); kind.setToolTip("\n".join(f"{k}: {v}" for k, v in S.AXIS_KINDS.items()))
             target = QLineEdit(); target.setPlaceholderText("NO  |  voc  |  C5H8 + OH --> CISOPA  |  hono_const")
@@ -125,11 +178,10 @@ class StudyWindow(QMainWindow):
                 (w.toggled if isinstance(w, QCheckBox) else w.currentIndexChanged if isinstance(w, QComboBox) else w.textChanged).connect(self._count)
             self.axes_ui.append((on, kind, target, values))
         gl.setColumnStretch(2, 2); gl.setColumnStretch(3, 3)
-        self.count = QLabel(""); self.count.setStyleSheet("color:#555"); gl.addWidget(self.count, 2, 0, 1, 4)
-        gl.addWidget(_info("Target: a species for 'initial' (values in ppb); an injection name, an action, 'voc', 'nox' or 'all' for the "
-                           "injection kinds; a reaction for 'rate_factor'. Values: a list, 'lin a b n' or 'log a b n'. "
-                           "Two axes = a grid of all combinations."), 3, 0, 1, 4)
-        ll.addWidget(g)
+        self.gen_sweep.toggled.connect(self._count); bl.addWidget(self.gen_sweep)
+        ll.addWidget(self.batch_box)
+
+        self.count = QLabel(""); self.count.setStyleSheet("color:#555"); self.count.setWordWrap(True); ll.addWidget(self.count)
 
         g = QGroupBox("Metrics taken from every run"); gl = QGridLayout(g)
         self.metric_boxes = {}
@@ -153,10 +205,9 @@ class StudyWindow(QMainWindow):
         self.ready = QLabel(""); self.ready.setWordWrap(True); self.ready.setStyleSheet("color:#6a4c93; font-style: italic")
         self.ready.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.ready, 4, 0, 1, 4)
         ll.addWidget(g)
-        self.name.textChanged.connect(self._readiness); self.folder.textChanged.connect(self._readiness)
-        self.mods.itemChanged.connect(self._readiness)
         ll.addStretch()
-        scroll = QScrollArea(); scroll.setWidget(left); scroll.setWidgetResizable(True); scroll.setMinimumWidth(560)
+        self.name.textChanged.connect(self._readiness); self.folder.textChanged.connect(self._readiness)
+        scroll = QScrollArea(); scroll.setWidget(left); scroll.setWidgetResizable(True); scroll.setMinimumWidth(600)
 
         # right: runs / results / plot / messages
         self.tabs = QTabWidget()
@@ -184,16 +235,114 @@ class StudyWindow(QMainWindow):
         self.msgs = QTextEdit(); self.msgs.setReadOnly(True); self.tabs.addTab(self.msgs, "Messages")
 
         split = QSplitter(); split.addWidget(scroll); split.addWidget(self.tabs); split.setStretchFactor(0, 2); split.setStretchFactor(1, 3)
-        split.setSizes([620, 980]); self.setCentralWidget(split)
+        split.setSizes([660, 980]); self.setCentralWidget(split)
+        self._mode_changed()
+
+    def _mode_changed(self, *_a):
+        sweep = self.mode_sweep.isChecked()
+        self.sweep_box.setVisible(sweep); self.batch_box.setVisible(not sweep)
+        if not self._loading:
+            self._count()
+
+    # ── sweep mode: the experiment's own knobs ──
+    def _choose_exp(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Experiment to sweep", self.paths.get("output_root", ""), "Experiment (*.experiment.json)")
+        if p:
+            self._load_exp(p)
+
+    def _load_exp(self, path: str, assignments: dict = None):
+        """Fill the 'what to vary' table from the experiment; assignments = {(kind, target): (axis index, how)} to restore."""
+        self.exp_path.setText(path); self.vary.setRowCount(0); self._vary_rows = []
+        try:
+            spec = load_spec(path)
+        except Exception as e:
+            self.exp_status.setText(f"cannot read: {e}"); return
+        self._spec = spec
+        inj = [e for e in spec.injections if e.products.strip()]
+        for e in inj:
+            self._vary_add(e.name, ACTIONS.get(e.action_key(), {}).get("label", e.action_key()), f"{e.total_ppb} ppb at {e.start or '—'}" + (f", {e.duration_min:g} min" if e.duration_min else ""),
+                           ("injection_scale", e.name), ("injection_set", e.name), hows=("× factor", "= ppb"))
+        vocs = [e.name for e in inj if e.action_key() in ("voc", "mixture")]
+        if len(vocs) > 1:
+            self._vary_add("All VOC injections together", "group", ", ".join(vocs), ("injection_scale", ",".join(vocs)), None, hows=("× factor",), label="VOC")
+        nox = [e.name for e in inj if e.action_key() in ("no", "no2")]
+        if len(nox) > 1:
+            self._vary_add("All NOx injections together", "group", ", ".join(nox), ("injection_scale", ",".join(nox)), None, hows=("× factor",), label="NOx")
+        ch = spec.chamber
+        for label, fld, k_scale, k_set in CHAMBER_ROWS:
+            if fld == "hono_const" and not ch.hono:
+                continue
+            if fld == "hcho_const" and not ch.hcho:
+                continue
+            self._vary_add(label, "chamber", str(getattr(ch, fld)), (k_scale, fld), (k_set, fld), hows=("× factor", "= value"))
+        for sp, expr in spec.initials:
+            self._vary_add(f"Initial {sp}", "initial value", expr, None, ("initial", sp), hows=("= ppb",), custom=True)
+        self.exp_status.setText(f"{spec.name}: {len(inj)} injection(s)" + (", chamber sources" if ch.hono or ch.hcho else "") +
+                                f"; {'measured conditions' if spec.conditions.source in ('archive', 'file') else 'manual conditions'}; "
+                                f"{len(spec.precursors)} compound(s)" if spec.precursors else f"{spec.name}: {len(inj)} injection(s)")
+        for row in self._vary_rows:
+            for i, key in enumerate(("scale", "set")):
+                kt = row.get(key)
+                if assignments and kt in assignments:
+                    ax, how = assignments[kt]
+                    row["axis"].setCurrentIndex(ax); row["how"].setCurrentText(how)
+        self._count()
+
+    def _vary_add(self, what, kind, base, scale: Optional[Tuple[str, str]], setk: Optional[Tuple[str, str]], hows, label: str = "", custom: bool = False):
+        r = self.vary.rowCount(); self.vary.insertRow(r)
+        axis = QComboBox(); axis.addItems(AXIS_CHOICES); axis.currentIndexChanged.connect(self._count); self.vary.setCellWidget(r, 0, axis)
+        for c, v in ((1, what), (2, kind), (3, base)):
+            it = QTableWidgetItem(v); it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable); self.vary.setItem(r, c, it)
+        how = QComboBox(); how.addItems(list(hows)); how.currentIndexChanged.connect(self._count); self.vary.setCellWidget(r, 4, how)
+        self._vary_rows.append({"what": what, "scale": scale, "set": setk, "axis": axis, "how": how, "label": label, "custom": custom})
+
+    def _add_initial_row(self):
+        sp, ok = QInputDialog.getText(self, "Initial value", "Species (MCM name), its value at t0 goes on an axis in ppb:")
+        if ok and sp.strip():
+            self._vary_add(f"Initial {sp.strip().upper()}", "initial value", "0 (not set)", None, ("initial", sp.strip().upper()), hows=("= ppb",), custom=True); self._count()
+
+    def _add_rate_row(self):
+        rx, ok = QInputDialog.getText(self, "Reaction rate", "Reaction as in the mechanism, e.g.  C5H8 + OH --> CISOPA  (its MCM rate × the axis factor):")
+        if ok and rx.strip():
+            self._vary_add(rx.strip(), "reaction rate", "MCM rate", ("rate_factor", rx.strip()), None, hows=("× factor",), custom=True); self._count()
+
+    def _remove_custom_row(self):
+        r = self.vary.currentRow()
+        if r >= 0 and self._vary_rows[r]["custom"]:
+            self.vary.removeRow(r); del self._vary_rows[r]; self._count()
+
+    def _sweep_axes(self) -> List[S.Axis]:
+        axes = []
+        for i in range(2):
+            members = []
+            for row in self._vary_rows:
+                if row["axis"].currentIndex() == i + 1:
+                    how = row["how"].currentText()
+                    kt = row["scale"] if how.startswith("×") else row["set"]
+                    if kt:
+                        members.append((kt, row["label"] or row["what"]))
+            if not members:
+                continue
+            try:
+                vals = S.parse_values(self.axis_values[i].text())
+            except ValueError:
+                vals = []
+            (k0, t0), lab0 = members[0]
+            scale = k0 in ("injection_scale", "chamber_scale", "rate_factor")
+            label = (S._safe(lab0) if len(members) == 1 and self._vary_rows and any(r["label"] for r in self._vary_rows if (r["scale"] == (k0, t0) or r["set"] == (k0, t0))) else S._safe(t0.split(",")[0]) if len(members) == 1 else S._safe("+".join(S._safe(t.split(",")[0]) for (_k, t), _l in members)))
+            label += "_x" if scale else ("_t0_ppb" if k0 == "initial" else "_ppb" if k0 == "injection_set" else "")
+            axes.append(S.Axis(k0, t0, vals, label, [[k, t] for (k, t), _l in members[1:]]))
+        return axes
 
     # ── study ↔ widgets ──
-    def _from_study(self):
-        # snapshot first: filling the widgets fires change signals that rebuild self.study from the widgets
+    def _from_study(self, mode: str = ""):
         st = self.study
         name, folder, notes, exps = st.name, st.folder, st.notes, list(st.experiments)
         mods, axes, metrics, workers, kvpd = list(st.modifications), list(st.axes), list(st.metrics), st.workers, st.export_kv_pd
+        sweep = mode == "sweep" if mode else (len(exps) == 1 and not mods)
         self._loading = True
         try:
+            (self.mode_sweep if sweep else self.mode_batch).setChecked(True)
             self.name.setText(name); self.folder.setText(folder); self.notes.setText(notes)
             self.exps.clear(); self.exps.addItems(exps)
             self.mods.setRowCount(0)
@@ -201,37 +350,68 @@ class StudyWindow(QMainWindow):
                 self._add_mod(m)
             for k, cb in self.metric_boxes.items():
                 cb.setChecked(k in metrics)
-            for i, (on, kind, target, values) in enumerate(self.axes_ui):
-                ax = axes[i] if i < len(axes) else None
-                on.setChecked(ax is not None)
-                if ax:
-                    kind.setCurrentText(ax.kind); target.setText(ax.target); values.setText(", ".join(f"{v:g}" for v in ax.values))
-                else:
-                    target.clear(); values.clear()
+            if sweep:
+                assignments = {}
+                for i, ax in enumerate(axes[:2]):
+                    for k, t in ax.members():
+                        assignments[(k, t)] = (i + 1, "× factor" if k in ("injection_scale", "chamber_scale", "rate_factor") else ("= ppb" if k in ("injection_set", "initial") else "= value"))
+                    self.axis_values[i].setText(", ".join(f"{v:g}" for v in ax.values))
+                if exps:
+                    self._load_exp(exps[0], assignments)
+                    for (k, t), (i, how) in assignments.items():      # members with no row in the table (e.g. an initial value) → custom rows
+                        if not any(r["scale"] == (k, t) or r["set"] == (k, t) for r in self._vary_rows):
+                            if k == "initial":
+                                self._vary_add(f"Initial {t}", "initial value", "0 (not set)", None, (k, t), hows=("= ppb",), custom=True)
+                            elif k == "rate_factor":
+                                self._vary_add(t, "reaction rate", "MCM rate", (k, t), None, hows=("× factor",), custom=True)
+                            elif k in ("injection_scale", "injection_set"):     # generic class from a CLI-made study (voc, nox, all, …)
+                                self._vary_add(f"Injections: {t}", "injection class", "", ("injection_scale", t), ("injection_set", t), hows=("× factor", "= ppb"), custom=True)
+                            elif k in ("chamber_scale", "chamber"):
+                                self._vary_add(f"Chamber {t}", "chamber", "", ("chamber_scale", t), ("chamber", t), hows=("× factor", "= value"), custom=True)
+                            else:
+                                continue
+                            self._vary_rows[-1]["axis"].setCurrentIndex(i); self._vary_rows[-1]["how"].setCurrentText(how)
+                for i in range(2):
+                    on, kind, target, values = self.axes_ui[i]; on.setChecked(False); target.clear(); values.clear()
+            else:
+                self.gen_sweep.setChecked(bool(axes))
+                for i, (on, kind, target, values) in enumerate(self.axes_ui):
+                    ax = axes[i] if i < len(axes) else None
+                    on.setChecked(ax is not None)
+                    if ax:
+                        kind.setCurrentText(ax.kind); target.setText(ax.target); values.setText(", ".join(f"{v:g}" for v in ax.values))
+                    else:
+                        target.clear(); values.clear()
             self.workers.setValue(max(1, min(self.workers.maximum(), workers))); self.kvpd.setChecked(kvpd)
         finally:
             self._loading = False
         self.setWindowTitle(f"JUICE — Study · {name}")
-        self._count(); self._fill_runs()
+        self._mode_changed(); self._count(); self._fill_runs()
 
     def _to_study(self) -> S.Study:
         st = self.study
         st.name = self.name.text().strip() or "study"; st.folder = self.folder.text().strip(); st.notes = self.notes.text()
-        st.experiments = [self.exps.item(i).text() for i in range(self.exps.count())]
-        st.modifications = []
-        for r in range(self.mods.rowCount()):
-            kind = self.mods.cellWidget(r, 0).currentData()
-            cell = lambda c: (self.mods.item(r, c).text().strip() if self.mods.item(r, c) else "")
-            if cell(1) or kind == "addon":
-                st.modifications.append(S.Modification(kind, cell(1), cell(2), cell(3)))
-        st.axes = []
-        for on, kind, target, values in self.axes_ui:
-            if on.isChecked() and target.text().strip():
-                try:
-                    vals = S.parse_values(values.text())
-                except ValueError:
-                    vals = []
-                st.axes.append(S.Axis(kind.currentText(), target.text().strip(), vals))
+        if self.mode_sweep.isChecked():
+            st.experiments = [self.exp_path.text()] if self.exp_path.text() else []
+            st.modifications = []
+            st.axes = self._sweep_axes()
+        else:
+            st.experiments = [self.exps.item(i).text() for i in range(self.exps.count())]
+            st.modifications = []
+            for r in range(self.mods.rowCount()):
+                kind = self.mods.cellWidget(r, 0).currentData()
+                cell = lambda c: (self.mods.item(r, c).text().strip() if self.mods.item(r, c) else "")
+                if cell(1):
+                    st.modifications.append(S.Modification(kind, cell(1), cell(2), cell(3)))
+            st.axes = []
+            if self.gen_sweep.isChecked():
+                for on, kind, target, values in self.axes_ui:
+                    if on.isChecked() and target.text().strip():
+                        try:
+                            vals = S.parse_values(values.text())
+                        except ValueError:
+                            vals = []
+                        st.axes.append(S.Axis(kind.currentText(), target.text().strip(), vals))
         st.metrics = [k for k, cb in self.metric_boxes.items() if cb.isChecked()]
         st.workers = self.workers.value(); st.export_kv_pd = self.kvpd.isChecked()
         if not st.toml:
@@ -245,54 +425,77 @@ class StudyWindow(QMainWindow):
         cb = QComboBox()
         for k, (label, _t, _v) in S.MOD_KINDS.items():
             cb.addItem(label, k)
-        if m:
-            cb.setCurrentIndex(max(0, list(S.MOD_KINDS).index(m.kind))) if m.kind in S.MOD_KINDS else None
+        if m and m.kind in S.MOD_KINDS:
+            cb.setCurrentIndex(list(S.MOD_KINDS).index(m.kind))
         self.mods.setCellWidget(r, 0, cb)
         for c, v in enumerate((m.target if m else "", m.value if m else "", m.comment if m else ""), start=1):
             self.mods.setItem(r, c, QTableWidgetItem(v))
 
+    # ── readiness: yellow marks + one honest line ──
     def _readiness(self, *_a):
-        """Yellow on what still needs input, and one line saying what the study would do."""
-        if getattr(self, "_loading", False):
+        if self._loading:
             return
         missing = []
         theme.mark_missing(self.name, not self.name.text().strip())
         if not self.name.text().strip():
             missing.append("a study name")
-        theme.mark_missing(self.exps, self.exps.count() == 0)
-        if self.exps.count() == 0:
-            missing.append("at least one base experiment")
-        n_axes = 0
-        for i, (on, kind, target, values) in enumerate(self.axes_ui):
-            if on.isChecked():
-                bad_t = not target.text().strip()
+        sweep = self.mode_sweep.isChecked()
+        n_axes = n_mods = 0
+        if sweep:
+            theme.mark_missing(self.exp_path, not self.exp_path.text())
+            if not self.exp_path.text():
+                missing.append("the experiment to sweep")
+            used = [i for i in range(2) if any(r["axis"].currentIndex() == i + 1 for r in self._vary_rows)]
+            theme.mark_missing(self.vary, self.exp_path.text() != "" and not used)
+            if self.exp_path.text() and not used:
+                missing.append("at least one row put on axis 1")
+            for i in range(2):
+                need = i in used
                 try:
-                    bad_v = not S.parse_values(values.text())
+                    bad = need and not S.parse_values(self.axis_values[i].text())
                 except ValueError:
-                    bad_v = True
-                theme.mark_missing(target, bad_t); theme.mark_missing(values, bad_v)
-                if bad_t or bad_v:
-                    missing.append(f"{'the target' if bad_t else 'the values'} of axis {i + 1}")
-                else:
+                    bad = True
+                theme.mark_missing(self.axis_values[i], bad)
+                if bad:
+                    missing.append(f"the values of axis {i + 1}")
+                elif need:
                     n_axes += 1
-            else:
-                theme.mark_missing(target, False); theme.mark_missing(values, False)
-        n_mods = sum(1 for r in range(self.mods.rowCount()) if self.mods.item(r, 1) and self.mods.item(r, 1).text().strip())
-        if self.mods.rowCount() > n_mods:
-            missing.append("the target of a change in the variant table")
+                rows = [r["what"] for r in self._vary_rows if r["axis"].currentIndex() == i + 1]
+                getattr(self, f"axis_desc{i}").setText(("varies " + ", ".join(rows)) if rows else "")
+        else:
+            theme.mark_missing(self.exps, self.exps.count() == 0)
+            if self.exps.count() == 0:
+                missing.append("at least one experiment")
+            n_mods = sum(1 for r in range(self.mods.rowCount()) if self.mods.item(r, 1) and self.mods.item(r, 1).text().strip())
+            if self.mods.rowCount() > n_mods:
+                missing.append("the target of a change in the table")
+            if self.gen_sweep.isChecked():
+                for i, (on, kind, target, values) in enumerate(self.axes_ui):
+                    if on.isChecked():
+                        bad_t = not target.text().strip()
+                        try:
+                            bad_v = not S.parse_values(values.text())
+                        except ValueError:
+                            bad_v = True
+                        theme.mark_missing(target, bad_t); theme.mark_missing(values, bad_v)
+                        if bad_t or bad_v:
+                            missing.append(f"{'the target' if bad_t else 'the values'} of axis {i + 1}")
+                        else:
+                            n_axes += 1
+                    else:
+                        theme.mark_missing(target, False); theme.mark_missing(values, False)
         if missing:
             self.ready.setText("Still needed: " + ", ".join(missing) + ".")
         else:
-            what = []
-            if n_mods:
-                what.append(f"{n_mods} change(s) applied to every experiment")
-            if n_axes:
-                what.append(f"a sweep over {n_axes} axis/axes")
-            self.ready.setText("Ready: " + (" and ".join(what) if what else "the experiments rerun unchanged") +
-                               f" — {self.exps.count()} experiment(s). Next: Check, then 'Run pilot, then estimate'.")
+            if sweep:
+                what = f"a sweep over {n_axes} axis/axes of {os.path.basename(self.exp_path.text())[:-16]}"
+            else:
+                parts = ([f"{n_mods} change(s) applied to every experiment"] if n_mods else []) + ([f"a sweep over {n_axes} axis/axes"] if n_axes else [])
+                what = (" and ".join(parts) if parts else "the experiments rerun as they are (no change; their chemistry files, this study's solver settings)") + f" — {self.exps.count()} experiment(s)"
+            self.ready.setText("Ready: " + what + ". Next: Check, then 'Run pilot, then estimate'.")
 
     def _count(self, *_a):
-        if getattr(self, "_loading", False):
+        if self._loading:
             return
         self._readiness()
         try:
@@ -308,10 +511,9 @@ class StudyWindow(QMainWindow):
         except Exception as e:
             self.count.setText(str(e))
 
-    # ── experiments ──
+    # ── batch mode: experiments ──
     def _add_exps(self):
-        start = self.paths.get("output_root", "")
-        files, _ = QFileDialog.getOpenFileNames(self, "Base experiments", start, "Experiment (*.experiment.json)")
+        files, _ = QFileDialog.getOpenFileNames(self, "Experiments", self.paths.get("output_root", ""), "Experiment (*.experiment.json)")
         for f in files:
             if f not in [self.exps.item(i).text() for i in range(self.exps.count())]:
                 self.exps.addItem(f)
@@ -343,7 +545,11 @@ class StudyWindow(QMainWindow):
 
     # ── file menu ──
     def _new(self):
-        self.study = S.new_study("study", "", self.toml_path); self.study_path = ""; self.runner = None; self._from_study()
+        self.study = S.new_study("study", "", self.toml_path); self.study_path = ""; self.runner = None
+        self.exp_path.clear(); self.vary.setRowCount(0); self._vary_rows = []; self.exp_status.setText("no experiment chosen")
+        for e in self.axis_values:
+            e.clear()
+        self._from_study("sweep")
 
     def _open(self):
         p, _ = QFileDialog.getOpenFileName(self, "Open study", self.paths.get("output_root", ""), "Study (*.study.json)")
@@ -360,7 +566,8 @@ class StudyWindow(QMainWindow):
     def _save(self, path: str = "") -> str:
         st = self._to_study()
         if not st.folder:
-            st.folder = os.path.join(self.paths.get("output_root", HERE), "studies", st.name); self.folder.setText(st.folder)
+            base = os.path.dirname(st.experiments[0]) if st.experiments else self.paths.get("output_root", HERE)
+            st.folder = os.path.join(base, "studies", st.name); self.folder.setText(st.folder)
         os.makedirs(st.folder, exist_ok=True)
         path = path or self.study_path or os.path.join(st.folder, st.name + ".study.json")
         S.save_study(st, path); self.study_path = path; self.setWindowTitle(f"JUICE — Study · {st.name}")
@@ -376,11 +583,16 @@ class StudyWindow(QMainWindow):
     def _check(self) -> bool:
         st = self._to_study(); msgs = S.validate_study(st)
         self.msgs.clear()
+        self._log("This study will run: " + self.ready.text().replace("Ready: ", "").split(". Next")[0])
+        for ax in st.axes:
+            self._log(f"  axis '{ax.name()}': " + "; ".join(f"{k} {t}" for k, t in ax.members()) + f" over {', '.join(f'{v:g}' for v in ax.values)}")
+        for m in st.modifications:
+            self._log(f"  change: {m.kind} {m.target} {m.value}")
         for lvl, m in msgs:
             self._log(("✖ " if lvl == "error" else "⚠ ") + m)
         if not msgs:
             self._log("✔ nothing to fix")
-        self.tabs.setCurrentWidget(self.msgs) if msgs else None
+        self.tabs.setCurrentWidget(self.msgs)
         return not any(lvl == "error" for lvl, _ in msgs)
 
     def _ensure_runner(self) -> Optional[S.StudyRunner]:
@@ -408,10 +620,10 @@ class StudyWindow(QMainWindow):
             todo = [p for p in self.runner.plans if not S.is_done(p)]
             if not todo:
                 self._events.event.emit("all_done", None); return
-            self._pilot = todo[0]
-            self._events.event.emit("pilot_started", self._pilot)
-            self.runner.run_one(self._pilot, lambda k, p, _r: self._events.event.emit(k, p))
-            self._events.event.emit("pilot_done", self._pilot)
+            pilot = todo[0]
+            self._events.event.emit("pilot_started", pilot)
+            self.runner.run_one(pilot, lambda k, p, _r: self._events.event.emit(k, p))
+            self._events.event.emit("pilot_done", pilot)
         self._materialise(after)
 
     def _run_all(self):
@@ -541,7 +753,7 @@ class StudyWindow(QMainWindow):
         rows = self._rows(); st = self.study
         axis_cols = [a.name() for a in st.axes]
         cols = ["run", "experiment"] + axis_cols + ["status", "elapsed_s"] + st.metrics
-        self.results.setColumnCount(len(cols)); self.results.setHorizontalHeaderLabels([S.METRICS.get(c, (c, ""))[0] if c in S.METRICS else c for c in cols])
+        self.results.setColumnCount(len(cols)); self.results.setHorizontalHeaderLabels([S.METRICS[c][0] if c in S.METRICS else c for c in cols])
         self.results.setRowCount(0)
         for row in rows:
             r = self.results.rowCount(); self.results.insertRow(r)
@@ -560,8 +772,7 @@ class StudyWindow(QMainWindow):
     def _export(self):
         p, _ = QFileDialog.getSaveFileName(self, "Export results", os.path.join(self.study.folder, f"{self.study.name}_results.csv"), "CSV (*.csv)")
         if p:
-            rows = self._rows(); st = self.study
-            import csv
+            rows = self._rows()
             with open(p, "w", newline="", encoding="utf-8") as fh:
                 w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows else ["run"]); w.writeheader(); w.writerows(rows)
             self.statusBar().showMessage(f"exported {p}", 6000)
@@ -611,7 +822,7 @@ class StudyWindow(QMainWindow):
         else:
             ys = [next((r[key] for r in rows if r["experiment"] == e), float("nan")) for e in exps]
             ax.bar(range(len(exps)), ys, color="#6a4c93"); ax.set_xticks(range(len(exps))); ax.set_xticklabels(exps, rotation=20, ha="right", fontsize=F["tick"])
-            ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (variant applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
+            ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (change applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
             self.plot_note.setText("one value per experiment; compare with the base runs in the viewer's Comparison tab")
         self.fig.tight_layout(); self.canvas.draw()
 
@@ -626,8 +837,9 @@ def main(argv=None):
     theme.taskbar_identity()
     app = QApplication(argv); theme.apply_theme(app)
     files = [a for a in argv[1:] if a.endswith(".study.json")]
-    exp = argv[argv.index("--experiment") + 1] if "--experiment" in argv and argv.index("--experiment") + 1 < len(argv) else ""
-    w = StudyWindow(pick_toml(argv), files[0] if files else "", exp); w.show(); theme.force_taskbar_icon(w)
+    exps = [argv[i + 1] for i, a in enumerate(argv) if a == "--experiment" and i + 1 < len(argv)]
+    mode = argv[argv.index("--mode") + 1] if "--mode" in argv and argv.index("--mode") + 1 < len(argv) else ""
+    w = StudyWindow(pick_toml(argv), files[0] if files else "", exps, mode); w.show(); theme.force_taskbar_icon(w)
     return app.exec()
 
 

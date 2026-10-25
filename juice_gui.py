@@ -458,17 +458,17 @@ class RunPage(QWidget):
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self.stop); hb.addWidget(self.stop_btn)
         self.view_btn = QPushButton("3. Open results"); self.view_btn.setObjectName("primary"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
-        self.study_btn = QPushButton("Sweep or batch from this experiment …")
-        self.study_btn.setToolTip("Saves this experiment and opens the study window with it: vary NOx / VOC over a grid (isopleth), "
-                                  "or apply one change to this and other experiments and run them all.")
+        self.study_btn = QPushButton("Sweep this experiment …")
+        self.study_btn.setToolTip("Saves this experiment and opens the study window on it: pick which of its injections, sources or "
+                                  "initial values to vary over a grid (isopleth, sensitivities).")
         self.study_btn.clicked.connect(self._study_from_here); hb.addWidget(self.study_btn)
-        ob = QPushButton("Open an earlier result …"); ob.clicked.connect(lambda: self.win._open_results_file()); hb.addWidget(ob)
         hb.addStretch(); lay.addLayout(hb)
         self.files = QLabel(""); self.files.setWordWrap(True); lay.addWidget(self.files)
         self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setTextVisible(True); self.bar.setFormat("not started"); lay.addWidget(self.bar)
         self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMinimumHeight(260)
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
         lay.addWidget(self.log, stretch=1)
+        lay.addWidget(self._earlier_group())
 
     def refresh(self):
         self.folder.setText(self.win.out_dir())
@@ -509,6 +509,30 @@ class RunPage(QWidget):
     def cs_path(self) -> str:
         return self.json_path[:-5] + ".cs" if self.json_path else ""
 
+    def _earlier_group(self) -> QGroupBox:
+        """Earlier experiments: look at their results, or sweep / batch them without reopening each one."""
+        g = QGroupBox("Earlier experiments"); gl = QVBoxLayout(g)
+        gl.addWidget(_info("Work with experiments that were run before, without loading them into the steps above."))
+        hb = QHBoxLayout()
+        b = QPushButton("Open earlier results in the viewer …"); b.clicked.connect(lambda: self.win._open_results_file()); hb.addWidget(b)
+        b = QPushButton("Sweep an earlier experiment …"); b.setToolTip("Choose a saved .experiment.json: its injections, sources and initial values can then be varied over a grid.")
+        b.clicked.connect(lambda: self._study_earlier("sweep")); hb.addWidget(b)
+        b = QPushButton("Run several earlier experiments with one change …"); b.setToolTip("Choose saved experiments; one change (rate, add-on, chamber parameter, scaled injections, MCM version) is applied to all of them.")
+        b.clicked.connect(lambda: self._study_earlier("batch")); hb.addWidget(b)
+        hb.addStretch(); gl.addLayout(hb)
+        return g
+
+    def _study_earlier(self, mode: str):
+        start = self.win.output_root if os.path.isdir(self.win.output_root) else self.win.easy_root
+        if mode == "sweep":
+            p, _ = QFileDialog.getOpenFileName(self.win, "Experiment to sweep", start, "Experiment (*.experiment.json)")
+            if p:
+                self.win._study(p, mode="sweep")
+        else:
+            files, _ = QFileDialog.getOpenFileNames(self.win, "Experiments to run with one change", start, "Experiment (*.experiment.json)")
+            if files:
+                self.win._study(files, mode="batch")
+
     def _study_from_here(self):
         """Save the experiment description, then open the study window with it as the base experiment."""
         spec = self.win.collect_spec()
@@ -519,7 +543,7 @@ class RunPage(QWidget):
                 return
             if not self.prepare():
                 return
-        self.win._save(path); self.win._study(path)
+        self.win._save(path); self.win._study(path, mode="sweep")
 
     def run(self):
         if not self.json_path:
@@ -801,11 +825,14 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         else:
             QMessageBox.information(self, "Experiment folder", f"{self.out_dir()} does not exist yet — save the experiment first.")
 
-    def _study(self, experiment: str = ""):
-        """The study window (study_window.py): many experiments with one consistent change, or a parameter sweep."""
+    def _study(self, experiment=None, mode: str = ""):
+        """The study window (study_window.py): sweep one experiment, or run several with one change."""
         args = [os.path.join(HERE, "study_window.py")] + (["--toml", self.toml_path] if self.toml_path else [])
-        if experiment:
-            args += ["--experiment", experiment]
+        if mode:
+            args += ["--mode", mode]
+        for e in ([experiment] if isinstance(experiment, str) else (experiment or [])):
+            if e:
+                args += ["--experiment", e]
         p = QProcess(self); p.start(sys.executable, args); self._studies = getattr(self, "_studies", []) + [p]
 
     def _settings(self):

@@ -60,15 +60,19 @@ MOD_KINDS: Dict[str, Tuple[str, str, str]] = {   # kind → (label, what 'target
     "chamber":         ("Chamber parameter", "field of ChamberEffects, e.g. hono_const, walldep_value, hcho_const", "new value / expression"),
     "injection_scale": ("Injected amount × factor", "injection name, action (voc, no, no2, o3, mixture, …) or 'all'", "factor"),
     "injection_set":   ("Injected amount = ppb", "injection name", "total ppb"),
+    "chamber_scale":   ("Chamber parameter × factor", "field of ChamberEffects, e.g. hono_const (chamber HONO source), dark_hono_rate", "factor"),
     "initial":         ("Initial value at t0", "species", "ppb"),
     "condition":       ("Condition", "field of Conditions, e.g. temperature_K, h2o_percent", "new value"),
+    "base_mechanism":  ("Base mechanism (MCM version) — rebuilds the chemistry", "base id from mechanisms/base, e.g. MCM_v3.3.1", "(none)"),
 }
+CHEMISTRY_KINDS = ("addon", "base_mechanism")      # these rebuild the subset once per experiment
 AXIS_KINDS: Dict[str, str] = {
     "initial":         "initial value of a species at t0 [ppb]",
     "injection_scale": "× factor on the injected amount of an injection / action / 'all'",
     "injection_set":   "injected amount of an injection [ppb]",
     "rate_factor":     "× factor on a reaction rate",
     "chamber":         "chamber parameter value",
+    "chamber_scale":   "× factor on a chamber parameter (e.g. hono_const = chamber HONO source strength)",
     "condition":       "condition value (temperature_K, h2o_percent, …)",
 }
 
@@ -86,11 +90,17 @@ class Axis:
     kind: str
     target: str
     values: List[float] = field(default_factory=list)
-    label: str = ""                         # column name in the results; default "<kind>:<target>"
+    label: str = ""                         # column name in the results; default from kind and target
+    also: List[List[str]] = field(default_factory=list)   # further [kind, target] pairs varied together with the same value
+
+    def members(self) -> List[Tuple[str, str]]:
+        return [(self.kind, self.target)] + [(k, t) for k, t in self.also]
 
     def name(self) -> str:
         if self.label:
             return self.label
+        if self.also:
+            return _safe("+".join(t for _k, t in self.members())) + ("_x" if self.kind in ("injection_scale", "rate_factor", "chamber_scale") else "")
         if self.kind == "initial":
             return f"{self.target}_t0_ppb"
         if self.kind == "injection_set":
@@ -188,6 +198,11 @@ def _scale_expr(expr: str, factor) -> str:
 
 def _events_matching(spec: ExperimentSpec, target: str) -> List[InjectionEvent]:
     t = target.strip()
+    if "," in t:                                   # several names / classes varied together
+        out = []
+        for part in t.split(","):
+            out += [e for e in _events_matching(spec, part) if e not in out]
+        return out
     if t.lower() == "all":
         return list(spec.injections)
     by_name = [e for e in spec.injections if e.name.upper() == t.upper()]
@@ -235,6 +250,14 @@ def apply_modification(spec: ExperimentSpec, mod: Modification, fac_path: str = 
         if t not in spec.addons:
             spec.addons.append(t)
         spec.mechanism_stem = ""                  # subset must be rebuilt with the add-on's seed species
+    elif k == "base_mechanism":
+        spec.base_mechanism = t
+        spec.mechanism_stem = ""                  # subset rebuilt from the other MCM version
+    elif k == "chamber_scale":
+        if not hasattr(spec.chamber, t):
+            notes.append(f"chamber parameter '{t}' unknown — skipped")
+        else:
+            setattr(spec.chamber, t, _scale_expr(str(getattr(spec.chamber, t)), v))
     elif k in ("chamber", "condition"):
         obj = spec.chamber if k == "chamber" else spec.conditions
         if not hasattr(obj, t):
@@ -262,7 +285,8 @@ def apply_modification(spec: ExperimentSpec, mod: Modification, fac_path: str = 
 def apply_point(spec: ExperimentSpec, axes: List[Axis], point: Dict[str, float], fac_path: str = "") -> List[str]:
     notes = []
     for ax in axes:
-        notes += apply_modification(spec, Modification(ax.kind, ax.target, _fmt(point[ax.name()])), fac_path)
+        for kind, target in ax.members():
+            notes += apply_modification(spec, Modification(kind, target, _fmt(point[ax.name()])), fac_path)
     return notes
 
 
@@ -366,19 +390,19 @@ def validate_study(st: Study) -> List[Tuple[str, str]]:
             msgs.append(("error", f"{os.path.basename(exp)}: cannot read ({e})")); continue
         if not (spec.precursors or spec.mechanism_stem or spec.inorganic_only):
             msgs.append(("error", f"{spec.name}: no chemistry in this experiment"))
-        if spec.mechanism_stem and not os.path.isdir(os.path.join(os.path.dirname(exp), "chemistry")) and not any(m.kind == "addon" for m in st.modifications):
+        if spec.mechanism_stem and not os.path.isdir(os.path.join(os.path.dirname(exp), "chemistry")) and not any(m.kind in CHEMISTRY_KINDS for m in st.modifications):
             msgs.append(("warning", f"{spec.name}: no chemistry/ folder next to it — the subset will be rebuilt"))
         try:
             mcm = {_norm_rxn(r["easy"]) for r in __import__("mcm_species_db").load_fac_reactions(base_fac(spec.base_mechanism))}
         except Exception:
             mcm = set()
         sub = _subset_reactions(exp, spec.mechanism_stem) if spec.mechanism_stem else set()
-        for m in st.modifications + [Modification(a.kind, a.target, "") for a in st.axes]:
+        for m in st.modifications + [Modification(k, t, "") for a in st.axes for k, t in a.members()]:
             if m.kind in ("rate", "rate_factor"):
                 r = _norm_rxn(m.target)
                 if mcm and r not in mcm and r not in sub:
                     msgs.append(("error", f"{spec.name}: reaction '{m.target}' is not in the mechanism"))
-                elif sub and r not in sub and not any(x.kind == "addon" for x in st.modifications):
+                elif sub and r not in sub and not any(x.kind in CHEMISTRY_KINDS for x in st.modifications):
                     msgs.append(("warning", f"{spec.name}: reaction '{m.target}' is in the MCM but not in this experiment's subset (not reachable from its compounds) — the adjustment has no effect there"))
             elif m.kind in ("injection_scale", "injection_set") and not _events_matching(spec, m.target):
                 msgs.append(("warning", f"{spec.name}: no injection matches '{m.target}'"))
@@ -389,8 +413,10 @@ def validate_study(st: Study) -> List[Tuple[str, str]]:
                     ids = set()
                 if m.target not in ids:
                     msgs.append(("error", f"add-on '{m.target}' not installed or not compatible with {spec.base_mechanism}"))
-            elif m.kind == "chamber" and not hasattr(spec.chamber, m.target):
+            elif m.kind in ("chamber", "chamber_scale") and not hasattr(spec.chamber, m.target):
                 msgs.append(("error", f"chamber parameter '{m.target}' unknown"))
+            elif m.kind == "base_mechanism" and m.target not in mreg.load_bases():
+                msgs.append(("error", f"base mechanism '{m.target}' is not installed (mechanisms/base)"))
             elif m.kind == "condition" and not hasattr(spec.conditions, m.target):
                 msgs.append(("error", f"condition '{m.target}' unknown"))
     for ax in st.axes:
@@ -411,7 +437,7 @@ def _chemistry_for(st: Study, exp_path: str, spec_base: ExperimentSpec) -> Tuple
     """The chemistry folder every run of this base experiment shares, and the spec fields that
     point at it.  Rebuilt once per study in <study>/chemistry/<base>/ when the variant changes
     the chemistry (add-on); otherwise the base experiment's own chemistry/ folder."""
-    chem_mods = [m for m in st.modifications if m.kind == "addon"]
+    chem_mods = [m for m in st.modifications if m.kind in CHEMISTRY_KINDS]
     base_dir = os.path.dirname(os.path.abspath(exp_path))
     if not chem_mods and spec_base.mechanism_stem and os.path.isdir(os.path.join(base_dir, "chemistry")):
         return os.path.join(base_dir, "chemistry"), {}
@@ -443,7 +469,7 @@ def materialise(st: Study, plan: RunPlan, include_dir: str, force: bool = False)
     chem_dir, chem_fields = _chemistry_for(st, plan.base_path, spec)
     notes: List[str] = []
     for m in st.modifications:
-        if m.kind != "addon":
+        if m.kind not in CHEMISTRY_KINDS:
             notes += apply_modification(spec, m)
     for k, v in chem_fields.items():
         setattr(spec, k, v)
