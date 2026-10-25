@@ -887,6 +887,57 @@ class StudyRunner:
 # Results table
 # ─────────────────────────────────────────────────────────────────────────────
 
+# What each result is and what to expect from it across a sweep (shown under the plot).
+METRIC_MEANING: Dict[str, Tuple[str, str]] = {
+    "o3_max": ("highest O3 of the run",
+               "rises with VOC everywhere; with NOx it rises in the NOx-sensitive part and falls beyond the ridge (NOx-saturated, titration at very high NO)."),
+    "o3_end": ("O3 at the last time step",
+               "like the maximum, lowered by dilution and by NO titration late in the run."),
+    "o3_lit_delta": ("O3 at the end of the lit period minus at its start",
+                     "net ozone made in the light; can be negative when NO injected in the light titrates O3 faster than it is produced."),
+    "ox_lit_delta": ("Ox = O3 + NO2 gained while lit",
+                     "net photochemical ozone without the NO–O3 titration artefact; the cleanest single number for an isopleth."),
+    "o3_time_max": ("hour (UTC) of the O3 maximum",
+                    "later when NOx is high (titration delays the build-up) or when VOC is low (slow production); early when NOx runs out."),
+    "oh_mean_lit": ("mean OH while lit",
+                    "highest at intermediate NOx; falls at high NOx (OH + NO2 → HNO3) and at high VOC (OH consumed by the VOC)."),
+    "oh_max": ("highest OH of the run",
+               "follows the mean; spikes right after an NO injection (HO2 + NO → OH) or HONO photolysis at roof opening."),
+    "ho2_mean_lit": ("mean HO2 while lit",
+                     "rises with VOC; falls strongly with NOx (HO2 + NO)."),
+    "ro2_mean_lit": ("mean RO2 sum while lit",
+                     "rises with VOC; falls with NOx (RO2 + NO); large values at low NOx mean RO2 self/cross reactions matter."),
+    "nox_end": ("NO + NO2 at the end",
+                "close to 0 where the run became NOx-limited; grows with the NOx injected and with the chamber HONO source."),
+    "no2_max": ("highest NO2 of the run",
+                "rises with the NOx injected; NO → NO2 conversion is faster with more VOC (more peroxy radicals)."),
+    "hono_max": ("highest HONO of the run",
+                 "set by the chamber HONO source and humidity; barely depends on the injections."),
+    "hcho_max": ("highest HCHO of the run",
+                 "a first-generation product: rises with the VOC oxidised, i.e. with VOC and with OH."),
+    "h2o2_max": ("highest H2O2 of the run",
+                 "a NOx-limited marker: large at low NOx (HO2 + HO2), suppressed at high NOx."),
+    "pan_max": ("highest PAN of the run",
+                "needs both acyl peroxy radicals (VOC) and NO2: largest where both are high; thermally unstable at high T."),
+    "hno3_end": ("HNO3 at the end",
+                 "a NOx-saturated marker: rises with NOx (OH + NO2), a sink of both radicals and NOx."),
+    "po3_mean_lit": ("mean gross ozone production rate while lit, k[HO2][NO] + k[RO2][NO]",
+                     "the isopleth of production itself: ridge where adding NOx stops helping; NOx-sensitive below/left, VOC-sensitive beyond."),
+    "po3_lit_int": ("ozone produced over the lit period (gross, before its losses)",
+                    "larger than the Ox gain by the O3 lost to photolysis, OH/HO2 and dilution; same regime pattern as the rate."),
+    "ope": ("Ox made per NOx turned into products (HNO3, PANs, nitrates, …)",
+            "high (10–20+) at low NOx where each NOx cycles many times; low (< 5) at high NOx where NOx is removed quickly."),
+    "regime": ("radical loss to peroxides / to HNO3",
+               "high (> ~0.5) = NOx-sensitive, low (< ~0.2) = VOC-sensitive / NOx-saturated; transition near 0.35 (red dotted line)."),
+    "ho2_ro2": ("mean HO2 / mean RO2 while lit",
+                "≈ 1 for small VOC; below 1 for large VOC with many RO2 steps; rises when NO converts RO2 quickly to HO2."),
+    "oh_exposure": ("∫ OH dt over the run",
+                    "how much oxidation the air saw; with k_OH of a VOC it gives the fraction reacted (1 − e^(−k·exposure))."),
+    "voc_consumed": ("share of the injected compounds reacted by the end",
+                     "rises with OH exposure; near 100 % for reactive VOC (isoprene, monoterpenes) in a full sunny day."),
+}
+
+
 def _nitrogen_species(cs_path: str) -> List[str]:
     """Species of the run with nitrogen (MCM formula), except NO and NO2, with NA (particulate nitrate)."""
     try:

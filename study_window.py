@@ -931,10 +931,12 @@ class StudyWindow(QMainWindow):
         st = self._to_study()
         plans = self.runner.plans if self.runner else S.plan_runs(st)
         rows = S.collect_results(st, plans)
-        if "regime" not in st.metrics and len(st.axes) >= 2:          # the isopleth's regime contour needs it, even when not ticked
-            extra = {r["run"]: r.get("regime") for r in S.collect_results(S.Study(**{**st.__dict__, "metrics": ["regime"]}), plans)}
+        need = [k for k in ("regime", "po3_lit_int") if k not in st.metrics]
+        if need and len(st.axes) >= 2:          # the isopleth's ridge (ozone) and indicator contour need them, even when not ticked
+            extra = {r["run"]: r for r in S.collect_results(S.Study(**{**st.__dict__, "metrics": need}), plans)}
             for r in rows:
-                r["regime"] = extra.get(r["run"])
+                for k in need:
+                    r[k] = extra.get(r["run"], {}).get(k)
         return rows
 
     def _refresh_results(self):
@@ -995,7 +997,7 @@ class StudyWindow(QMainWindow):
                 sc = ax.scatter(x, y, c=z, cmap="viridis", s=80); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
             ax.set_xlabel(a1 + (" (log10)" if log else "")); ax.set_ylabel(a2 + (" (log10)" if log else ""))
             ax.set_title(f"{label} — {exp}" + (f"  (+{len(exps) - 1} more experiments: see Results)" if len(exps) > 1 else ""), loc="left")
-            self.plot_note.setText(f"isopleth of {label} over {a1} × {a2}; {len(sub)} grid points, interpolated between them"
+            self.plot_note.setText(self._meaning(key, "Colour") + f"\nisopleth over {a1} × {a2}; {len(sub)} grid points, interpolated between them"
                                    + (("\n" + regime_note) if len(sub) >= 4 and regime_note else ""))
         elif len(axes) == 1:
             a1 = axes[0].name(); notes = []
@@ -1009,21 +1011,32 @@ class StudyWindow(QMainWindow):
             if log:
                 ax.set_xscale("log"); ax.set_yscale("log")
             ax.set_xlabel(a1); ax.set_ylabel(f"{label} [{unit}]"); ax.grid(alpha=0.3); ax.legend(fontsize=F["legend"]); ax.set_title(f"{label} vs {a1}", loc="left")
-            self.plot_note.setText("\n".join(notes))
+            self.plot_note.setText("\n".join([self._meaning(key, "Lines")] + notes))
         else:
             ys = [next((r[key] for r in rows if r["experiment"] == e), float("nan")) for e in exps]
             ax.bar(range(len(exps)), ys, color="#6a4c93"); ax.set_xticks(range(len(exps))); ax.set_xticklabels(exps, rotation=20, ha="right", fontsize=F["tick"])
             ax.set_ylabel(f"{label} [{unit}]"); ax.set_title(f"{label} per experiment (change applied)", loc="left"); ax.grid(axis="y", alpha=0.3)
-            self.plot_note.setText("one value per experiment; compare with the base runs in the viewer's Comparison tab")
+            self.plot_note.setText(self._meaning(key, "Bars") + "\none value per experiment; compare with the base runs in the viewer's Comparison tab")
         self.fig.tight_layout(); self.canvas.draw()
+
+    def _meaning(self, key: str, what: str) -> str:
+        label, unit = S.METRICS.get(key, (key, ""))
+        is_, expect = S.METRIC_MEANING.get(key, ("", ""))
+        return f"{what} = {label}" + (f" [{unit}]" if unit and unit != "-" else "") + (f": {is_}." if is_ else ".") + \
+               (f"  What to expect: {expect}" if expect else "")
 
     def _regimes(self, ax, st, sub, a1, a2, xs, ys, z, key, log) -> str:
         """Ridge line and regime labels on a two-axis isopleth with a NOx axis."""
         i_nox = S.nox_axis(st.axes[:2])
         if i_nox < 0:
             return "regimes: no axis varies NOx (NO/NO2 injection or initial value), so the regimes are not drawn"
+        # the regimes are defined by ozone: the ridge comes from an ozone result, whatever is coloured
+        okey = next((k for k in ("po3_lit_int", "ox_lit_delta", "o3_max") if all(r.get(k) is not None and np.isfinite(r[k]) for r in sub)), None)
+        if okey is None:
+            return "regimes: no ozone result available for the runs (P(O3), Ox gain or O3 maximum)"
+        zo = np.array([r[okey] for r in sub], float)
         try:
-            X, Y, Z, dN = S.regime_map(xs, ys, z, nox_on_x=(i_nox == 0))
+            X, Y, Z, dN = S.regime_map(xs, ys, zo, nox_on_x=(i_nox == 0))
         except Exception as e:
             return f"regimes: not drawn ({e})"
         if not np.isfinite(dN).any():
@@ -1039,10 +1052,10 @@ class StudyWindow(QMainWindow):
             if m.sum() > 20:
                 ax.text(float(np.nanmean(X[m])), float(np.nanmean(Y[m])), text, ha="center", va="center", fontsize=F["small"] + 1,
                         color="black", bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="none", alpha=0.75))
-        note = (f"regimes from the slope of {S.METRICS[key][0]} along the NOx axis ({st.axes[i_nox].name()}): dashed = ridge (no change with NOx); "
+        note = (f"regimes from the slope of {S.METRICS[okey][0]} along the NOx axis ({st.axes[i_nox].name()}): dashed = ridge (no change with NOx); "
                 f"{100 * pos / max(1, pos + neg):.0f} % of the sampled area NOx-sensitive")
         rows_r = [r for r in sub if r.get("regime") is not None and np.isfinite(r["regime"])]
-        if len(rows_r) >= 4 and key != "regime":
+        if len(rows_r) >= 4:
             xr = np.array([r[a1] for r in rows_r], float); yr = np.array([r[a2] for r in rows_r], float)
             if log:
                 xr, yr = np.log10(xr), np.log10(yr)
