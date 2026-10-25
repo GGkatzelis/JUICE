@@ -480,13 +480,13 @@ class RunPage(QWidget):
         known = known_species_for(spec, self.win.include_dir, self.win.out_dir())
         errors = [m for lvl, m in validate(spec, known) if lvl == "error"]
         if errors:
-            self.log.append("Cannot prepare:\n  " + "\n  ".join(errors)); self.bar.setFormat("fix the errors first"); return ""
-        self.bar.setFormat("preparing …"); QApplication.processEvents()
+            self.log.append("Cannot prepare:\n  " + "\n  ".join(errors)); self.bar.setValue(0); self.bar.setFormat("fix the errors first"); return ""
+        self.bar.setValue(0); self.bar.setFormat("preparing …"); QApplication.processEvents()    # white while working, green when done
         try:
             res = self.win.write_all()
             self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path)
         except Exception as e:
-            self.log.append(f"Prepare failed: {e}"); self.bar.setFormat("prepare failed"); return ""
+            self.log.append(f"Prepare failed: {e}"); self.bar.setValue(0); self.bar.setFormat("prepare failed"); return ""
         out = os.path.dirname(self.json_path)
         self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path)))
         try:                                   # the measurements the results will be compared with, extracted once
@@ -500,7 +500,7 @@ class RunPage(QWidget):
         for n in res.get("notes", []):
             self.log.append("note: " + n)
         self.log.append(f"Inputs ready in {out}")
-        self.bar.setFormat("inputs ready"); self.run_btn.setEnabled(True)
+        self.bar.setValue(100); self.bar.setFormat("inputs ready"); self.run_btn.setEnabled(True)
         self.view_btn.setEnabled(os.path.isfile(self.cs_path()))
         self.win.review.refresh_files()
         self.win.set_step_state(RUN_STEP, "ok")
@@ -588,7 +588,7 @@ class RunPage(QWidget):
                 json.dump(info, fh, indent=1)
         except Exception:
             pass
-        self.bar.setValue(100 if ok else self.bar.value())
+        self.bar.setValue(100 if ok else 0)
         self.bar.setFormat(f"done   {mm}m {ss:02d}s" if ok else f"failed (exit {code})   {mm}m {ss:02d}s")
         self.run_btn.setEnabled(True); self.prep_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.view_btn.setEnabled(ok)
         self.win.review.refresh_files()
