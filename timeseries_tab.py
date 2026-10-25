@@ -55,6 +55,11 @@ class CorrelationPanel(QWidget):
         self.canvas.mpl_connect("axes_leave_event", lambda _e: self._clear())
         self.canvas.mpl_connect("scroll_event", self._scroll)
         self.canvas.mpl_connect("button_press_event", self._press)
+        try:
+            from plot_interaction import attach_legends
+            attach_legends(self.canvas)
+        except Exception:
+            pass
 
     def plot(self, x_label: str, x: np.ndarray, ys: List[Tuple[str, np.ndarray]], hours: np.ndarray, title: str,
              one_to_one: bool = False):

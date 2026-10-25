@@ -338,6 +338,9 @@ class _Dividers:
     def _press(self, event):
         if event.button != 1 or self._busy():
             return
+        lg = getattr(self.canvas, "_juice_legends", None)
+        if lg is not None and lg.hit(event) is not None:
+            return                            # a legend is under the cursor: it is moved, not the plot edge
         hit = self._hit(event)
         if hit is not None:
             self._drag = hit
@@ -383,6 +386,160 @@ class _Dividers:
         self._set_cursor(self._cursor_for(self._hit(event)))
 
 
+class _Legends:
+    """Drag a legend with the left mouse button; double-click it to put it back where the plot placed it.
+
+    The position is kept in the coordinates of the legend's axes (or of the figure for figure legends),
+    remembered per legend (axes rank in the figure, or figure-legend index) and re-applied on every
+    draw, so a legend stays where it was put when the plot is redrawn (new metric, new data …).
+    While a legend is under the cursor the other drags of the canvas (pan, plot edges) are suppressed;
+    a click without moving still reaches pick handlers (legend entries that hide a line)."""
+
+    def __init__(self, canvas, on_grab=None):
+        self.canvas = canvas
+        self.on_grab = on_grab                # e.g. cancels a panel's own pan
+        self._drag = None
+        self._cursor = False
+        self.ops: Dict[tuple, Tuple[float, float]] = {}       # legend key → lower-left corner in parent fractions
+        self._orig: Dict[tuple, tuple] = {}                    # legend key → (loc, bbox_to_anchor) before the first move
+        canvas.mpl_connect("button_press_event", self._press)
+        canvas.mpl_connect("motion_notify_event", self._motion)
+        canvas.mpl_connect("button_release_event", self._release)
+        canvas.mpl_connect("draw_event", self._on_draw)
+
+    def _legends(self):
+        fig = self.canvas.figure
+        out = []
+        for i, ax in enumerate(fig.axes):
+            lg = ax.get_legend()
+            if lg is not None and lg.get_visible():
+                out.append((("ax", i), lg, ax))
+        for j, lg in enumerate(getattr(fig, "legends", [])):
+            if lg.get_visible():
+                out.append((("fig", j), lg, None))
+        return out
+
+    def hit(self, event):
+        if getattr(event, "x", None) is None:
+            return None
+        for key, lg, ax in reversed(self._legends()):
+            try:
+                if lg.get_window_extent().contains(event.x, event.y):
+                    return key, lg, ax
+            except Exception:
+                continue
+        return None
+
+    def _parent(self, ax):
+        return ax.transAxes if ax is not None else self.canvas.figure.transFigure
+
+    def _anchor(self, lg, ax):
+        """The legend's bbox_to_anchor in fractions of its parent (None = the parent itself), so a reset still
+        fits after the plot was rebuilt with new axes."""
+        try:
+            bb = lg.get_bbox_to_anchor()
+            par = (ax.bbox if ax is not None else self.canvas.figure.bbox)
+            if np.allclose(bb.bounds, par.bounds, atol=0.5):
+                return None
+            (x0, y0), (x1, y1) = self._parent(ax).inverted().transform([(bb.x0, bb.y0), (bb.x1, bb.y1)])
+            return (x0, y0, x1 - x0, y1 - y0)
+        except Exception:
+            return None
+
+    def _place(self, lg, ax, xy):
+        lg.set_bbox_to_anchor(None)           # the parent itself: loc (x, y) = lower-left corner in its fractions
+        try:
+            lg.set_loc(tuple(xy))
+        except Exception:
+            lg._loc = tuple(xy)
+
+    def _press(self, event):
+        if event.button != 1:
+            return
+        tb = getattr(self.canvas, "toolbar", None)
+        if tb is not None and getattr(tb, "mode", ""):
+            return
+        h = self.hit(event)
+        if h is None:
+            return
+        key, lg, ax = h
+        if event.dblclick:                    # back to where the plot put it
+            self.ops.pop(key, None)
+            if key in self._orig:
+                loc, bounds = self._orig.pop(key)
+                try:
+                    lg.set_bbox_to_anchor(bounds, transform=self._parent(ax) if bounds is not None else None)
+                    lg.set_loc(loc)
+                except Exception:
+                    lg._loc = loc
+            self.canvas.draw_idle()
+        else:
+            bb = lg.get_window_extent()
+            self._drag = (key, lg, ax, event.x, event.y, bb.x0, bb.y0, False)
+        for other in ("_juice_interaction", "_juice_dividers"):
+            o = getattr(self.canvas, other, None)
+            if o is not None:
+                o._drag = None
+        if self.on_grab is not None:
+            self.on_grab()
+
+    def _motion(self, event):
+        if self._drag is not None:
+            if event.x is None:
+                return
+            key, lg, ax, x0, y0, bx, by, moved = self._drag
+            if key not in self._orig:
+                self._orig[key] = (getattr(lg, "_loc", 0), self._anchor(lg, ax))
+            xy = self._parent(ax).inverted().transform((bx + event.x - x0, by + event.y - y0))
+            self._place(lg, ax, xy)
+            self._drag = (key, lg, ax, x0, y0, bx, by, True)
+            self.canvas.draw_idle()
+            return
+        h = self.hit(event)
+        try:
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtGui import QCursor
+            if h is not None:
+                self.canvas.setCursor(QCursor(Qt.CursorShape.OpenHandCursor)); self._cursor = True
+            elif self._cursor:
+                div = getattr(self.canvas, "_juice_dividers", None)
+                if div is None or not div._cursor_set:
+                    self.canvas.unsetCursor()
+                self._cursor = False
+        except Exception:
+            pass
+
+    def _release(self, _event):
+        if self._drag is None:
+            return
+        key, lg, ax, _x0, _y0, _bx, _by, moved = self._drag
+        self._drag = None
+        if moved:
+            loc = getattr(lg, "_loc", None)
+            if isinstance(loc, tuple):
+                self.ops[key] = loc
+
+    def _on_draw(self, _event):
+        if not self.ops or self._drag is not None:
+            return
+        changed = False
+        for key, lg, ax in self._legends():
+            xy = self.ops.get(key)
+            if xy is not None and getattr(lg, "_loc", None) != xy:
+                if key not in self._orig:
+                    self._orig[key] = (getattr(lg, "_loc", 0), self._anchor(lg, ax))
+                self._place(lg, ax, xy); changed = True
+        if changed:
+            self.canvas.draw_idle()
+
+
+def attach_legends(canvas, on_grab=None):
+    """Draggable legends on a canvas (see _Legends)."""
+    if getattr(canvas, "_juice_legends", None) is None:
+        canvas._juice_legends = _Legends(canvas, on_grab)
+    return canvas._juice_legends
+
+
 def attach_dividers(canvas):
     """Draggable dividers between the sub-plots of a figure (see _Dividers)."""
     if getattr(canvas, "_juice_dividers", None) is None:
@@ -394,4 +551,5 @@ def attach(canvas, hover: bool = True):
     """Give a FigureCanvas the Overview interaction.  Keeps the handler alive on the canvas."""
     if getattr(canvas, "_juice_interaction", None) is None:
         canvas._juice_interaction = _Interaction(canvas, hover)
+        attach_legends(canvas)
     return canvas._juice_interaction

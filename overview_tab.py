@@ -103,6 +103,11 @@ class InteractivePanel(QWidget):
         self.canvas.mpl_connect("scroll_event", self._scroll)
         self.canvas.mpl_connect("button_press_event", self._press)
         self.canvas.mpl_connect("button_release_event", self._release)
+        try:                                   # drag the legend; the panel's own pan is cancelled while it moves
+            from plot_interaction import attach_legends
+            attach_legends(self.canvas, on_grab=lambda: setattr(self, "_drag", None))
+        except Exception:
+            pass
         group.add(self)
 
     # ── layout ──
