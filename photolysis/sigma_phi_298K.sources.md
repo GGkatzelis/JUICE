@@ -4,7 +4,7 @@
 |---|---|
 | Table | `photolysis/sigma_phi_298K.csv`: sigma(lambda, 298 K) x phi(lambda, 298 K, 1 atm) in cm^2, 1-nm grid 200.0-750.0 nm inclusive (551 rows), one column per MCM v3.3.1 J (numeric order J1 ... J61). Empty cells = no data (J15, J16, J17, J61). `0` = outside the source's wavelength coverage or a genuine zero of the data. |
 | Built by | `photolysis/build_sigma_phi.py` (importable without side effects) |
-| Rebuild | `"C:\Users\g.gkatzelis\Desktop\My Folders\My Coding\Python\.venv\Scripts\python.exe" -I photolysis\build_sigma_phi.py <path-to-tuv-x-checkout> --validate` (runs in ~3 s; `--validate` prints the spot checks and the bracket table below) |
+| Rebuild | `python -I photolysis/build_sigma_phi.py <path-to-tuv-x-checkout> --validate` with the project's Python environment (needs numpy, netCDF4; runs in ~3 s; `--validate` prints the spot checks and the bracket table below) |
 | Data source | NCAR **tuv-x** (https://github.com/NCAR/tuv-x), commit `097b54cceb8edaaac67ffea520b43233728ecb69` (2026-10-19), licensed **Apache-2.0** (Copyright University Corporation for Atmospheric Research). The netCDF data files are TUV 5.4 data sets converted by "TUV Data Xformer 1.0"; the original TUV file name is quoted for each entry below. |
 | Built on | 2026-11-02 |
 | Conditions | T = 298 K, p = 1013.25 hPa, M = 2.46e19 cm^-3 for every temperature- or pressure-dependent parametrisation. The tuv-x `tint` rule is applied to multi-temperature tables (clamp T to the tabulated range, linear interpolation between rows). |
