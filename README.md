@@ -119,6 +119,20 @@ authorship guidelines. This is a request, not a condition of the license.
 - Georgios Gkatzelis, Forschungszentrum Jülich GmbH — [g.gkatzelis@fz-juelich.de](mailto:g.gkatzelis@fz-juelich.de)
 - Franz Rohrer, Forschungszentrum Jülich GmbH — [f.rohrer@fz-juelich.de](mailto:f.rohrer@fz-juelich.de)
 
+## Chambers other than SAPHIR
+
+The chamber is a profile, `chambers/<id>.chamber.json`: volume, leak flow (the `DILUTE` expression is built
+from them), wall material, light source (`sun` with latitude/longitude, `lamps` with their jNO2, or `dark`),
+a data archive JUICE can read (SAPHIR only, so far), the default chamber effects, and per-species wall
+losses. Choose the chamber on *Where and when*; picking another one applies that profile's switches and
+`DILUTE` to the *Chamber* step, loading a saved experiment never does. `chambers/` ships SAPHIR (identical
+to the built-in profile, checked by `python chambers.py --selftest`) and ~18 chambers from
+[docs/chamber_survey.md](docs/chamber_survey.md) with public numbers, marked `verified: false` — edit them
+to your chamber's values, or copy `generic_lamps.chamber.json` to a new file for your own chamber.
+Lamp photolysis is not modelled yet: every chamber still runs with the sunlight parametrisation of the
+mechanism (`PHTFKT`, scaled by jNO2 and capped at the clear-sky value), which is wrong for lamps at
+night and brighter than the clear-sky sun. That is the next step.
+
 ## Measured chamber conditions from your own file
 
 JUICE needs the physical conditions of the chamber over time. At SAPHIR they are read from the

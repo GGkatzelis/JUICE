@@ -32,7 +32,7 @@ from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, Chamber
                              list_templates, load_template, load_spec, save_spec, validate,
                              mechanism_species, render_easy, easy_form, write_experiment,
                              H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS, ACTIONS, ACTION_ORDER)
-from easy_builder import scan_mechanisms, EasyBuilderDialog
+from easy_builder import scan_mechanisms, EasyBuilderDialog, DILUTE_DEF
 import saphir_wiki
 import injection_calc as ic
 import mechanism_registry as mreg
@@ -327,8 +327,10 @@ class ConditionsPage(QWizardPage):
         g.addWidget(QLabel("step [s]"), r, 6); self.step = QSpinBox(); self.step.setRange(10, 3600); self.step.setValue(60); g.addWidget(self.step, r, 7); r += 1
         g.addWidget(QLabel("Chamber"), r, 0)
         self.chamber = QComboBox(); self.chamber.addItems(list(ic.CHAMBERS)); g.addWidget(self.chamber, r, 1)
+        self.chamber.setToolTip("chambers/<id>.chamber.json — volume, light source, data archive, default chamber effects; add a file for your own chamber")
         self.chamber_info = _info(""); g.addWidget(self.chamber_info, r, 2, 1, 6)
-        self.chamber.currentTextChanged.connect(self._chamber_changed); self._chamber_changed(self.chamber.currentText()); r += 1
+        self._loading = False                     # set_from() in progress: a chamber change then does not reset the chamber effects
+        self.chamber.currentTextChanged.connect(self._chamber_changed); r += 1
         lay.addLayout(g)
 
         lay.addWidget(QLabel("<b>Chamber conditions</b> — temperature, pressure, humidity, flow and photolysis frequencies "
@@ -381,8 +383,17 @@ class ConditionsPage(QWizardPage):
         self._archive_status()
 
     def _chamber_changed(self, name: str):
-        ch = ic.chamber(name)
-        self.chamber_info.setText(f"{ch.volume_m3:g} m³ — used to turn injected amounts into ppb. {ch.note}")
+        p = ic.chamber(name)
+        self.chamber_info.setText(f"{p.name}: {p.summary()}. " + (p.note.split(" — ")[0] if p.note else ""))
+        self.src_archive.setText(f"Measured — from the {p.name} data archive (T, P, humidity, flow, J values, NO, NO2, O3)" if p.has_archive
+                                 else f"Measured — from a data archive (none that JUICE can read for {p.name})")
+        self.src_archive.setEnabled(p.has_archive)
+        if p.has_archive and (self._loading is False or not self.archive.text().strip()):
+            self.archive.setText(p.archive_root)
+        if not p.has_archive and self.src_archive.isChecked():
+            self.src_file.setChecked(True)
+        if not self._loading and hasattr(self.wiz, "chamber_selected"):
+            self.wiz.chamber_selected(p.id)       # the user picked another chamber: its default effects and DILUTE
 
     def _source_changed(self, _on: bool = False):
         archive_on, file_on = self.src_archive.isChecked(), self.src_file.isChecked()
@@ -429,7 +440,17 @@ class ConditionsPage(QWizardPage):
             self.archive_status.setText("✖ no archive folder for this date"); self.archive_status.setStyleSheet("color: #c0392b;")
 
     def set_from(self, c: Conditions):
+        self._loading = True
+        try:
+            self._set_from(c)
+        finally:
+            self._loading = False
+
+    def _set_from(self, c: Conditions):
+        if self.chamber.count() != len(ic.CHAMBERS):              # a profile was added meanwhile
+            self.chamber.blockSignals(True); self.chamber.clear(); self.chamber.addItems(list(ic.CHAMBERS)); self.chamber.blockSignals(False)
         self.chamber.setCurrentText(c.chamber_name if c.chamber_name in ic.CHAMBERS else ic.DEFAULT_CHAMBER)
+        self._chamber_changed(self.chamber.currentText())
         self.date.setText(c.date); self.start.setText(c.start); self.end.setText(c.end); self.step.setValue(int(c.step_s))
         self.archive.setText(c.archive_root); self.temp.setText(f"{c.temperature_K:g}")
         self.press.setText(f"{c.pressure_hPa:g}"); self.h2o.setText(f"{c.h2o_percent:g}"); self.flow.setText(f"{c.flow_m3h:g}")
@@ -997,7 +1018,7 @@ CHAMBER_ITEMS = [
     ("bgreac", "Background OH reactivity",
      "Unmeasured trace organics consuming OH, expressed as a CO-equivalent amount Y (ppb)."),
     ("dilution", "Dilution by the replenishment flow",
-     "The chamber is kept at slight overpressure; all species are diluted with the flow (DILUTE from FLOW, 276 m³)."),
+     "The chamber is kept at slight overpressure; all species are diluted with the flow (DILUTE from FLOW, the leak flow and the chamber volume of the profile)."),
     ("dark_hono", "Dark HONO formation from water on the walls",
      "Slow heterogeneous HONO production without light."),
     ("light_source", "NO2 source under illumination (SNO2)",
@@ -1052,7 +1073,7 @@ class ChamberPage(QWizardPage):
         g.addWidget(QLabel("HCHO source:"), 1, 0); g.addWidget(self.hcho_cname, 1, 1); g.addWidget(self.hcho_const, 1, 2); g.addWidget(self.hcho_lhs, 1, 3); g.addWidget(QLabel("-->"), 1, 4); g.addWidget(self.hcho_rhs, 1, 5)
         self.y_ppb = QLineEdit("250"); self.y_name = QLineEdit("qY"); self.y_prod = QLineEdit("CH3O2")
         g.addWidget(QLabel("Background reactivity Y [ppb CO-eq]"), 2, 0); g.addWidget(self.y_ppb, 2, 1); g.addWidget(QLabel("name / product"), 2, 2); g.addWidget(self.y_name, 2, 3); g.addWidget(self.y_prod, 2, 5)
-        self.dilute = QLineEdit("CONST((FLOW+0.010*60)/(276.*3600.))"); self.tracer = QLineEdit("XNOy, NA")
+        self.dilute = QLineEdit(DILUTE_DEF); self.tracer = QLineEdit("XNOy, NA")
         g.addWidget(QLabel("DILUTE ="), 3, 0); g.addWidget(self.dilute, 3, 1, 1, 3); g.addWidget(QLabel("tracer dilution"), 3, 4); g.addWidget(self.tracer, 3, 5)
         self.dark_rate = QLineEdit("1e-012/10"); self.dark_rhs = QLineEdit("HONO+XNOy")
         g.addWidget(QLabel("Dark HONO: H2O --> "), 4, 0); g.addWidget(self.dark_rhs, 4, 1); g.addWidget(QLabel("k = CONST("), 4, 2); g.addWidget(self.dark_rate, 4, 3)
@@ -1778,6 +1799,12 @@ class ExperimentHost:
         self.page_init.set_from(spec)
         self.page_review.overrides.setPlainText("\n".join(spec.overrides))
         self.import_notes = list(spec.import_notes)
+
+    def chamber_selected(self, profile_id: str):
+        """The user chose another chamber on 'Where and when': the chamber page takes that profile's
+        default switches and DILUTE (strengths and formulas typed so far are kept)."""
+        from experiment_spec import chamber_defaults
+        self.page_chamber.set_from(chamber_defaults(profile_id, self.page_chamber.get(self._base.chamber)))
 
     def collect_spec(self) -> ExperimentSpec:
         b = self._base

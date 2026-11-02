@@ -1,0 +1,38 @@
+{
+ "name": "Manchester Aerosol Chamber",
+ "volume_m3": 18.0,
+ "id": "MAC",
+ "institution": "University of Manchester",
+ "location": "Manchester, UK",
+ "note": "T 15–35 °C, RH 25–80 %. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Shao et al. 2022, Atmos. Meas. Tech. 15, 539"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "FEP bag",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "2 × 6 kW Xe arc + 112 halogen bulbs",
+  "jno2_full_s1": 0.00225
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {
+  "O3": 2.1e-06,
+  "NO2": 9.4e-07
+ },
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

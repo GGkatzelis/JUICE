@@ -1,0 +1,36 @@
+{
+ "name": "AIDA",
+ "volume_m3": 84.5,
+ "id": "AIDA",
+ "institution": "KIT Karlsruhe",
+ "location": "Karlsruhe, Germany",
+ "note": "T controlled −90 to +60 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Wagner et al. 2003",
+  "Rüscher/Wagner et al. 2022, Atmos. Meas. Tech. 15, 1795"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "aluminium (AlMg3)",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "~3000 LEDs 305–528 nm, 1400 W solar simulator",
+  "jno2_full_s1": 0.00158
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

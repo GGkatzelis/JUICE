@@ -1,0 +1,41 @@
+{
+ "name": "SAPHIR",
+ "volume_m3": 276.0,
+ "id": "SAPHIR",
+ "institution": "Forschungszentrum Jülich, IEK-8 / ICE-3",
+ "location": "Jülich, Germany",
+ "note": "Jülich SAPHIR, 270 m³ nominal; 276 m³ is the value in the IDL DILUTE formula and is kept for consistency with the FACSIMILE scenarios.",
+ "references": [
+  "Rohrer et al. 2005, Atmos. Chem. Phys. 5, 2189",
+  "Bohn et al. 2005, Atmos. Chem. Phys. 5, 493"
+ ],
+ "verified": true,
+ "surface_m2": 320.0,
+ "material": "double-wall FEP film",
+ "leak_flow_m3h": 0.6,
+ "dilute_expr": "CONST((FLOW+0.010*60)/(276.*3600.))",
+ "light": {
+  "type": "sun",
+  "lat": 50.9086,
+  "lon": 6.3639,
+  "lamps": "",
+  "jno2_full_s1": 0.0
+ },
+ "archive": {
+  "kind": "saphir_nc",
+  "root": "Z:\\IEK8-SAPHIR\\data"
+ },
+ "effects": {
+  "walldep": true,
+  "hono": true,
+  "hcho": true,
+  "bgreac": true,
+  "dilution": true,
+  "dark_hono": true,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

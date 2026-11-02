@@ -4,9 +4,9 @@ injection_calc.py — how much ended up in the chamber, and what the MCM calls i
 Three things the experiment wizard needs that are chamber- and lab-specific:
 
 1. Chamber profiles   (`CHAMBERS`, `ChamberProfile`)  — volume and the standard
-   conditions used to turn an injected amount into a mixing ratio.  SAPHIR is the
-   only profile today; the IDL/FACSIMILE scripts use 276 m³ (DILUTE formula), so the
-   same number is used here for consistency.  Other chambers: add a profile.
+   conditions used to turn an injected amount into a mixing ratio.  They live in
+   chambers.py / chambers/*.chamber.json (SAPHIR: 276 m³ as in the IDL DILUTE formula);
+   the names here are kept so existing code keeps working.
 
 2. Delivery calculations (`resolve_delivery`) — the operator notes one of
        ppb          "7.5 ppb"                       expected mixing ratio, used as is
@@ -41,26 +41,7 @@ R_GAS = 8.314462618            # J/(mol K)
 # Chamber profiles
 # ─────────────────────────────────────────────────────────────────────────────
 
-@dataclass
-class ChamberProfile:
-    name: str
-    volume_m3: float
-    note: str = ""
-    mfc_std_T_K: float = 273.15          # "standard" of the mass-flow controllers (sccm / slpm)
-    mfc_std_P_hPa: float = 1013.25
-    syringe_T_K: float = 293.15          # gas syringes are filled at lab temperature
-
-
-CHAMBERS: Dict[str, ChamberProfile] = {
-    "SAPHIR": ChamberProfile("SAPHIR", 276.0,
-                             "Jülich SAPHIR, 270 m³ nominal; 276 m³ is the value in the IDL DILUTE formula "
-                             "and is kept for consistency with the FACSIMILE scenarios."),
-}
-DEFAULT_CHAMBER = "SAPHIR"
-
-
-def chamber(name: str = "") -> ChamberProfile:
-    return CHAMBERS.get(name or DEFAULT_CHAMBER, CHAMBERS[DEFAULT_CHAMBER])
+from chambers import ChamberProfile, CHAMBERS, DEFAULT_CHAMBER, chamber   # noqa: F401  (profiles are data now)
 
 
 def moles_air(volume_m3: float, T_K: float, P_hPa: float) -> float:

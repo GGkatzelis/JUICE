@@ -83,6 +83,15 @@ class CheckableComboBox(QPushButton):
 # ── SAPHIR fixed constants ─────────────────────────────────────────────────────
 SAPHIR_LAT = 50.9086       # degrees N, Jülich Research Centre
 SAPHIR_LON = 6.3639        # degrees E
+
+
+def _chamber_volume(name: str = "") -> float:
+    """Volume of a chamber profile (SAPHIR by default) for the injection → ppb estimate of this dialog."""
+    try:
+        import chambers
+        return float(chambers.chamber(name).volume_m3)
+    except Exception:
+        return 276.0
 SAPHIR_ARCHIVE_ROOT = r"Z:\IEK8-SAPHIR\data"
 
 # ENZ time epoch: seconds since 2000-01-01 00:00:00 UTC
@@ -223,21 +232,23 @@ VOC_KNOWN = {
 # Pure helper functions
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compute_solar_zenith(grid_seconds):
+def compute_solar_zenith(grid_seconds, lat=SAPHIR_LAT, lon=SAPHIR_LON):
     """
-    Compute solar zenith angle (degrees) for SAPHIR (Jülich) at each time step.
+    Compute solar zenith angle (degrees) at each time step for a site (default SAPHIR, Jülich).
     Uses Spencer (1971) / Iqbal (1983) algorithm. No external dependencies.
 
     Parameters
     ----------
     grid_seconds : array-like
         Seconds since ENZ_EPOCH (2000-01-01 00:00:00 UTC).
+    lat, lon : float
+        Site latitude (degrees N) and longitude (degrees E); from the chamber profile.
 
     Returns
     -------
     np.ndarray of SZA in degrees (0 = overhead, 90 = horizon).
     """
-    lat_rad = math.radians(SAPHIR_LAT)
+    lat_rad = math.radians(lat)
     results = []
     for s in grid_seconds:
         dt = ENZ_EPOCH + timedelta(seconds=float(s))
@@ -257,7 +268,7 @@ def compute_solar_zenith(grid_seconds):
 
         # Solar time (minutes from midnight)
         utc_min = dt.hour * 60.0 + dt.minute + dt.second / 60.0
-        solar_time = utc_min + eot + 4.0 * SAPHIR_LON
+        solar_time = utc_min + eot + 4.0 * lon
 
         # Hour angle (radians): 0 at solar noon, ±π at midnight
         hour_angle = math.radians((solar_time / 4.0) - 180.0)
@@ -1030,8 +1041,8 @@ class EnzBuilderDialog(QDialog):
                         vol_mL = float(vol_s) * 1e-3       # μl → mL
                         dens   = float(dens_s)
                         mw     = float(mw_s)
-                        # n_air at standard conditions (T=298 K, P=1013 hPa, V=276 m³)
-                        n_air  = (101_300.0 * 276.0) / (8.314 * 298.0)
+                        # n_air at standard conditions (T=298 K, P=1013 hPa, chamber volume of the profile)
+                        n_air  = (101_300.0 * _chamber_volume()) / (8.314 * 298.0)
                         n_voc  = (vol_mL * dens) / mw
                         ppb    = (n_voc / n_air) * 1e9
                         it = self.inj_table.item(row, 9)
@@ -1460,12 +1471,12 @@ class EnzBuilderDialog(QDialog):
                 vol_ul_str    = f'{vol_ul:.4f}'
                 vol_mL        = vol_ul * 1e-3
                 if molar_mass and density:
-                    n_air = (101_300.0 * 276.0) / (8.314 * 298.0)
+                    n_air = (101_300.0 * _chamber_volume()) / (8.314 * 298.0)
                     n_voc = (vol_mL * density) / molar_mass
                     ppb   = (n_voc / n_air) * 1e9
                     value_ppb_str = f'{ppb:.3f}'
                     note_suffix   = (f'{val} {unit} \u2192 {ppb:.2f} ppb '
-                                     f'(std 298K/1013hPa/276m\u00b3)')
+                                     f'(std 298K/1013hPa/{_chamber_volume():g}m\u00b3)')
                 else:
                     note_suffix = (f'{val} {unit} \u2014 fill Density & MW '
                                    f'to auto-compute ppb')

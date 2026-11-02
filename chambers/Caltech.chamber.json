@@ -1,0 +1,36 @@
+{
+ "name": "Caltech environmental chambers",
+ "volume_m3": 24.0,
+ "id": "Caltech",
+ "institution": "California Institute of Technology",
+ "location": "Pasadena, USA",
+ "note": "Two chambers, 18–28 m³ in the records; 24 m³ is a middle value — set yours. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Cocker et al. 2001, Environ. Sci. Technol.",
+  "Keywood et al. 2004"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "FEP 2 mil",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "UV blacklights 354 nm + sunshine fluorescents",
+  "jno2_full_s1": 0.0
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

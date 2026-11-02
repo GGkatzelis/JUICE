@@ -1,0 +1,40 @@
+{
+ "name": "EUPHORE",
+ "volume_m3": 200.0,
+ "id": "EUPHORE",
+ "institution": "CEAM Valencia",
+ "location": "Paterna (Valencia), Spain",
+ "note": "Two chambers of ~200 m³; site coordinates approximate. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Becker 1996 (EUPHORE final report)"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "FEP film 0.13 mm, half-spherical",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "sun",
+  "lat": 39.5,
+  "lon": -0.45,
+  "lamps": "",
+  "jno2_full_s1": 0.0
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {
+  "O3": 3e-06,
+  "HNO3": 8.2e-05
+ },
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

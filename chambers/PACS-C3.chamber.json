@@ -1,0 +1,35 @@
+{
+ "name": "PACS-C3",
+ "volume_m3": 27.0,
+ "id": "PACS-C3",
+ "institution": "Paul Scherrer Institut",
+ "location": "Villigen, Switzerland",
+ "note": "T 15–30 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Paulsen et al. 2005, Environ. Sci. Technol. 39, 2668"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "FEP bag",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "4 Xe arc lamps (16 kW) + blacklights",
+  "jno2_full_s1": 0.002
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

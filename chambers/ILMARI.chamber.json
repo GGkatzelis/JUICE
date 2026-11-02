@@ -1,0 +1,35 @@
+{
+ "name": "ILMARI",
+ "volume_m3": 29.0,
+ "id": "ILMARI",
+ "institution": "University of Eastern Finland",
+ "location": "Kuopio, Finland",
+ "note": "jNO2 adjustable 0–1.0e-2 1/s; T 25 ± 1 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [
+  "Leskinen et al. 2015, Atmos. Meas. Tech. 8, 2267"
+ ],
+ "verified": false,
+ "surface_m2": 0.0,
+ "material": "FEP film",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "up to 160 blacklights 350/365 nm",
+  "jno2_full_s1": 0.01
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}

@@ -270,12 +270,43 @@ def pulse_column(grid: np.ndarray, c: Conditions, start: str, duration_min: floa
     return col
 
 
-def _solar_zenith(grid: np.ndarray) -> np.ndarray:
+def _solar_zenith(grid: np.ndarray, c: Optional[Conditions] = None) -> np.ndarray:
+    """Solar zenith angle at the chamber's site (profile lat/lon; SAPHIR's when the profile has none)."""
     try:
+        import chambers
         from enz_builder import compute_solar_zenith
-        return np.asarray(compute_solar_zenith(grid), dtype=float)
+        lat, lon = chambers.chamber(c.chamber_name if c else "").lat_lon
+        return np.asarray(compute_solar_zenith(grid, lat, lon), dtype=float)
     except Exception:
         return np.full(len(grid), 45.0)
+
+
+def chamber_defaults(profile_id: str, base: Optional[ChamberEffects] = None) -> ChamberEffects:
+    """ChamberEffects for a chamber profile: its default switches and its DILUTE expression; every
+    formula and strength stays as in `base` (or the SAPHIR defaults of the dataclass)."""
+    import chambers
+    p = chambers.chamber(profile_id)
+    ch = ChamberEffects(**{k: getattr(base, k) for k in ChamberEffects.__dataclass_fields__}) if base else ChamberEffects()
+    for key in chambers.EFFECT_KEYS:
+        setattr(ch, key, p.effect(key))
+    ch.dilute_expr = chambers.render_dilute(p)
+    return ch
+
+
+def apply_chamber(spec: ExperimentSpec, profile_id: str) -> ExperimentSpec:
+    """Switch an experiment to another chamber: name, archive root, default chamber effects and
+    DILUTE.  Called when the user picks a chamber, never when a saved experiment is loaded (what was
+    saved is what runs).  For SAPHIR this reproduces the dataclass defaults exactly."""
+    import chambers
+    p = chambers.chamber(profile_id)
+    c = spec.conditions
+    c.chamber_name = p.id
+    if p.has_archive:
+        c.archive_root = p.archive_root
+    elif c.source == "archive":
+        c.source = ""                               # nothing to read from: the user has to choose file or manual
+    spec.chamber = chamber_defaults(p.id, spec.chamber)
+    return spec
 
 
 def _roof(grid: np.ndarray, c: Conditions) -> np.ndarray:
@@ -493,7 +524,7 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     n = len(grid)
     notes: List[str] = []
     cols: Dict[str, np.ndarray] = {}
-    cols["sz"] = _solar_zenith(grid)
+    cols["sz"] = _solar_zenith(grid, c)
     cols["hv"] = _roof(grid, c)
 
     def phys(name: str, const: float) -> np.ndarray:

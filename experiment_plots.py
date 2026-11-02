@@ -109,7 +109,8 @@ def chamber_sources(spec: ExperimentSpec, cols: Dict[str, np.ndarray], n: int) -
         out["dark HONO"] = _const(ch.dark_hono_rate, 1e-13) * h2o * 1e-2 * M * to_ppb_h
     if ch.dilution:
         flow = np.asarray(cols.get("dilute", np.full(n, c.flow_m3h)), dtype=float)
-        out["dilution"] = (flow + 0.6) / (ic.chamber(c.chamber_name).volume_m3 * 3600.0) * 3600.0 * 100.0
+        prof = ic.chamber(c.chamber_name)
+        out["dilution"] = (flow + prof.leak_flow_m3h) / (prof.volume_m3 * 3600.0) * 3600.0 * 100.0
     return out
 
 

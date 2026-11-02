@@ -1,0 +1,33 @@
+{
+ "name": "Georgia Tech Environmental Chamber",
+ "volume_m3": 12.6,
+ "id": "GTEC",
+ "institution": "Georgia Institute of Technology",
+ "location": "Atlanta, USA",
+ "note": "Two chambers; T 4–40 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "references": [],
+ "verified": false,
+ "surface_m2": 32.5,
+ "material": "FEP",
+ "leak_flow_m3h": 0.0,
+ "dilute_expr": "",
+ "light": {
+  "type": "lamps",
+  "lamps": "UVA blacklights 300–400 nm (peak 354) + sunshine fluorescents",
+  "jno2_full_s1": 0.0
+ },
+ "archive": {},
+ "effects": {
+  "walldep": false,
+  "hono": false,
+  "hcho": false,
+  "bgreac": false,
+  "dilution": true,
+  "dark_hono": false,
+  "light_source": false
+ },
+ "wall_loss_s1": {},
+ "mfc_std_T_K": 273.15,
+ "mfc_std_P_hPa": 1013.25,
+ "syringe_T_K": 293.15
+}
