@@ -96,6 +96,13 @@ JUICE is continuously regression-tested against FACSIMILE. Current agreement on 
 | ethanol   | 9/38 / 12/38      | baseline HO2 −7.6% propagates to peroxides; see `architecture.md` |
 | mcm_full  | ~20% / ~20%       | long-tail 5-30% from RO2 coupling + solver tolerance |
 
+Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
+experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
+is run headless and checked against physics that must hold (every J = 0 in the dark, dilution rate,
+extended photostationary state jNO₂[NO₂] = [NO](k[O₃]+k[HO₂]+k[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
+production only while lit, N₂O₅ at night) and against the pinned result in
+`MCM_tested_scenarios/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
+
 See [architecture.md](architecture.md) for the physics, validation deep-dive, and known limitations.
 
 To run and compare your own scenario, follow [docs/validation_with_claude.md](docs/validation_with_claude.md) — a step-by-step playbook (also pasteable directly into Claude Code or claude.ai to have it run the comparison and return a markdown report).

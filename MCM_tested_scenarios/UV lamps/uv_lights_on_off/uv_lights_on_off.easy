@@ -1,0 +1,109 @@
+;TITLE=UV-lamp chamber check: NO2 dark -> lights on -> ethanol -> lights off
+   
+; INCLUDES: 
+#include mcm_3-3-1_facsimile_complete.init.incl   ;MCM3-spezific constants and functions
+#include mcm_3-3-1_facsimile_complete.init.ro2.incl   ;RO2 species
+#include mcm_3-3-1_facsimile_complete.init.mech   ;reaction mechanism for given VOC
+#include mcm_3-3-1_facsimile_complete.init.rate   ;rate constants for given VOC reactions
+#include j_clear_sky.incl
+*********************************************************************
+ 
+; DILUTION, /DIL
+#include mcm_3-3-1_facsimile_complete.init.dil.mech   ;dilution mechanism
+#include mcm_3-3-1_facsimile_complete.init.dil.rate   ;dilution rate
+DILUTE = CONST((FLOW+0)/(10.0*3600.))
+DIL = CONST(1.)   ;Switch for dilution
+ 
+*********************************************************************
+ 
+;/MEASURED, use measured photolysis frequencies (given in ENZ-file)
+;           and other measured parameters]
+jno2 = INPUT(jno2)
+k[NO2 + HV --> NO + O] = CONST(jno2)
+
+T_in = INPUT(t)   ;temperature in K
+T = CONST(298)
+P = CONST(1013)   ;pressure in hPa
+SZA = INPUT(sz)   ;solar zenith angle
+SZ = INPUT(sz)   ;solar zenith angle
+HV_in = INPUT(hv)   ;switch for light
+HV = CONST(HV_in)
+FLOW = INPUT(dilute)   ;flow into the chamber in m^3/h
+H2O_in = INPUT(H2O)   ;mixing ratio of water
+H2O = CONST(1e-2*M*H2O_in)
+*********************************************************************
+ 
+; FILES: 
+FILES[ENZ]   = uv_lights_on_off.enz
+ 
+; FACSIMILE PARAMETERS
+FACS[HMAX]   = 30
+FACS[OUTSTEP]   = 100000
+ 
+; INITIALS:
+INITIAL[*] = CONST(1.)
+INITIAL[NO2] = CONST(20e-9*M)
+INITIAL[H2O2] = CONST(1000e-9*M)
+
+; Tracer dilution
+XNOy+DIL-->
+k[XNOy+DIL-->]=CONST(DILUTE)
+
+NA+DIL-->
+k[NA+DIL-->]=CONST(DILUTE)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; INJECTIONS (ENZ switch columns) and additional definitions
+Q_ethanol=input(Q_ethanol)   ;200 ppb ethanol under the lamps
+Q_ethanol-->C2H5OH
+k[Q_ethanol-->C2H5OH]=CONST(M*1e-9/60*200)
+
+; CHEMISTRY: base MCM_v3.3.1 (Master Chemical Mechanism v3.3.1, complete, 3.3.1; fac sha256 7f995a5100a5; source https://mcm.york.ac.uk/MCM/export, downloaded file dates: mcm_3-3-1_facsimile_complete.fac 2024-01-19, mcm_3-3-1_species_complete.tsv 2025-07-03, mcm_3-3-1_kpp_complete.eqn 2024-07-08, mcm_3-3-1_kpp_constants_mcm.f90 2024-01-02, mcm_3-3-1_fortran_complete.txt 2023-09-08, mcm_export_species.tsv 2026-02-12)
+; LAMP PHOTOLYSIS (generic_lamps): J<n> = jno2 x ratio, SYNTHETIC blacklight_350 spectrum x sigma*phi - a stand-in, not a measurement
+;   ratios j(X)/j(NO2) of this light source (clear sky at 30 deg in brackets): J1 0.00469 (0.00331), J3 0.00107 (0.000823), J7 0.254 (0.221), J11 0.0033 (0.00335), J12 0.00827 (0.00533), J13 0.000446 (0.000462), J21 5.89e-05 (5.64e-05), J41 0.000807 (0.000608)
+;   note: built-in blacklight_350: synthetic Gaussian for a UV-A 350 nm blacklight (Sylvania F40/350BL class); the 300-320 nm tail that sets j(O1D) and j(H2O2) is NOT known ? measure the lamps
+;   note: stand-in sensitivity to the unknown <320 nm tail (symmetric vs 30 % narrower short side): J1 4.7e-03 vs 2.2e-04, J3 1.1e-03 vs 6.6e-04, J11 3.3e-03 vs 8.8e-04 - measure the lamp spectrum to pin these down
+;   no sigma*phi data, scaled from the J with the closest MCM shape: J15<-J14, J16<-J14, J17<-J14, J61<-J12
+J1 = CONST(jno2*4.6855e-03)
+k[O3+hv-->O1D] = CONST(jno2*4.6855e-03)
+J2 = CONST(jno2*5.4991e-03)
+k[O3+hv-->O] = CONST(jno2*5.4991e-03)
+J3 = CONST(jno2*1.0670e-03)
+k[H2O2+hv-->OH+OH] = CONST(jno2*1.0670e-03)
+J4 = CONST(jno2)
+J5 = CONST(jno2*1.2453e-43)
+k[NO3+hv-->NO] = CONST(jno2*1.2453e-43)
+J6 = CONST(jno2*7.3783e-05)
+k[NO3+hv-->NO2+O] = CONST(jno2*7.3783e-05)
+J7 = CONST(jno2*2.5436e-01)
+k[HONO+hv-->OH+NO] = CONST(jno2*2.5436e-01)
+J8 = CONST(jno2*6.9583e-05)
+k[HNO3+hv-->OH+NO2] = CONST(jno2*6.9583e-05)
+J11 = CONST(jno2*3.3023e-03)
+J12 = CONST(jno2*8.2670e-03)
+J13 = CONST(jno2*4.4563e-04)
+J14 = CONST(jno2*1.6059e-03)
+J15 = CONST(jno2*1.6549e-03)
+J16 = CONST(jno2*9.9284e-04)
+J17 = CONST(jno2*4.5791e-03)
+J18 = CONST(jno2*1.8237e-04)
+J19 = CONST(jno2*1.8237e-04)
+J20 = CONST(jno2*9.3522e-02)
+J21 = CONST(jno2*5.8939e-05)
+J22 = CONST(jno2*4.5035e-04)
+J23 = CONST(jno2*3.1201e-04)
+J24 = CONST(jno2*3.1201e-04)
+J31 = CONST(jno2*2.2110e-03)
+J32 = CONST(jno2*3.6552e-03)
+J33 = CONST(jno2*6.3554e-03)
+J34 = CONST(jno2*1.6408e-02)
+J35 = CONST(jno2*3.3394e-03)
+J41 = CONST(jno2*8.0745e-04)
+J51 = CONST(jno2*9.7915e-05)
+J52 = CONST(jno2*1.6221e-04)
+J53 = CONST(jno2*2.1597e-04)
+J54 = CONST(jno2*2.7402e-04)
+J55 = CONST(jno2*6.0426e-04)
+J56 = CONST(jno2*2.5166e-03)
+J61 = CONST(jno2*9.6801e-02)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

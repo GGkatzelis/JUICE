@@ -293,8 +293,8 @@ def chamber_defaults(profile_id: str, base: Optional[ChamberEffects] = None) -> 
         setattr(ch, key, p.effect(key))
     ch.dilute_expr = chambers.render_dilute(p)
     ch.wall_loss_s1 = {str(k): float(v) for k, v in (p.wall_loss_s1 or {}).items()}
-    ch.wall_loss = bool(ch.wall_loss_s1)
-    return ch
+    ch.wall_loss = False                         # opt-in: irreversible first-order losses of inorganics only; organic
+    return ch                                    # vapour-wall partitioning (reversible, volatility-dependent) comes with the SOA feature
 
 
 def _profile(c: Conditions):

@@ -1,0 +1,109 @@
+{
+ "name": "uv_lights_on_off",
+ "title": "UV-lamp chamber check: NO2 dark -> lights on -> ethanol -> lights off",
+ "conditions": {
+  "date": "2024-07-09",
+  "start": "08:00",
+  "end": "15:00",
+  "step_s": 60,
+  "source": "manual",
+  "archive_root": "Z:\\IEK8-SAPHIR\\data",
+  "input_file": "",
+  "temperature_K": 298.0,
+  "temperature_mode": "const",
+  "pressure_hPa": 1013.0,
+  "h2o_percent": 1.0,
+  "flow_m3h": 0.5,
+  "roof_open": [
+   [
+    "09:00",
+    "13:00"
+   ]
+  ],
+  "j_source": "measured",
+  "constrain_species": [],
+  "chamber_name": "generic_lamps"
+ },
+ "precursors": [
+  "C2H5OH"
+ ],
+ "base_mechanism": "MCM_v3.3.1",
+ "addons": [],
+ "mechanism_stem": "mcm_3-3-1_facsimile_complete.init",
+ "inorganic_only": false,
+ "mech_incl_suffix": ".incl",
+ "use_anorg": false,
+ "use_j_clear_sky_incl": true,
+ "injections": [
+  {
+   "name": "ethanol",
+   "products": "C2H5OH",
+   "total_ppb": "200",
+   "start": "10:30",
+   "duration_min": 10,
+   "column": "",
+   "switch": "",
+   "extra_channels": [],
+   "chain": [],
+   "comment": "200 ppb ethanol under the lamps",
+   "action": "",
+   "delivery": {}
+  }
+ ],
+ "chamber": {
+  "walldep": false,
+  "walldep_value": "1.",
+  "hono": false,
+  "hono_lhs": "SHONO+HV",
+  "hono_rhs": "HONO+XNOy",
+  "hono_const": "2.6*0.7",
+  "hono_rate": "CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )",
+  "hcho": false,
+  "hcho_lhs": "qSHCHO+HV",
+  "hcho_rhs": "HCHO",
+  "hcho_const_name": "qSHCHO",
+  "hcho_const": "1",
+  "hcho_rate": "CONST(2.8e6)",
+  "bgreac": false,
+  "y_name": "qY",
+  "y_product": "CH3O2",
+  "y_ppb": "250",
+  "y_expr": "",
+  "y_rate": "CONST(2.4e-13)",
+  "dilution": true,
+  "dilute_expr": "CONST((FLOW+0)/(10.0*3600.))",
+  "dil_value": "CONST(1.)",
+  "dil_flow_const": "",
+  "tracer_dilution": [
+   "XNOy",
+   "NA"
+  ],
+  "dark_hono": false,
+  "dark_hono_rhs": "HONO+XNOy",
+  "dark_hono_rate": "1e-012/10",
+  "light_source": false,
+  "light_source_rhs": "NO2+XNOy",
+  "light_source_rate": "jno2/5e-3/3600*HV_in/1.6*0.55",
+  "light_source_initial": "M*1e-9*3.5*0",
+  "wall_loss": false,
+  "wall_loss_s1": {}
+ },
+ "initial_all": "1.",
+ "initials": [
+  [
+   "NO2",
+   "20e-9*M"
+  ],
+  [
+   "H2O2",
+   "1000e-9*M"
+  ]
+ ],
+ "hmax": "30",
+ "outstep": "100000",
+ "extra_includes": [],
+ "overrides": [],
+ "reaction_adjustments": [],
+ "import_notes": [],
+ "template": ""
+}
