@@ -4,9 +4,10 @@
  "id": "ILMARI",
  "institution": "University of Eastern Finland",
  "location": "Kuopio, Finland",
- "note": "jNO2 adjustable 0–1.0e-2 1/s; T 25 ± 1 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "jNO2 adjustable 0–1.0e-2 1/s; T 25 ± 1 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values lamp J ratios from a SYNTHETIC 365 nm BLB spectrum until a measured spectrum is given.",
  "references": [
-  "Leskinen et al. 2015, Atmos. Meas. Tech. 8, 2267"
+  "Leskinen et al. 2015, Atmos. Meas. Tech. 8, 2267",
+  "Leskinen et al. 2015 AMT 8, 2267: j(NO2) = 1.03e-2 1/s with 160 BLB (365 nm) lamps (actinometry)"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -16,7 +17,12 @@
  "light": {
   "type": "lamps",
   "lamps": "up to 160 blacklights 350/365 nm",
-  "jno2_full_s1": 0.01
+  "jno2_full_s1": 0.01,
+  "spectrum": "",
+  "spectrum_builtin": "blacklight_365",
+  "solar_like": false,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

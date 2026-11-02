@@ -94,7 +94,7 @@ def chamber_sources(spec: ExperimentSpec, cols: Dict[str, np.ndarray], n: int) -
     hv = np.asarray(cols.get("hv", np.zeros(n)), dtype=float)
     j = cols.get("jNO2", cols.get("jno2"))
     j = np.asarray(j, dtype=float) if j is not None else np.zeros(n)
-    if not np.any(j > 0):                                      # manual / clear-sky run: jNO2 = PHTFKT(1.165e-2, 0.244, -0.267)
+    if not np.any(j > 0) and ic.chamber(c.chamber_name).light_type == "sun":   # manual / clear-sky run: jNO2 = PHTFKT(1.165e-2, 0.244, -0.267); lamp/dark chambers carry their jNO2 column
         sza = np.asarray(cols.get("sz", np.full(n, 90.0)), dtype=float)
         cz = np.maximum(np.cos(np.radians(np.minimum(sza, 89.9))), 1e-3)
         j = np.where(sza < 89.9, 1.165e-2 * cz ** 0.244 * np.exp(-0.267 / cz), 0.0) * (hv > 0.5)

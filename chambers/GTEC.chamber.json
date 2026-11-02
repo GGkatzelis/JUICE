@@ -4,8 +4,10 @@
  "id": "GTEC",
  "institution": "Georgia Institute of Technology",
  "location": "Atlanta, USA",
- "note": "Two chambers; T 4–40 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
- "references": [],
+ "note": "Two chambers; T 4–40 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values lamp J ratios from a SYNTHETIC 350 nm blacklight spectrum until a measured spectrum is given.",
+ "references": [
+  "Boyd et al. 2015 ACP 15, 7497: j(NO2) = 0.28 1/min (actinometry)"
+ ],
  "verified": false,
  "surface_m2": 32.5,
  "material": "FEP",
@@ -14,7 +16,12 @@
  "light": {
   "type": "lamps",
   "lamps": "UVA blacklights 300–400 nm (peak 354) + sunshine fluorescents",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0047,
+  "spectrum": "",
+  "spectrum_builtin": "blacklight_350",
+  "solar_like": false,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

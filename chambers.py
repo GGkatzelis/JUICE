@@ -139,9 +139,27 @@ def profile_from_dict(d: Dict, fallback_id: str = "") -> ChamberProfile:
     p = ChamberProfile(**known) if "name" in known and "volume_m3" in known else ChamberProfile(name=known.get("name", fallback_id), volume_m3=float(known.get("volume_m3", 0) or 0), **{k: v for k, v in known.items() if k not in ("name", "volume_m3")})
     p.id = p.id or fallback_id or safe_id(p.name)
     p.effects = {k: bool(p.effects.get(k, k == "dilution")) for k in EFFECT_KEYS}
-    p.light = dict(p.light or {})
-    p.light.setdefault("type", "sun")
+    p.light = normalise_light(p.light)
     return p
+
+
+LAMP_LIGHT_KEYS = ("spectrum", "spectrum_builtin", "solar_like", "effective_sza", "j_ratios")
+
+
+def normalise_light(light: Optional[Dict]) -> Dict:
+    """The light dict with its full key set for its type (so profiles compare equal whether they
+    came from disk, the built-in or the editor): sun → lat, lon; lamps → the lamp J keys
+    (see lamp_photolysis.py); every type → lamps text and jno2_full_s1."""
+    L = dict(light or {})
+    t = str(L.get("type", "sun")).lower()
+    L["type"] = t if t in LIGHT_TYPES else "sun"
+    if L["type"] == "sun":
+        L.setdefault("lat", SAPHIR_LAT); L.setdefault("lon", SAPHIR_LON)
+    L.setdefault("lamps", ""); L.setdefault("jno2_full_s1", 0.0)
+    if L["type"] == "lamps":
+        L.setdefault("spectrum", ""); L.setdefault("spectrum_builtin", ""); L.setdefault("solar_like", False)
+        L.setdefault("effective_sza", 30.0); L.setdefault("j_ratios", {})
+    return L
 
 
 def profile_to_dict(p: ChamberProfile) -> Dict:

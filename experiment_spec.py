@@ -207,6 +207,8 @@ class ChamberEffects:
     light_source_rhs: str = "NO2+XNOy"
     light_source_rate: str = "jno2/5e-3/3600*HV_in/1.6*0.55"
     light_source_initial: str = "M*1e-9*3.5*0"
+    wall_loss: bool = False                                   # generic first-order wall losses of the chamber profile
+    wall_loss_s1: Dict[str, float] = field(default_factory=dict)   # species → k [1/s]; empty for SAPHIR (saphir.walldep.incl instead)
 
 
 @dataclass
@@ -290,7 +292,14 @@ def chamber_defaults(profile_id: str, base: Optional[ChamberEffects] = None) -> 
     for key in chambers.EFFECT_KEYS:
         setattr(ch, key, p.effect(key))
     ch.dilute_expr = chambers.render_dilute(p)
+    ch.wall_loss_s1 = {str(k): float(v) for k, v in (p.wall_loss_s1 or {}).items()}
+    ch.wall_loss = bool(ch.wall_loss_s1)
     return ch
+
+
+def _profile(c: Conditions):
+    import chambers
+    return chambers.chamber(c.chamber_name)
 
 
 def apply_chamber(spec: ExperimentSpec, profile_id: str) -> ExperimentSpec:
@@ -467,7 +476,25 @@ def measured_j_rows(c: Conditions, grid: Optional[np.ndarray] = None) -> Tuple[L
     User file: only the J values the file has.  A J value the file lacks is NOT overridden, so the
     mechanism's own value stays in force — the MCM clear-sky shape scaled by the measured jNO2
     (PHTFKT) — instead of being set to 0, which would switch that photolysis off.  Without jNO2
-    nothing can be scaled: the run falls back to the clear-sky model."""
+    nothing can be scaled: the run falls back to the clear-sky model.
+    Lamp chamber: jNO2 always (the measured column, else jNO2 at full power × lights); the other
+    five only when a file has them; everything else comes from the lamp J table (lamp_photolysis)."""
+    p = _profile(c)
+    if p.light_type == "lamps":
+        grid = time_grid(c) if grid is None else grid
+        have = [J_INPUTS[0]]
+        jfull = float(p.light.get("jno2_full_s1", 0) or 0)
+        notes: List[str] = []
+        if c.source == "file" and _file_column(c, "jNO2", grid, 0.0) is not None:
+            pass
+        else:
+            notes.append(f"jNO2: {'not in the input file — ' if c.source == 'file' else ''}jNO2 at full lamp power ({jfull:g} 1/s) × lights")
+        if c.source == "file":
+            have += [row for row in J_INPUTS[1:] if _file_column(c, J_ENZ_NAME[row[0]], grid, 0.0) is not None]
+        missing = [J_ENZ_NAME[row[0]] for row in J_INPUTS if row not in have]
+        if missing:
+            notes.append(f"{', '.join(missing)}: from the lamp J table (jNO2 × ratio of this light source)")
+        return have, notes
     if c.j_source != "measured" or c.source != "file":
         return list(J_INPUTS), []
     grid = time_grid(c) if grid is None else grid
@@ -492,7 +519,17 @@ def input_sources(spec: ExperimentSpec) -> Dict[str, str]:
         out[label] = where if arr is not None else f"constant {const:g} {unit}"
     out["pressure"] = (where if (c.source == "file" and _file_column(c, "p", grid, c.pressure_hPa) is not None)
                        else f"constant {c.pressure_hPa:g} hPa")
-    if c.j_source == "measured" and where:
+    light = _profile(c).light_type
+    if light == "lamps":
+        import lamp_photolysis as lp
+        rows, j_notes = measured_j_rows(c, grid)
+        meas = [J_ENZ_NAME[r[0]] for r in rows]
+        lj = lp.lamp_j(_profile(c))
+        out["photolysis"] = (f"lamps — {where + ': ' if where else ''}{', '.join(meas)}; " if where else "lamps — jNO2 at full power × lights; ") \
+            + f"other J values: {lp.summary(lj)}"
+    elif light == "dark":
+        out["photolysis"] = "none (dark chamber profile)"
+    elif c.j_source == "measured" and where:
         have = [j for j in J_ENZ_NAME.values() if _measured_column(c, j, grid, 0.0) is not None]
         if c.source == "file":
             rows, _n = measured_j_rows(c, grid)
@@ -505,8 +542,9 @@ def input_sources(spec: ExperimentSpec) -> Dict[str, str]:
             out["photolysis"] = (f"{where}: " + ", ".join(have)) if have else "NO measured J values found — columns would be 0"
     else:
         out["photolysis"] = "clear-sky model (jNO2 from the solar zenith angle, the rest from the mechanism)"
-    out["roof"] = (f"{where} (roof column)" if (c.source == "file" and _file_column(c, "hv", grid, 0.0) is not None)
-                   else (", ".join(f"{o}–{cl}" for o, cl in c.roof_open) or "never open (dark)"))
+    key = "lights" if light != "sun" else "roof"
+    out[key] = (f"{where} ({key} column)" if (c.source == "file" and _file_column(c, "hv", grid, 0.0) is not None)
+                else (", ".join(f"{o}–{cl}" for o, cl in c.roof_open) or ("never open (dark)" if light == "sun" else "never on (dark)")))
     if c.constrain_species:
         missing = [s for s in c.constrain_species if _measured_column(c, s, grid, 0.0) is None]
         out["held to measurements"] = ", ".join(c.constrain_species) + (f" — MISSING: {', '.join(missing)}" if missing else "")
@@ -526,6 +564,7 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     cols: Dict[str, np.ndarray] = {}
     cols["sz"] = _solar_zenith(grid, c)
     cols["hv"] = _roof(grid, c)
+    light = _profile(c).light_type                            # sun: roof 0/1; lamps: lights 0–1; dark: 0
 
     def phys(name: str, const: float) -> np.ndarray:
         if c.source in ("archive", "file"):
@@ -538,7 +577,11 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     if c.source == "file":                                 # a roof column in the file wins over typed roof times
         hv = _file_column(c, "hv", grid, 0.0)
         if hv is not None:
-            cols["hv"] = (np.asarray(hv) > 0.5).astype(float)
+            cols["hv"] = (np.clip(np.asarray(hv, float), 0.0, 1.0) if light == "lamps"     # lamps may be dimmed: 0–1
+                          else (np.asarray(hv) > 0.5).astype(float))
+    if light == "dark" and np.any(cols["hv"] > 0):
+        notes.append("dark chamber: the light switch is forced to 0 (profile light type 'dark')")
+        cols["hv"] = np.zeros(n)
     cols["dilute"] = phys("dilute", c.flow_m3h)
     cols["t"] = phys("t", c.temperature_K)
     cols["H2O"] = phys("H2O", c.h2o_percent)
@@ -553,13 +596,15 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     for sp in c.constrain_species:
         if sp not in cols:
             notes.append(f"constrained species {sp} has no ENZ column")
-    if c.j_source == "measured":
+    if c.j_source == "measured" or light == "lamps":
         rows, j_notes = measured_j_rows(c, grid)
         notes.extend(j_notes)
         for jname, jcol, _rxn in rows:
             enz_name = J_ENZ_NAME[jname]
             arr = _measured_column(c, enz_name, grid, 0.0) if c.source in ("archive", "file") else None
-            if arr is None:
+            if arr is None and light == "lamps" and jname == "jno2":
+                arr = float(_profile(c).light.get("jno2_full_s1", 0) or 0) * cols["hv"]   # noted by measured_j_rows
+            elif arr is None:
                 notes.append(f"{enz_name}: no measured J values, column filled with 0")
                 arr = np.zeros(n)
             cols[enz_name] = arr
@@ -598,13 +643,30 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
     f.light_source_rate, f.light_source_initial = ch.light_source_rate, ch.light_source_initial
 
     # measured block
-    rows = measured_j_rows(c)[0] if c.j_source == "measured" else []
+    p = _profile(c)
+    lamps = p.light_type == "lamps"
+    rows = measured_j_rows(c)[0] if (c.j_source == "measured" or lamps) else []
     if rows:
         f.j_rows = [MeasuredRow(j, "enz", col) for j, col, _ in rows]
         f.j_overrides = {j: rxn for j, _, rxn in rows}
     else:                                              # clear sky — also a user file without jNO2
         f.j_rows = [MeasuredRow("jno2", "const", "", CLEAR_SKY_JNO2)]
         f.j_overrides = {"jno2": J_INPUTS[0][2]}
+    lamp_lines: List[str] = []
+    if lamps:
+        # no saphir.jmeasured_02.incl: it swaps NO2+hv-->NO+O for NO2+hv-->O3+NO and re-defines NO3/HNO3/
+        # CH3CHO photolysis with the solar shape (PHOTMMSC).  The lamp block binds every J<n> to jNO2 ×
+        # the ratio of this light source; the inorganic reactions keep their mechanism text.
+        import lamp_photolysis as lp
+        f.jmeasured_include = ""
+        f.j_overrides["jno2"] = "NO2 + HV --> NO + O"
+        lamp_lines = lp.easy_lines(lp.lamp_j(p), measured={j: lp.MEASURED_J[j] for j, _c, _r in rows if j in lp.MEASURED_J},
+                                   profile_id=p.id)
+    wall_lines: List[str] = []
+    if ch.wall_loss and ch.wall_loss_s1:
+        wall_lines = [f"; WALL LOSS (chamber profile {p.id}): first-order loss to the walls, k in 1/s"]
+        for sp, k in ch.wall_loss_s1.items():
+            wall_lines += [f"{sp} -->", f"k[{sp} --> ] = CONST({float(k):g})"]
     t_row = (MeasuredRow("T", "enz", "t", comment="temperature in K") if c.temperature_mode == "enz"
              else MeasuredRow("T", "const", "t", f"{c.temperature_K:g}", "temperature in K"))
     f.setting_rows = [
@@ -634,6 +696,7 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
         f.extra_statements += mreg.provenance_lines(spec.base_mechanism, list(spec.addons))
     except Exception as e:
         f.extra_statements.append(f"; CHEMISTRY: provenance unavailable ({e})")
+    f.extra_statements += lamp_lines + wall_lines
     for sp in c.constrain_species:
         f.extra_statements += [f"{sp}_in=input({sp})", f"{sp}=CONST({sp}_in*1e-9*M)"]
     for rxn, rate, cmt in spec.reaction_adjustments:
@@ -868,11 +931,15 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         pass
     if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only:
         msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
-    if c.j_source == "measured" and c.source == "manual":
+    light = _profile(c).light_type
+    if c.j_source == "measured" and c.source == "manual" and light == "sun":
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
                                 "(no photolysis). Use 'clear sky' or provide archive data."))
-    if not c.roof_open:
-        msgs.append(("warning", "Roof never opens (HV = 0 all day): dark experiment."))
+    if light == "lamps" and not float(_profile(c).light.get("jno2_full_s1", 0) or 0) and c.source != "file":
+        msgs.append(("error", "The chamber profile gives no jNO2 at full lamp power and no file with jNO2 is used: no photolysis."))
+    if not c.roof_open and light != "dark":
+        msgs.append(("warning", "Roof never opens (HV = 0 all day): dark experiment." if light == "sun"
+                     else "Lights never on (HV = 0 all day): dark experiment."))
     seen_cols = set()
     for inj in spec.injections:
         col = inj.enz_column()

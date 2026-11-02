@@ -4,7 +4,7 @@
  "id": "PACS-C3",
  "institution": "Paul Scherrer Institut",
  "location": "Villigen, Switzerland",
- "note": "T 15–30 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "T 15–30 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [
   "Paulsen et al. 2005, Environ. Sci. Technol. 39, 2668"
  ],
@@ -16,7 +16,12 @@
  "light": {
   "type": "lamps",
   "lamps": "4 Xe arc lamps (16 kW) + blacklights",
-  "jno2_full_s1": 0.002
+  "jno2_full_s1": 0.002,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

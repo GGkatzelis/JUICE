@@ -4,7 +4,7 @@
  "id": "UC_Davis",
  "institution": "University of California Davis",
  "location": "Davis, USA",
- "note": "numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values lamp J ratios from a SYNTHETIC 350 nm blacklight spectrum until a measured spectrum is given.",
  "references": [],
  "verified": false,
  "surface_m2": 0.0,
@@ -14,7 +14,12 @@
  "light": {
   "type": "lamps",
   "lamps": "UVA black lamps",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0,
+  "spectrum": "",
+  "spectrum_builtin": "blacklight_350",
+  "solar_like": false,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

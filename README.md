@@ -131,9 +131,22 @@ to the built-in profile, checked by `python chambers.py --selftest`) and ~18 cha
 to the chamber list changes a profile (volume, leak flow, light source, archive, default effects, wall losses,
 injection standards), *New …* adds your own chamber pre-filled with a copy of the selected one; both write the
 JSON file. SAPHIR opens read-only — *Save as new chamber …* derives another chamber from it.
-Lamp photolysis is not modelled yet: every chamber still runs with the sunlight parametrisation of the
-mechanism (`PHTFKT`, scaled by jNO2 and capped at the clear-sky value), which is wrong for lamps at
-night and brighter than the clear-sky sun. That is the next step.
+
+**Lamp chambers** (profile light type `lamps`) do not use the sunlight parametrisation. jNO2 comes from the
+measured column of your conditions file or from the profile's jNO2 at full power × the lights schedule
+(a `lights` column may be 0–1 for dimmed lamps); every other photolysis frequency is
+`J<n> = jNO2 × ∫σφF dλ / ∫σφF dλ (NO2)` with F the relative lamp spectrum — the method of Carter/SAPRC,
+of the MCM's own chamber evaluations and of F0AM (see [docs/lamp_photolysis_practice.md](docs/lamp_photolysis_practice.md)).
+σ·φ at 298 K for the MCM J numbers is `photolysis/sigma_phi_298K.csv`, built from the NCAR tuv-x data
+(JPL/IUPAC) by `photolysis/build_sigma_phi.py`. The profile gives the spectrum as a two-column file
+(`light.spectrum`), a synthetic stand-in (`light.spectrum_builtin`: `blacklight_350`, `blacklight_365` — a
+Gaussian guess; j(O1D) and j(H2O2) hinge on the lamps' 300–320 nm tail, which only a measured spectrum
+settles), `solar_like` for a Pyrex-filtered Xe/Ar arc (MCM clear-sky ratios at `effective_sza`), and
+measured ratios `light.j_ratios` that override everything. The generated EASY states the ratios next to
+the clear-sky ones. Measured J columns (jO1D, jHONO, …) always win. Literature values per lamp type:
+[docs/lamp_photolysis_literature.md](docs/lamp_photolysis_literature.md). First-order wall losses of a
+profile (`wall_loss_s1`) become `k[X --> ] = CONST(k)` lines, switchable on the *Chamber* step.
+`python lamp_photolysis.py --selftest` prints the ratios of the stand-ins and of every lamp profile.
 
 ## Measured chamber conditions from your own file
 

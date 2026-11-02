@@ -4,10 +4,11 @@
  "id": "AIDA",
  "institution": "KIT Karlsruhe",
  "location": "Karlsruhe, Germany",
- "note": "T controlled −90 to +60 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "T controlled −90 to +60 °C. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [
   "Wagner et al. 2003",
-  "Rüscher/Wagner et al. 2022, Atmos. Meas. Tech. 15, 1795"
+  "Rüscher/Wagner et al. 2022, Atmos. Meas. Tech. 15, 1795",
+  "Vallon et al. 2022: j(NO2) = 1.58e-3 1/s (actinometry); LED simulator 305-528 nm, ratios depend on the 305-320 nm LED share"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -17,7 +18,12 @@
  "light": {
   "type": "lamps",
   "lamps": "~3000 LEDs 305–528 nm, 1400 W solar simulator",
-  "jno2_full_s1": 0.00158
+  "jno2_full_s1": 0.00158,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

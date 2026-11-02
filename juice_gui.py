@@ -234,7 +234,7 @@ class InputsPlot(QWidget):
             ax1.plot(hours, cols["t"], color=ACCENT, lw=1.2); ax1.set_ylabel("T [K]", color=ACCENT, fontsize=8)
         if "hv" in cols:
             axb = ax1.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.4, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
-        ax1.set_title("temperature, roof open (yellow)", fontsize=8); ax1.set_xlabel("hour (UTC)", fontsize=8)
+        ax1.set_title("temperature, light on (yellow)", fontsize=8); ax1.set_xlabel("hour (UTC)", fontsize=8)
         jn = [k for k in cols if k.lower() == "jno2"] or [k for k in cols if k.lower().startswith("j")][:1]
         for k in jn:
             ax2.plot(hours, cols[k], lw=1, color="#3b6fc4", label=k)
@@ -292,7 +292,7 @@ class InputsPlot(QWidget):
         ax.set_yticks([i + 0.4 for i in range(len(qs))]); ax.set_yticklabels(qs, fontsize=7); ax.set_ylim(-0.2, max(1, len(qs)))
         if "hv" in cols:
             axb = ax.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.25, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
-        ax.set_xlabel("hour (UTC)", fontsize=8); ax.set_title("injection pulses (roof open in yellow)", fontsize=8)
+        ax.set_xlabel("hour (UTC)", fontsize=8); ax.set_title("injection pulses (light on in yellow)", fontsize=8)
 
     def _chamber(self, ax, spec, hours, cols):
         import experiment_plots as ep

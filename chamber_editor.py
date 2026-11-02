@@ -13,6 +13,7 @@ chamber …" as the way to derive another chamber from it.
 from __future__ import annotations
 
 import copy
+import os
 from typing import Optional
 
 from PyQt6.QtCore import Qt
@@ -99,6 +100,34 @@ class ChamberDialog(QDialog):
         self.jno2_lab = QLabel("jNO2 at full power [1/s]"); g.addWidget(self.jno2_lab, r, 0)
         j = self.p.light.get("jno2_full_s1", 0) or 0
         self.jno2 = QLineEdit(f"{float(j):g}" if j else ""); self.jno2.setPlaceholderText("actinometry or lamp spectrum, e.g. 2e-3"); g.addWidget(self.jno2, r, 1); r += 1
+        # how the other J values follow from jNO2 (lamp_photolysis.py): spectrum > built-in stand-in > solar-like; measured ratios override
+        self.spec_lab = QLabel("Lamp spectrum file"); g.addWidget(self.spec_lab, r, 0)
+        self.spectrum = QLineEdit(str(self.p.light.get("spectrum", "") or "")); g.addWidget(self.spectrum, r, 1, 1, 2)
+        self.spectrum.setPlaceholderText("two columns wavelength_nm, intensity; '# units: energy|photons' header; path relative to chambers/")
+        self.spec_btn = QPushButton("Browse …"); self.spec_btn.clicked.connect(self._browse_spectrum); g.addWidget(self.spec_btn, r, 3); r += 1
+        self.builtin_lab = QLabel("or built-in stand-in"); g.addWidget(self.builtin_lab, r, 0)
+        self.builtin = QComboBox(); self.builtin.addItems(["none", "blacklight_350 — synthetic Gaussian 352/40 nm", "blacklight_365 — synthetic Gaussian 368/25 nm"])
+        self.builtin.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        bi = str(self.p.light.get("spectrum_builtin", "") or "")
+        self.builtin.setCurrentIndex({"blacklight_350": 1, "blacklight_365": 2}.get(bi, 0)); g.addWidget(self.builtin, r, 1, 1, 2); r += 1
+        self.solar_like = QCheckBox("solar-like source (Pyrex-filtered Xe/Ar arc, LED simulator): MCM clear-sky ratios at zenith angle [°]")
+        self.solar_like.setChecked(bool(self.p.light.get("solar_like", False))); g.addWidget(self.solar_like, r, 0, 1, 3)
+        self.eff_sza = QLineEdit(f"{float(self.p.light.get('effective_sza', 30) or 30):g}"); self.eff_sza.setFixedWidth(60); g.addWidget(self.eff_sza, r, 3); r += 1
+        self.jr_lab = QLabel("Measured j(X)/j(NO2)"); g.addWidget(self.jr_lab, r, 0, Qt.AlignmentFlag.AlignTop)
+        self.jratios = QTableWidget(0, 2); self.jratios.setHorizontalHeaderLabels(["MCM J number (1 = O3→O1D, 3 = H2O2, 7 = HONO, 11/12 = HCHO)", "ratio"])
+        self.jratios.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch); self.jratios.setMaximumHeight(90)
+        for k, v in (self.p.light.get("j_ratios") or {}).items():
+            rr = self.jratios.rowCount(); self.jratios.insertRow(rr)
+            self.jratios.setItem(rr, 0, QTableWidgetItem(str(k))); self.jratios.setItem(rr, 1, QTableWidgetItem(f"{float(v):g}"))
+        g.addWidget(self.jratios, r, 1, 1, 2)
+        jb = QVBoxLayout(); self.jr_add = QPushButton("+"); self.jr_del = QPushButton("−")
+        self.jr_add.clicked.connect(lambda: (self.jratios.insertRow(self.jratios.rowCount())))
+        self.jr_del.clicked.connect(lambda: self.jratios.removeRow(self.jratios.currentRow()) if self.jratios.currentRow() >= 0 else None)
+        jb.addWidget(self.jr_add); jb.addWidget(self.jr_del); jb.addStretch(); g.addLayout(jb, r, 3); r += 1
+        self.ratio_btn = QPushButton("Preview J ratios of this light source"); self.ratio_btn.clicked.connect(self._preview_ratios)
+        g.addWidget(self.ratio_btn, r, 0, 1, 2); self.ratio_lab = _info(""); g.addWidget(self.ratio_lab, r, 2, 1, 2); r += 1
+        self.lamp_widgets = [self.spec_lab, self.spectrum, self.spec_btn, self.builtin_lab, self.builtin, self.solar_like, self.eff_sza,
+                             self.jr_lab, self.jratios, self.jr_add, self.jr_del, self.ratio_btn, self.ratio_lab]
         self.light_note = _info(""); g.addWidget(self.light_note, r, 0, 1, 4)
         self.ltype.currentIndexChanged.connect(self._light_changed)
         lay.addWidget(box)
@@ -190,12 +219,36 @@ class ChamberDialog(QDialog):
         self.lamps_lab.setText("Lamps" if lamps else "Auxiliary lamps (if any)")
         for w in (self.jno2_lab, self.jno2):
             w.setVisible(lamps)
+        for w in self.lamp_widgets:
+            w.setVisible(lamps)
         self.light_note.setText({
             "sun": "Photolysis frequencies come from measured J values when the experiment has them, otherwise from the "
                    "clear-sky parametrisation of the mechanism at this site.",
-            "lamps": "jNO2 at full power scales the lamp photolysis; the ratios of the other J values to jNO2 depend on the "
-                     "lamp spectrum (lamp J table: next step; until then the sunlight spectrum scaled by jNO2 is used).",
+            "lamps": "jNO2 (measured column, else jNO2 at full power × lights) anchors the photolysis; every other J value is "
+                     "jNO2 × ∫σφF dλ / ∫σφF dλ(NO2) with F the lamp spectrum — the method of Carter/SAPRC and the MCM chamber "
+                     "evaluations. Without a measured spectrum the built-in stand-in is a Gaussian guess (j(O1D), j(H2O2) uncertain ×3–10).",
             "dark": "No photolysis: HV stays 0 and all J values are 0 unless the experiment gives measured ones."}[t])
+
+    def _browse_spectrum(self):
+        from PyQt6.QtWidgets import QFileDialog
+        p, _ = QFileDialog.getOpenFileName(self, "Lamp spectrum (wavelength_nm, intensity)", C.CHAMBER_DIR, "Tables (*.csv *.txt *.dat);;All files (*)")
+        if p:
+            try:
+                rel = os.path.relpath(p, C.CHAMBER_DIR)
+                p = rel if not rel.startswith("..") else p
+            except ValueError:
+                pass
+            self.spectrum.setText(p)
+
+    def _preview_ratios(self):
+        try:
+            import lamp_photolysis as lp
+            if not lp.sigma_phi_available():
+                self.ratio_lab.setText("σ·φ table missing (photolysis/sigma_phi_298K.csv)"); return
+            lj = lp.lamp_j(self.profile())
+            self.ratio_lab.setText(lp.summary(lj) + ("; " + "; ".join(lj.notes) if lj.notes else ""))
+        except Exception as e:
+            self.ratio_lab.setText(f"cannot compute: {e}")
 
     # ── collect / save ──
     def profile(self) -> C.ChamberProfile:
@@ -214,7 +267,19 @@ class ChamberDialog(QDialog):
             light.update(lat=_float(self.lat, C.SAPHIR_LAT), lon=_float(self.lon, C.SAPHIR_LON))
         light["lamps"] = self.lamps.text().strip()           # kept for every type: a sun chamber may have auxiliary lamps
         light["jno2_full_s1"] = _float(self.jno2)
-        p.light = light
+        if t == "lamps":
+            light["spectrum"] = self.spectrum.text().strip()
+            light["spectrum_builtin"] = ["", "blacklight_350", "blacklight_365"][self.builtin.currentIndex()]
+            light["solar_like"] = self.solar_like.isChecked()
+            light["effective_sza"] = _float(self.eff_sza, 30.0)
+            jr = {}
+            for rr in range(self.jratios.rowCount()):
+                k = self.jratios.item(rr, 0).text().strip() if self.jratios.item(rr, 0) else ""
+                v = self.jratios.item(rr, 1).text().strip() if self.jratios.item(rr, 1) else ""
+                if k and v:
+                    jr["J" + k.upper().lstrip("J")] = float(v)
+            light["j_ratios"] = jr
+        p.light = C.normalise_light(light)
         p.archive = {"kind": "saphir_nc", "root": self.aroot.text().strip()} if self.akind.currentIndex() > 0 and self.aroot.text().strip() else {}
         p.effects = {k: cb.isChecked() for k, cb in self.effects.items()}
         wl = {}

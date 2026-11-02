@@ -4,9 +4,10 @@
  "id": "UCR_CE-CERT",
  "institution": "University of California Riverside",
  "location": "Riverside, USA",
- "note": "Two 90 m³ reactors; O3 wall loss ~0.8 %/h reported. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "Two 90 m³ reactors; O3 wall loss ~0.8 %/h reported. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [
-  "Carter et al. 2005, Atmos. Environ."
+  "Carter et al. 2005, Atmos. Environ.",
+  "Carter et al. 2005 AE 39, 7768: j(NO2) = 0.26 1/min with the Ar arc (actinometry); blacklights 0.25 1/min"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -16,7 +17,12 @@
  "light": {
   "type": "lamps",
   "lamps": "Ar arc lamp + 80 blacklights 350BL",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0043,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

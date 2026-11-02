@@ -4,8 +4,10 @@
  "id": "QUAREC",
  "institution": "University of Wuppertal",
  "location": "Wuppertal, Germany",
- "note": "The one European chamber with 254 nm lamps found in the survey. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
- "references": [],
+ "note": "The one European chamber with 254 nm lamps found in the survey. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values no lamp spectrum: clear-sky J ratios used (wrong for this source).",
+ "references": [
+  "254 nm Hg lamps: ratios to j(NO2) are not meaningful (docs/lamp_photolysis_literature.md §3.2) — give measured J values"
+ ],
  "verified": false,
  "surface_m2": 0.0,
  "material": "quartz, Al flanges",
@@ -14,7 +16,12 @@
  "light": {
   "type": "lamps",
   "lamps": "32 × TL05 300–480 nm + 32 × TUV 40 W low-pressure Hg 254 nm",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": false,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

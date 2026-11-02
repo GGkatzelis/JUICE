@@ -4,9 +4,10 @@
  "id": "CESAM",
  "institution": "LISA / CNRS Créteil",
  "location": "Créteil, France",
- "note": "jO1D 1.4e-5 1/s reported with jNO2 4.2e-3. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "jO1D 1.4e-5 1/s reported with jNO2 4.2e-3. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [
-  "Wang et al. 2011, Atmos. Meas. Tech. 4, 2465"
+  "Wang et al. 2011, Atmos. Meas. Tech. 4, 2465",
+  "Wang et al. 2011 AMT 4, 2465: j(NO2) = 4.2e-3 1/s, j(O1D)/j(NO2) = 3.3e-3 — Pyrex-filtered Xe arc is sun-like"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -16,7 +17,12 @@
  "light": {
   "type": "lamps",
   "lamps": "3 × 4 kW Xe arc",
-  "jno2_full_s1": 0.0042
+  "jno2_full_s1": 0.0042,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

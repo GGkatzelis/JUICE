@@ -366,7 +366,7 @@ class ConditionsPage(QWizardPage):
         mg.addWidget(QLabel("Replenishment flow [m³/h]"), 1, 2); self.flow = QLineEdit("6.0"); mg.addWidget(self.flow, 1, 3)
         lay.addWidget(self.manual_box)
 
-        hr = QHBoxLayout(); hr.addWidget(QLabel("<b>Roof open / close</b> (HH:MM, UTC)"))
+        hr = QHBoxLayout(); self.roof_label = QLabel("<b>Roof open / close</b> (HH:MM, UTC)"); hr.addWidget(self.roof_label)
         a = QPushButton("+"); a.clicked.connect(lambda: _add_row(self.roof, ["09:30", "18:30"])); hr.addWidget(a)
         d = QPushButton("−"); d.clicked.connect(lambda: _del_row(self.roof)); hr.addWidget(d); hr.addStretch(); lay.addLayout(hr)
         self.roof = _table(["open", "close"]); self.roof.setMaximumHeight(100); lay.addWidget(self.roof)
@@ -426,6 +426,16 @@ class ConditionsPage(QWizardPage):
         self.src_archive.setText(f"Measured — from the {p.name} data archive (T, P, humidity, flow, J values, NO, NO2, O3)" if p.has_archive
                                  else f"Measured — from a data archive (none that JUICE can read for {p.name})")
         self.src_archive.setEnabled(p.has_archive)
+        lt = p.light_type
+        self.roof_label.setText({"sun": "<b>Roof open / close</b> (HH:MM, UTC)",
+                                 "lamps": "<b>Lights on / off</b> (HH:MM, UTC; a 'lights' column 0–1 in the input file wins)",
+                                 "dark": "<b>Light</b> — dark chamber profile: the model runs without light"}[lt])
+        self.roof.setEnabled(lt != "dark")
+        self.src_manual.setText("Manual — constant values, clear-sky photolysis (no measurements available)" if lt == "sun" else
+                                "Manual — constant values; photolysis from the chamber profile's lamps (jNO2 at full power × lights)" if lt == "lamps" else
+                                "Manual — constant values (dark chamber)")
+        self.jsrc.setEnabled(lt == "sun")
+        self.jsrc.setToolTip("" if lt == "sun" else "lamp chambers: jNO2 measured or from the profile, the other J values from the lamp spectrum (lamp_photolysis)")
         if p.has_archive and (self._loading is False or not self.archive.text().strip()):
             self.archive.setText(p.archive_root)
         if not p.has_archive and self.src_archive.isChecked():
@@ -1103,6 +1113,9 @@ class ChamberPage(QWizardPage):
                 row.addSpacing(12); row.addWidget(QLabel("×")); row.addWidget(self.dark_factor)
                 desc += " Factor on the standard rate (1 = IDL default, 0.1 as in scene_09)."
             row.addStretch(); lay.addLayout(row); lay.addWidget(_info("      " + desc))
+        self.wall_loss_cb = QCheckBox("First-order wall losses of the chamber profile"); lay.addWidget(self.wall_loss_cb)
+        self.wall_loss_info = _info("      none in this profile"); lay.addWidget(self.wall_loss_info)
+        self._wall_loss_s1: Dict[str, float] = {}
         self.params = QGroupBox("Parameters (advanced)"); self.params.setCheckable(True); self.params.setChecked(False)
         g = QGridLayout(self.params)
         self.hono_const = QLineEdit("2.6*0.7"); self.hono_lhs = QLineEdit("SHONO+HV"); self.hono_rhs = QLineEdit("HONO+XNOy")
@@ -1140,11 +1153,16 @@ class ChamberPage(QWizardPage):
         self.light_rate.setText(ch.light_source_rate); self.light_rhs.setText(ch.light_source_rhs); self.light_init.setText(ch.light_source_initial)
         self.hono_factor.setText(ch.hono_const); self.y_inline.setText(ch.y_expr or ch.y_ppb)
         self.dark_factor.setText(_dark_factor_of(ch.dark_hono_rate))
+        self._wall_loss_s1 = {str(k): float(v) for k, v in (ch.wall_loss_s1 or {}).items()}
+        self.wall_loss_cb.setChecked(bool(ch.wall_loss) and bool(self._wall_loss_s1)); self.wall_loss_cb.setEnabled(bool(self._wall_loss_s1))
+        self.wall_loss_info.setText("      " + (", ".join(f"{sp} {k:g} 1/s" for sp, k in self._wall_loss_s1.items()) + " (edit the chamber profile to change them)"
+                                               if self._wall_loss_s1 else "none in this profile (Edit … the chamber on 'Where and when' to add some)"))
 
     def get(self, base: ChamberEffects) -> ChamberEffects:
         ch = ChamberEffects(**{k: getattr(base, k) for k in ChamberEffects.__dataclass_fields__})
         for key, cb in self.checks.items():
             setattr(ch, key, cb.isChecked())
+        ch.wall_loss, ch.wall_loss_s1 = self.wall_loss_cb.isChecked(), dict(self._wall_loss_s1)
         ch.hono_const, ch.hono_lhs, ch.hono_rhs = self.hono_const.text().strip(), self.hono_lhs.text().strip(), self.hono_rhs.text().strip()
         ch.hcho_const, ch.hcho_lhs, ch.hcho_rhs, ch.hcho_const_name = self.hcho_const.text().strip(), self.hcho_lhs.text().strip(), self.hcho_rhs.text().strip(), self.hcho_cname.text().strip()
         yv = self.y_ppb.text().strip()

@@ -4,7 +4,7 @@
  "id": "CHARME",
  "institution": "LPCA, Université du Littoral",
  "location": "Dunkerque, France",
- "note": "S/V 2.4 1/m; T −20 to +50 °C; evacuable. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "S/V 2.4 1/m; T −20 to +50 °C; evacuable. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [],
  "verified": false,
  "surface_m2": 22.0,
@@ -14,7 +14,12 @@
  "light": {
   "type": "lamps",
   "lamps": "4 × 5 kW Xe lamps",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

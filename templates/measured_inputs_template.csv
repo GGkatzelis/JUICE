@@ -13,11 +13,13 @@
 #   H2O       water vapour, vol-%                   (aliases water; ppm is recognised when > 100)
 #   RH        relative humidity, %  — instead of H2O; converted with T and p (needs the T column)
 #   flow      dilution / replenishment flow, m3/h   (aliases dilute, total_flow)
-#   roof      1 = roof open / lights on, 0 = dark   (aliases hv, lights; values are rounded to 0/1)
-#             — without this column the roof times typed in 'Where and when' are used
+#   roof      1 = roof open / lights on, 0 = dark   (aliases hv, lights; sunlit chamber: rounded to 0/1;
+#             lamp chamber: 0–1 = fraction of full lamp power, e.g. 0.5 with half the lamps on)
+#             — without this column the roof / lights times typed in 'Where and when' are used
 # OPTIONAL — light.  Give jNO2 whenever you have it: with jNO2 in the file every photolysis frequency the
-#   file lacks is modelled from it (the mechanism's clear-sky spectrum scaled by your jNO2).  Without jNO2
-#   the run uses the clear-sky model for the date, time and the Jülich sun.
+#   file lacks is modelled from it (sunlit chamber: the mechanism's clear-sky spectrum scaled by your jNO2;
+#   lamp chamber: the lamp spectrum of the chamber profile).  Without jNO2 a sunlit chamber uses the
+#   clear-sky model for the date, time and site; a lamp chamber uses jNO2 at full power × the lights column.
 #   jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m   photolysis frequencies, 1/s   (aliases j_no2, jo(1d), jhcho_rad, jhcho_mol …)
 # OPTIONAL — measured trace gases, ppb: only used when a species is held to its measurement
 #   NO NO2 O3                                                                 (aliases ozone, no_ppb …)

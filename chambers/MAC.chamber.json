@@ -4,9 +4,10 @@
  "id": "MAC",
  "institution": "University of Manchester",
  "location": "Manchester, UK",
- "note": "T 15–35 °C, RH 25–80 %. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "T 15–35 °C, RH 25–80 %. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values solar-like source: MCM clear-sky J ratios at 30 deg.",
  "references": [
-  "Shao et al. 2022, Atmos. Meas. Tech. 15, 539"
+  "Shao et al. 2022, Atmos. Meas. Tech. 15, 539",
+  "Shao et al. 2022 AMT 15, 539: j(NO2) = 2.25e-3 1/s (actinometry)"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -16,7 +17,12 @@
  "light": {
   "type": "lamps",
   "lamps": "2 × 6 kW Xe arc + 112 halogen bulbs",
-  "jno2_full_s1": 0.00225
+  "jno2_full_s1": 0.00225,
+  "spectrum": "",
+  "spectrum_builtin": "",
+  "solar_like": true,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {

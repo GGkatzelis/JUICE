@@ -4,10 +4,11 @@
  "id": "Caltech",
  "institution": "California Institute of Technology",
  "location": "Pasadena, USA",
- "note": "Two chambers, 18–28 m³ in the records; 24 m³ is a middle value — set yours. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values",
+ "note": "Two chambers, 18–28 m³ in the records; 24 m³ is a middle value — set yours. numbers from docs/chamber_survey.md (public record, not checked with the operators) — edit to your chamber's values lamp J ratios from a SYNTHETIC 350 nm blacklight spectrum until a measured spectrum is given.",
  "references": [
   "Cocker et al. 2001, Environ. Sci. Technol.",
-  "Keywood et al. 2004"
+  "Keywood et al. 2004",
+  "Schwantes et al. 2017 ACP 17, 3453: j(NO2) = 4.4e-3 1/s (calculated)"
  ],
  "verified": false,
  "surface_m2": 0.0,
@@ -17,7 +18,12 @@
  "light": {
   "type": "lamps",
   "lamps": "UV blacklights 354 nm + sunshine fluorescents",
-  "jno2_full_s1": 0.0
+  "jno2_full_s1": 0.0044,
+  "spectrum": "",
+  "spectrum_builtin": "blacklight_350",
+  "solar_like": false,
+  "effective_sza": 30.0,
+  "j_ratios": {}
  },
  "archive": {},
  "effects": {
