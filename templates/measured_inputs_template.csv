@@ -1,12 +1,28 @@
-# JUICE measured inputs — one row per time, UTC.  Keep the header line; delete the columns you do not have.
-# time: 'YYYY-MM-DD HH:MM' (UTC), or 'HH:MM' of the experiment day, or hours of day as a number
-# T: chamber temperature in K (°C is recognised when values are < 150)
-# p: pressure in hPa (optional; default from the experiment)
-# H2O: water vapour in vol-% (ppm is recognised when values are > 100) — or give RH in % instead
-# flow: dilution / replenishment flow in m3/h
-# roof: 1 = roof open (lights on), 0 = closed — optional, the roof times of the experiment are used otherwise
-# jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m: photolysis frequencies in 1/s (any subset; missing ones are modelled)
-# NO NO2 O3: measured mixing ratios in ppb — only needed if a species is to be held to its measurement
+# JUICE measured inputs — the chamber conditions of one experiment, one row per time, UTC.
+# Keep the header line (column names are matched ignoring case; see the aliases below), delete the
+# columns you do not have, keep the rest.  Rows need not be evenly spaced: JUICE interpolates to its
+# own time grid and holds the first / last value outside your rows.  Comma, semicolon or tab separated.
+#
+# REQUIRED
+#   time      'YYYY-MM-DD HH:MM' (UTC), or 'HH:MM' of the experiment day, or hours of day as a number
+#             (also: unix seconds, or seconds since 2000-01-01).  If no column is called time/utc/datetime,
+#             the first column is taken.
+# OPTIONAL — physical conditions (a missing column falls back to the constant typed in 'Where and when')
+#   T         chamber air temperature, K            (aliases temp, temperature; °C is recognised when < 150)
+#   p         pressure, hPa                         (aliases press, pressure; Pa is recognised when > 5000)
+#   H2O       water vapour, vol-%                   (aliases water; ppm is recognised when > 100)
+#   RH        relative humidity, %  — instead of H2O; converted with T and p (needs the T column)
+#   flow      dilution / replenishment flow, m3/h   (aliases dilute, total_flow)
+#   roof      1 = roof open / lights on, 0 = dark   (aliases hv, lights; values are rounded to 0/1)
+#             — without this column the roof times typed in 'Where and when' are used
+# OPTIONAL — light.  Give jNO2 whenever you have it: with jNO2 in the file every photolysis frequency the
+#   file lacks is modelled from it (the mechanism's clear-sky spectrum scaled by your jNO2).  Without jNO2
+#   the run uses the clear-sky model for the date, time and the Jülich sun.
+#   jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m   photolysis frequencies, 1/s   (aliases j_no2, jo(1d), jhcho_rad, jhcho_mol …)
+# OPTIONAL — measured trace gases, ppb: only used when a species is held to its measurement
+#   NO NO2 O3                                                                 (aliases ozone, no_ppb …)
+#
+# Example rows (delete them):
 time,T,p,H2O,flow,roof,jNO2,jO1D,jHONO,NO,NO2,O3
 2024-07-09 06:00,295.6,1006.5,1.33,6.0,0,0,0,0,0.05,0.02,1.2
 2024-07-09 06:01,295.6,1006.5,1.33,6.0,0,0,0,0,0.05,0.02,1.2

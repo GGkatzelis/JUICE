@@ -424,6 +424,30 @@ def _measured_column(c: Conditions, enz_col: str, grid: np.ndarray, fill: float)
     return None
 
 
+# EASY photolysis variable → ENZ column written for it
+J_ENZ_NAME = {"jno2": "jNO2", "jo1d": "jO1D", "jhono": "jHONO", "jh2o2": "jH2O2", "jhcho_r": "jHCHO_r", "jhcho_m": "jHCHO_m"}
+
+
+def measured_j_rows(c: Conditions, grid: Optional[np.ndarray] = None) -> Tuple[List[Tuple[str, str, str]], List[str]]:
+    """(the J_INPUTS rows the EASY file takes from measurements, notes).
+
+    SAPHIR archive: always all six, as in the IDL/FACSIMILE workflow (a day without a J file gives
+    a 0 column and a note — unchanged, so the golden scenarios stay byte-identical).
+    User file: only the J values the file has.  A J value the file lacks is NOT overridden, so the
+    mechanism's own value stays in force — the MCM clear-sky shape scaled by the measured jNO2
+    (PHTFKT) — instead of being set to 0, which would switch that photolysis off.  Without jNO2
+    nothing can be scaled: the run falls back to the clear-sky model."""
+    if c.j_source != "measured" or c.source != "file":
+        return list(J_INPUTS), []
+    grid = time_grid(c) if grid is None else grid
+    have = [row for row in J_INPUTS if _file_column(c, J_ENZ_NAME[row[0]], grid, 0.0) is not None]
+    if not any(row[0] == "jno2" for row in have):
+        return [], ["no jNO2 in the input file: photolysis from the clear-sky model (nothing to scale the mechanism's J values with)"]
+    missing = [J_ENZ_NAME[row[0]] for row in J_INPUTS if row not in have]
+    notes = [f"{', '.join(missing)}: not in the input file — modelled from the measured jNO2 (MCM clear-sky shape)"] if missing else []
+    return have, notes
+
+
 def input_sources(spec: ExperimentSpec) -> Dict[str, str]:
     """Where each physical input of the run comes from: 'measured (archive)', 'measured (file)',
     'constant <value>', 'clear-sky model', 'roof times' — the readiness report of the experiment."""
@@ -438,8 +462,16 @@ def input_sources(spec: ExperimentSpec) -> Dict[str, str]:
     out["pressure"] = (where if (c.source == "file" and _file_column(c, "p", grid, c.pressure_hPa) is not None)
                        else f"constant {c.pressure_hPa:g} hPa")
     if c.j_source == "measured" and where:
-        have = [j for j in ("jNO2", "jO1D", "jHONO", "jH2O2", "jHCHO_r", "jHCHO_m") if _measured_column(c, j, grid, 0.0) is not None]
-        out["photolysis"] = (f"{where}: " + ", ".join(have)) if have else "NO measured J values found — columns would be 0"
+        have = [j for j in J_ENZ_NAME.values() if _measured_column(c, j, grid, 0.0) is not None]
+        if c.source == "file":
+            rows, _n = measured_j_rows(c, grid)
+            if not rows:
+                out["photolysis"] = "clear-sky model — the input file has no jNO2 (give at least jNO2 to use measured light)"
+            else:
+                missing = [j for j in J_ENZ_NAME.values() if j not in have]
+                out["photolysis"] = f"{where}: " + ", ".join(have) + (f"; modelled from jNO2: {', '.join(missing)}" if missing else "")
+        else:
+            out["photolysis"] = (f"{where}: " + ", ".join(have)) if have else "NO measured J values found — columns would be 0"
     else:
         out["photolysis"] = "clear-sky model (jNO2 from the solar zenith angle, the rest from the mechanism)"
     out["roof"] = (f"{where} (roof column)" if (c.source == "file" and _file_column(c, "hv", grid, 0.0) is not None)
@@ -491,9 +523,10 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
         if sp not in cols:
             notes.append(f"constrained species {sp} has no ENZ column")
     if c.j_source == "measured":
-        for jname, jcol, _rxn in J_INPUTS:
-            enz_name = {"jno2": "jNO2", "jo1d": "jO1D", "jhono": "jHONO", "jh2o2": "jH2O2",
-                        "jhcho_r": "jHCHO_r", "jhcho_m": "jHCHO_m"}[jname]
+        rows, j_notes = measured_j_rows(c, grid)
+        notes.extend(j_notes)
+        for jname, jcol, _rxn in rows:
+            enz_name = J_ENZ_NAME[jname]
             arr = _measured_column(c, enz_name, grid, 0.0) if c.source in ("archive", "file") else None
             if arr is None:
                 notes.append(f"{enz_name}: no measured J values, column filled with 0")
@@ -534,10 +567,11 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
     f.light_source_rate, f.light_source_initial = ch.light_source_rate, ch.light_source_initial
 
     # measured block
-    if c.j_source == "measured":
-        f.j_rows = [MeasuredRow(j, "enz", col) for j, col, _ in J_INPUTS]
-        f.j_overrides = {j: rxn for j, _, rxn in J_INPUTS}
-    else:
+    rows = measured_j_rows(c)[0] if c.j_source == "measured" else []
+    if rows:
+        f.j_rows = [MeasuredRow(j, "enz", col) for j, col, _ in rows]
+        f.j_overrides = {j: rxn for j, _, rxn in rows}
+    else:                                              # clear sky — also a user file without jNO2
         f.j_rows = [MeasuredRow("jno2", "const", "", CLEAR_SKY_JNO2)]
         f.j_overrides = {"jno2": J_INPUTS[0][2]}
     t_row = (MeasuredRow("T", "enz", "t", comment="temperature in K") if c.temperature_mode == "enz"

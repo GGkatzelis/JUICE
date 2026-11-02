@@ -138,7 +138,10 @@ recognised columns, units and time formats; `templates/measured_inputs_template.
 | NO NO2 O3 | | ppb | only to hold a species to its measurement |
 
 Unknown columns are ignored and listed. Missing conditions fall back to the typed constants, and
-the review's *Needs attention* says so. The *What goes into the input files* list states for every
+the review's *Needs attention* says so. Photolysis: give `jNO2` whenever you have it — every J value
+the file lacks is then modelled from it (mechanism clear-sky spectrum scaled by your jNO2); without
+`jNO2` the run uses the clear-sky model. The template *SAPHIR — measured conditions from a file* on
+the first step starts such an experiment. The *What goes into the input files* list states for every
 input whether it is measured, a constant, or modelled. Measurements for comparison in the results
 viewer are a separate file, `<date>.observations.csv` next to the result (`hour_utc,key,value`).
 

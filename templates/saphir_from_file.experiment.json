@@ -1,0 +1,24 @@
+{
+ "title": "SAPHIR — measured conditions from a file",
+ "description": "SAPHIR experiment whose chamber conditions do not come from the archive (no access to the Z: drive, or an older day): choose 'Measured — from a file you provide' on the 'Where and when' step, press 'Template …' to get the CSV with the recognised columns, fill in what you measured (time + any of T, p, H2O or RH, flow, roof, jNO2 …, NO, NO2, O3) and pick that file. Every missing column falls back to the typed constants; photolysis frequencies missing from the file are modelled from the file's jNO2. All SAPHIR chamber effects keep their standard defaults; add injections on the 'Injections' step.",
+ "spec": {
+  "conditions": {
+   "source": "file",
+   "input_file": "",
+   "j_source": "measured",
+   "roof_open": []
+  },
+  "chamber": {
+   "walldep": true,
+   "hono": true,
+   "hono_const": "2.6*0.7",
+   "hcho": true,
+   "bgreac": true,
+   "y_ppb": "250",
+   "dilution": true,
+   "dark_hono": true,
+   "light_source": false
+  },
+  "injections": []
+ }
+}
