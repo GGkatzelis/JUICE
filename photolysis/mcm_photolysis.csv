@@ -1,0 +1,36 @@
+J,reaction,products,l,m,n,mcm_sigma_source,mcm_phi_source
+J1,O3 + hv,O(1D) + O2,6.073e-05,1.743,0.474,Molina and Molina (1986),Matsumi et al. (2002)
+J2,O3 + hv,O(3P) + O2,4.775e-04,0.298,0.080,Molina and Molina (1986),Matsumi et al. (2002)
+J3,H2O2 + hv,OH + OH,1.041e-05,0.723,0.279,"Average of Lin et al. (1978), Molina and Molina (1981), Nicovich and Wine (1988), Vaghjiani and Ravishankara (1989); IUPAC",phi = 1.00 (> 230 nm)
+J4,NO2 + hv,NO + O(3P),1.165e-02,0.244,0.267,"Average of Merienne et al. (1995, 1997), Coquart et al. (1995), Jenouvrier et al. (1996); IUPAC","Gardner et al. (1987); IUPAC; corrected by Troe (2000)"
+J5,NO3 + hv,NO + O2,2.485e-02,0.168,0.108,Sander (1986); IUPAC,Johnston et al. (1996)
+J6,NO3 + hv,NO2 + O(3P),1.747e-01,0.155,0.125,Sander (1986); IUPAC,Johnston et al. (1996); phi = 1.00 below 585 nm
+J7,HONO + hv,NO + OH,2.644e-03,0.261,0.288,"Bongartz et al. (1991, 1994); IUPAC",Cox and Derwent (1976/77); phi = 1.00 (190-400 nm)
+J8,HNO3 + hv,NO2 + OH,9.312e-07,1.230,0.307,Burkholder et al. (1993); IUPAC,Turnipseed et al. (1991); phi = 1.00 (> 248 nm)
+J11,HCHO + hv,H + HCO,4.642e-05,0.762,0.353,Meller and Moortgat (2000); IUPAC,Smith et al. (2002)
+J12,HCHO + hv,H2 + CO,6.853e-05,0.477,0.323,Meller and Moortgat (2000); IUPAC,Moortgat et al. (1983)
+J13,CH3CHO + hv,CH3 + HCO,7.344e-06,1.202,0.417,Martinez et al. (1992); IUPAC,Meyrahn et al. (1982); IUPAC
+J14,C2H5CHO + hv,C2H5 + HCO,2.879e-05,1.067,0.358,Martinez et al. (1992); IUPAC,Chen and Zhu (2001); IUPAC
+J15,n-C3H7CHO + hv,n-C3H7 + HCO,2.792e-05,0.805,0.338,"Martinez et al. (1992), Tadic et al. (2001); IUPAC",Tadic et al. (2001); phi = 0.21 (290-380 nm)
+J16,n-C3H7CHO + hv,C2H4 + CH3CHO,1.675e-05,0.805,0.338,"Martinez et al. (1992), Tadic et al. (2001); IUPAC",Tadic et al. (2001); phi = 0.10 (290-380 nm)
+J17,i-C3H7CHO (IPRCHO) + hv,i-C3H7 + HCO (MCM page literally prints 'n-C4H9 + HCO'),7.914e-05,0.764,0.364,Martinez et al. (1992),Chen et al. (2002)
+J18,MACR + hv,CH2=CCH3 + HCO,1.482e-06,0.396,0.298,Gierczak et al. (1997); IUPAC,"Average of Carter (2000), Moortgat et al. (2000), Pinho et al. (2005); IUPAC; phi = 1.95e-3"
+J19,MACR + hv,CH2=C(CH3)CO + H,1.482e-06,0.396,0.298,Gierczak et al. (1997); IUPAC,As J18; phi = 1.95e-3
+J20,C5HPALD1 + hv,CH3C(CHO)=CHCH2O + OH,7.600e-04,0.396,0.298,Gierczak et al. (1997) (MACR cross section),phi = 1.00 assumed (Peeters et al. 2009)
+J21,CH3COCH3 + hv,CH3CO + CH3,7.992e-07,1.578,0.271,Gierczak et al. (1998); IUPAC,Blitz et al. (2004); IUPAC
+J22,MEK + hv,CH3CO + C2H5,5.804e-06,1.092,0.377,"Martinez et al. (1992), Pinho et al. (2005)",Pinho et al. (2005); phi = 0.16 (275-380 nm) as quoted on the page
+J23,MVK + hv,CH3CH=CH2 + CO,2.4246e-06,0.395,0.296,Gierczak et al. (1997); IUPAC,Gierczak et al. (1997); IUPAC (1 bar)
+J24,MVK + hv,CH3CO + CH2=CH,2.424e-06,0.395,0.296,Gierczak et al. (1997); IUPAC,Gierczak et al. (1997); IUPAC (1 bar)
+J31,GLYOX + hv,CO + CO + H2,6.845e-05,0.130,0.201,Volkamer et al. (2005),Tadic et al. (2006)
+J32,GLYOX + hv,HCHO + CO,1.032e-05,0.130,0.201,Volkamer et al. (2005),Tadic et al. (2006)
+J33,GLYOX + hv,HCO + HCO,3.802e-05,0.644,0.312,Volkamer et al. (2005),Tadic et al. (2006)
+J34,MGLYOX + hv,CH3CO + HCO,1.537e-04,0.170,0.208,"Staffelbach et al. (1995), Meller et al. (1991); IUPAC",Chen et al. (2000); IUPAC
+J35,BIACET + hv,CH3CO + CH3CO,3.326e-04,0.148,0.215,"Horowitz et al. (2001), Plum et al. (1983)",Plum et al. (1983); phi = 0.158 (290-460 nm)
+J41,CH3OOH + hv,CH3O + OH,7.649e-06,0.682,0.279,"Vaghjiani and Ravishankara (1989, 1990); IUPAC",phi = 1.00 (> 290 nm)
+J51,CH3NO3 + hv,CH3O + NO2,1.588e-06,1.154,0.318,"Average of Roberts and Fajer (1989), Rattigan et al. (1992), Talukdar et al. (1997); IUPAC",Talukdar et al. (1997); phi = 1.00 (> 248 nm)
+J52,C2H5NO3 + hv,C2H5O + NO2,1.907e-06,1.244,0.335,"Average of Zhu and Ding (1997), Clemitshaw et al. (1997), Talukdar et al. (1997), Turberg et al. (1990); IUPAC",Zhu and Ding (1997); phi = 1.00 (290-340 nm)
+J53,n-C3H7NO3 + hv,n-C3H7O + NO2,2.485e-06,1.196,0.328,"Average of Roberts and Fajer (1989), Turberg et al. (1990), Clemitshaw et al. (1997), Talukdar et al. (1997); IUPAC",phi = 1.00 assumed (by analogy with methyl and ethyl nitrate)
+J54,i-C3H7NO3 + hv,CH3C(O.)CH3 + NO2,4.095e-06,1.111,0.316,Average as J53; IUPAC,phi = 1.00 assumed (by analogy with methyl and ethyl nitrate)
+J55,t-C4H9NO3 + hv,t-C4H9O + NO2,1.135e-05,0.974,0.309,Roberts and Fajer (1989),phi = 1.00 assumed
+J56,NOA (CH3C(O)CH2ONO2) + hv,CH3C(O)CH2O + NO2 (MCM applies as CH3CO3 + HCHO + NO2),4.365e-05,1.089,0.323,"Average of Roberts and Fajer (1989), Barnes et al. (1993)",phi = 0.9 (Mueller et al. 2014)
+J61,not listed on the MCM photolysis page,unidentified (present in mcm_converter.py and in AtChem2 photolysis-rates_v3.3.1; not used by any reaction in the full MCM v3.3.1 extract),7.537e-04,0.499,0.266,,
