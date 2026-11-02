@@ -1,6 +1,6 @@
 {
  "title": "UV-lamp chamber — photooxidation under blacklights",
- "description": "An indoor chamber lit by UV lamps (the generic 10 m³ profile; pick your own chamber on 'Where and when', or Edit … / New … its profile). Photolysis: jNO2 at full lamp power from the profile × the lights schedule (or a 'lights' column 0–1 and a measured jNO2 in your conditions file); every other J value is jNO2 × the ratio of the lamp spectrum (profile: measured spectrum file, or the synthetic stand-in — replace it with a measurement, j(O1D) and j(H2O2) depend on the lamps' 300–320 nm tail). No SAPHIR wall sources; dilution from the profile's volume and leak flow; add the chamber's own wall losses in its profile. Add NO2/NO/VOC on the 'Injections' step or as initial values.",
+ "description": "An indoor chamber lit by UV lamps (the generic 10 m³ profile; pick your own chamber on 'Where and when', or Edit … / New … its profile). Photolysis: jNO2 at full lamp power from the profile × the lights schedule (or a 'lights' column 0–1 and a measured jNO2 in your conditions file); every other J value is jNO2 × the ratio of the lamp spectrum (profile: measured spectrum file, or the synthetic stand-in — replace it with a measurement, j(O1D) and j(H2O2) depend on the lamps' 300–320 nm tail). OH source: indoor chambers have no SAPHIR-like wall HONO source, so the template starts with 1 ppm H2O2 (the usual precursor under 350 nm lamps, as at UCR, Caltech, GTEC); for a HONO experiment replace it by HONO (tens to hundreds of ppb) in the initial values. No SAPHIR wall sources; dilution from the profile's volume and leak flow. Add NO2/NO/VOC on the 'Injections' step or as initial values.",
  "spec": {
   "conditions": {
    "chamber_name": "generic_lamps",
@@ -27,6 +27,7 @@
    "wall_loss": false,
    "wall_loss_s1": {}
   },
+  "initials": [["H2O2", "1000e-9*M"]],
   "injections": []
  }
 }

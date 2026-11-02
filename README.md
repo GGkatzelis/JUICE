@@ -154,6 +154,10 @@ the clear-sky ones. Measured J columns (jO1D, jHONO, …) always win. Literature
 [docs/lamp_photolysis_literature.md](docs/lamp_photolysis_literature.md). First-order wall losses of a
 profile (`wall_loss_s1`) become `k[X --> ] = CONST(k)` lines, switchable on the *Chamber* step.
 `python lamp_photolysis.py --selftest` prints the ratios of the stand-ins and of every lamp profile.
+Indoor chambers have no SAPHIR-like wall HONO source and blacklights give little j(O¹D), so experiments
+add an OH precursor: typically ~1 ppm H₂O₂ (UCR, Caltech, GTEC; J3 photolysis), HONO from NaNO₂ + H₂SO₄
+(tens to hundreds of ppb, low-NOx) or CH₃ONO with NO (ppm, high-NOx; needs an add-on mechanism). The
+UV-chamber template starts with 1 ppm H₂O₂ as an initial value.
 
 ## Measured chamber conditions from your own file
 
