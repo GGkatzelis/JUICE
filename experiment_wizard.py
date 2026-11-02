@@ -327,8 +327,12 @@ class ConditionsPage(QWizardPage):
         g.addWidget(QLabel("step [s]"), r, 6); self.step = QSpinBox(); self.step.setRange(10, 3600); self.step.setValue(60); g.addWidget(self.step, r, 7); r += 1
         g.addWidget(QLabel("Chamber"), r, 0)
         self.chamber = QComboBox(); self.chamber.addItems(list(ic.CHAMBERS)); g.addWidget(self.chamber, r, 1)
-        self.chamber.setToolTip("chambers/<id>.chamber.json — volume, light source, data archive, default chamber effects; add a file for your own chamber")
-        self.chamber_info = _info(""); g.addWidget(self.chamber_info, r, 2, 1, 6)
+        self.chamber.setToolTip("chambers/<id>.chamber.json — volume, light source, data archive, default chamber effects")
+        hc = QHBoxLayout(); hc.setContentsMargins(0, 0, 0, 0)
+        be = QPushButton("Edit …"); be.setToolTip("change the values of this chamber profile (SAPHIR: read-only, derive a copy)"); be.clicked.connect(self._edit_chamber); hc.addWidget(be)
+        bn = QPushButton("New …"); bn.setToolTip("add your own chamber, pre-filled with a copy of the selected one"); bn.clicked.connect(self._new_chamber); hc.addWidget(bn)
+        g.addLayout(hc, r, 2)
+        self.chamber_info = _info(""); g.addWidget(self.chamber_info, r, 3, 1, 5)
         self._loading = False                     # set_from() in progress: a chamber change then does not reset the chamber effects
         self.chamber.currentTextChanged.connect(self._chamber_changed); r += 1
         lay.addLayout(g)
@@ -382,9 +386,43 @@ class ConditionsPage(QWizardPage):
         self.manual_box.setVisible(False)
         self._archive_status()
 
+    def _edit_chamber(self):
+        self._chamber_dialog(as_new=False)
+
+    def _new_chamber(self):
+        self._chamber_dialog(as_new=True)
+
+    def _chamber_dialog(self, as_new: bool):
+        from chamber_editor import ChamberDialog
+        from chambers import render_dilute
+        before = ic.chamber(self.chamber.currentText())
+        dlg = ChamberDialog(before, self, as_new=as_new)
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.saved_id:
+            return
+        after = ic.chamber(dlg.saved_id)
+        same_defaults = (dlg.saved_id == before.id and after.effects == before.effects
+                         and render_dilute(after) == render_dilute(before))
+        self.refresh_chambers(select=dlg.saved_id, apply_defaults=not same_defaults)
+
+    def refresh_chambers(self, select: str = "", apply_defaults: bool = True):
+        """Re-fill the chamber list from chambers.CHAMBERS (after a profile was saved) and select
+        `select`; apply_defaults=False keeps the experiment's chamber effects (only the profile's
+        texts changed)."""
+        self.chamber.blockSignals(True)
+        self.chamber.clear(); self.chamber.addItems(list(ic.CHAMBERS))
+        self.chamber.setCurrentText(select if select in ic.CHAMBERS else ic.DEFAULT_CHAMBER)
+        self.chamber.blockSignals(False)
+        was = self._loading
+        self._loading = not apply_defaults
+        try:
+            self._chamber_changed(self.chamber.currentText())
+        finally:
+            self._loading = was
+
     def _chamber_changed(self, name: str):
         p = ic.chamber(name)
-        self.chamber_info.setText(f"{p.name}: {p.summary()}. " + (p.note.split(" — ")[0] if p.note else ""))
+        flag = "" if p.verified else " Numbers from the public record, not verified — check them (Edit …)."
+        self.chamber_info.setText(f"{p.name}: {p.summary()}. " + (p.note.split(" — ")[0] if p.note else "") + flag)
         self.src_archive.setText(f"Measured — from the {p.name} data archive (T, P, humidity, flow, J values, NO, NO2, O3)" if p.has_archive
                                  else f"Measured — from a data archive (none that JUICE can read for {p.name})")
         self.src_archive.setEnabled(p.has_archive)

@@ -127,8 +127,10 @@ a data archive JUICE can read (SAPHIR only, so far), the default chamber effects
 losses. Choose the chamber on *Where and when*; picking another one applies that profile's switches and
 `DILUTE` to the *Chamber* step, loading a saved experiment never does. `chambers/` ships SAPHIR (identical
 to the built-in profile, checked by `python chambers.py --selftest`) and ~18 chambers from
-[docs/chamber_survey.md](docs/chamber_survey.md) with public numbers, marked `verified: false` — edit them
-to your chamber's values, or copy `generic_lamps.chamber.json` to a new file for your own chamber.
+[docs/chamber_survey.md](docs/chamber_survey.md) with public numbers, marked `verified: false`. *Edit …* next
+to the chamber list changes a profile (volume, leak flow, light source, archive, default effects, wall losses,
+injection standards), *New …* adds your own chamber pre-filled with a copy of the selected one; both write the
+JSON file. SAPHIR opens read-only — *Save as new chamber …* derives another chamber from it.
 Lamp photolysis is not modelled yet: every chamber still runs with the sunlight parametrisation of the
 mechanism (`PHTFKT`, scaled by jNO2 and capped at the clear-sky value), which is wrong for lamps at
 night and brighter than the clear-sky sun. That is the next step.
