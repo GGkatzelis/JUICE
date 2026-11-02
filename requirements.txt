@@ -8,3 +8,10 @@ scipy>=1.13,<2
 pandas>=2.2,<4
 matplotlib>=3.9,<4
 PyQt6>=6.6,<7
+numba>=0.60            # compiled ODE kernel (scenario_runner, ode_backend = "numba")
+netCDF4>=1.6           # SAPHIR archive files (.nc)
+requests>=2.31         # SAPHIR wiki import
+Pillow>=10             # figure snapshots for the figure list
+python-pptx>=1.0       # figure list -> .pptx document
+imageio>=2.30          # isopleth videos (study window) and Chemical Space videos
+imageio-ffmpeg>=0.5    # MP4 export (bundles ffmpeg)
