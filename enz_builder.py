@@ -1864,6 +1864,11 @@ class _EnzPreviewDialog(QDialog):
             canvas = FigureCanvasQTAgg(fig)
             tb     = NavigationToolbar2QT(canvas, self)
             self._draw_panels(fig)
+            try:                               # wheel zoom, drag pan, double-click reset, right-click zoom / log menu
+                from plot_interaction import attach
+                attach(canvas)
+            except Exception:
+                pass
             vbox.addWidget(tb)
             vbox.addWidget(canvas, stretch=1)
         except ImportError:

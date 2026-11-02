@@ -73,6 +73,10 @@ class PanelGroup:
                 p.ax2.relim(); p.ax2.autoscale_view()
             if p.log:
                 p.ax.set_ylim(bottom=1e4)
+            else:
+                for a in (p.ax, p.ax2):             # log chosen in the menu: cut the flushed-chamber floor
+                    if a is not None and a.get_yscale() == "log" and a.get_ylim()[1] > 0:
+                        a.set_ylim(bottom=max(a.get_ylim()[0], a.get_ylim()[1] * 1e-5))
         if self.home is not None:
             for p in self.panels:
                 p.ax.set_xlim(*self.home)
@@ -97,6 +101,8 @@ class InteractivePanel(QWidget):
         self._lines = {}                 # legend handle → artist
         self._vline = None; self._text = None
         self._drag = None                # (x0 data, xlim at press)
+        self._press_xy = (0.0, 0.0)      # where the right button went down (click → menu, drag → zoom)
+        self.on_log = None               # callback(on) when the owner keeps the panel's log setting
         self.canvas.mpl_connect("motion_notify_event", self._motion)
         self.canvas.mpl_connect("axes_leave_event", lambda _e: self._clear())
         self.canvas.mpl_connect("pick_event", self._pick)
@@ -189,11 +195,46 @@ class InteractivePanel(QWidget):
             if event.dblclick:
                 self.group.reset(); return
             self._drag = ("x", event.x, self.ax.get_xlim(), None)
-        elif event.button == 3:                     # right button: drag up/down = zoom the values (both axes)
+        elif event.button == 3:                     # right button: drag up/down = zoom the values (both axes); click = menu
             self._drag = ("y", event.y, [a.get_ylim() for a in self._axes()], None)
+            self._press_xy = (event.x, event.y)
 
-    def _release(self, _event):
-        self._drag = None
+    def _release(self, event):
+        drag, self._drag = self._drag, None
+        from plot_interaction import is_click
+        if drag is not None and drag[0] == "y" and is_click(self._press_xy, event):
+            for a, lim in zip(self._axes(), drag[2]):
+                a.set_ylim(*lim)
+            self._menu(event)
+
+    def _menu(self, event):
+        """Right-click menu: zoom the time (all panels) or the values at the click, reset, linear/log."""
+        from plot_interaction import popup, set_log, is_log
+        x = self.ax.transData.inverted().transform((event.x, event.y))[0]
+
+        def zoom_time(f):
+            lo, hi = self.ax.get_xlim()
+            self.group.set_xlim(x - (x - lo) * f, x + (hi - x) * f, source=self)
+
+        def log(a, on):
+            if self.on_log is not None:              # the owner keeps the setting and redraws (Timeseries tab)
+                self.on_log(on); return
+            set_log(a, "y", on)
+            if a is self.ax:
+                self.log = self.log and on            # 'log' also means the Overview's 1e4 floor on reset
+            self.canvas.draw_idle()
+
+        entries = [("Zoom in here   (all panels)", lambda: zoom_time(0.5)), ("Zoom out   (all panels)", lambda: zoom_time(2.0)),
+                   ("Zoom in values here", lambda: self._zoom_y(event.y, 0.5)), ("Zoom out values", lambda: self._zoom_y(event.y, 2.0)),
+                   ("Reset view   (double-click)", self.group.reset), None]
+        if self.on_log is not None:
+            entries.append(("Log scale — values", lambda: log(self.ax, not is_log(self.ax, "y")), is_log(self.ax, "y")))
+        else:
+            for a, name in ((self.ax, "left axis"), (self.ax2, "right axis")):
+                if a is not None:
+                    label = "Log scale — values" + (f" ({name})" if self.ax2 is not None else "")
+                    entries.append((label, lambda a=a: log(a, not is_log(a, "y")), is_log(a, "y")))
+        popup(self.canvas, entries)
 
     def _motion(self, event):
         if self._drag is not None and event.x is not None:
@@ -285,7 +326,8 @@ class OverviewTab(QWidget):
         bar.addWidget(_small_button("Reset view", "full time range in all panels (or double-click a panel)", lambda: self.group.reset()))
         bar.addWidget(_small_button("Save image", "save the page as a PNG", self._save_png))
         bar.addStretch()
-        hint = QLabel("wheel: zoom time (all panels) · Ctrl+wheel or right-drag up/down: zoom values · left-drag: pan · double-click: reset · click legend: hide")
+        hint = QLabel("wheel: zoom time (all panels) · Ctrl+wheel or right-drag up/down: zoom values · left-drag: pan · double-click: reset · "
+                      "right-click: zoom / log scale menu · click legend: hide")
         hint.setStyleSheet("color: #888; font-size: 10px;"); hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); bar.addWidget(hint, stretch=1)
         lay.addLayout(bar)
         self.status = QLabel(""); self.status.setStyleSheet("color: #666; font-size: 10px;")

@@ -176,6 +176,13 @@ class InputsPlot(QWidget):
         lay = QVBoxLayout(self); lay.setContentsMargins(0, 0, 0, 0)
         self.fig = Figure(figsize=(6, height), tight_layout=True); self.canvas = FigureCanvas(self.fig)
         self.canvas.setMinimumHeight(int(height * 95)); lay.addWidget(self.canvas, stretch=1)
+        try:                                   # as in the results viewer: wheel zoom, drag pan, double-click reset, right-click menu
+            from plot_interaction import attach
+            attach(self.canvas)
+            self.canvas.setToolTip("wheel: zoom the time · Ctrl+wheel or right-drag: zoom the values · drag: pan · double-click: reset · "
+                                   "right-click: zoom / log scale menu")
+        except Exception as e:
+            print(f"[gui] plot interaction not attached: {e}")
         hb = QHBoxLayout(); b = QPushButton("Update plot"); b.clicked.connect(self.plot); hb.addWidget(b)
         self.note = _info({"conditions": "Temperature, roof, photolysis and humidity as the model will see them (archive data is read on update).",
                            "injections": "When each injection pulse is on; the model spreads the total ppb over the pulse.",

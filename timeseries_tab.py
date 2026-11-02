@@ -51,6 +51,7 @@ class CorrelationPanel(QWidget):
         self.ax = self.fig.add_subplot(111); lay.addWidget(self.canvas)
         self._pts: List[Tuple[str, np.ndarray, np.ndarray, np.ndarray]] = []    # (label, x, y, hours)
         self._text = None; self._home = None
+        self.on_log = None               # callback(which, on): the owner remembers the log axes across rebuilds
         self.canvas.mpl_connect("motion_notify_event", self._hover)
         self.canvas.mpl_connect("axes_leave_event", lambda _e: self._clear())
         self.canvas.mpl_connect("scroll_event", self._scroll)
@@ -143,14 +144,38 @@ class CorrelationPanel(QWidget):
     def _scroll(self, event):
         if event.inaxes is not self.ax or event.xdata is None:
             return
-        f = 0.8 if event.button == "up" else 1.25
-        for get, set_, v in ((self.ax.get_xlim, self.ax.set_xlim, event.xdata), (self.ax.get_ylim, self.ax.set_ylim, event.ydata)):
-            lo, hi = get(); set_(v - (v - lo) * f, v + (hi - v) * f)
+        self._zoom(event.xdata, event.ydata, 0.8 if event.button == "up" else 1.25)
+
+    def _zoom(self, x: float, y: float, f: float):
+        from plot_interaction import zoom_axis
+        zoom_axis(self.ax, "x", x, f); zoom_axis(self.ax, "y", y, f)
         self.canvas.draw_idle()
 
-    def _press(self, event):
-        if event.dblclick and self._home is not None:
+    def _reset(self):
+        if self._home is not None:
             self.ax.set_xlim(*self._home[0]); self.ax.set_ylim(*self._home[1]); self.canvas.draw_idle()
+
+    def _press(self, event):
+        if event.dblclick:
+            self._reset()
+        elif event.button == 3 and event.inaxes is self.ax:
+            self._menu(event.xdata, event.ydata)
+
+    def set_log(self, which: str, on: bool):
+        from plot_interaction import set_log
+        set_log(self.ax, which, on)
+        self._home = (self.ax.get_xlim(), self.ax.get_ylim())
+        if self.on_log is not None:
+            self.on_log(which, on)
+        self.canvas.draw_idle()
+
+    def _menu(self, x: float, y: float):
+        """Right-click menu: zoom in/out at the point, reset, linear/log for x and y."""
+        from plot_interaction import popup, is_log
+        popup(self.canvas, [("Zoom in here", lambda: self._zoom(x, y, 0.5)), ("Zoom out", lambda: self._zoom(x, y, 2.0)),
+                            ("Reset view   (double-click)", self._reset), None,
+                            ("Log scale — y axis", lambda: self.set_log("y", not is_log(self.ax, "y")), is_log(self.ax, "y")),
+                            ("Log scale — x axis", lambda: self.set_log("x", not is_log(self.ax, "x")), is_log(self.ax, "x"))])
 
 
 class TimeseriesTab(QWidget):
@@ -194,7 +219,8 @@ class TimeseriesTab(QWidget):
         self.obs_box.toggled.connect(self.rebuild); row2.addWidget(self.obs_box)
         row2.addWidget(_tool("Reset view", "full range in all panels (or double-click)", lambda: self.group.reset()))
         row2.addWidget(_tool("Save image", "save the panels as a PNG", self._save_png))
-        hint = QLabel("wheel: zoom time · Ctrl+wheel / right-drag: zoom values · left-drag: pan · double-click: reset · click legend: hide")
+        hint = QLabel("wheel: zoom time · Ctrl+wheel / right-drag: zoom values · left-drag: pan · double-click: reset · "
+                      "right-click: zoom / log scale menu · click legend: hide")
         hint.setStyleSheet("color: #888; font-size: 10px;"); hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); row2.addWidget(hint, stretch=1)
         self.contents_label = QLabel("panel 1:"); row2.addWidget(self.contents_label)
         self.contents = QListWidget(); self.contents.setFlow(QListWidget.Flow.LeftToRight); self.contents.setFixedHeight(26)
@@ -223,6 +249,9 @@ class TimeseriesTab(QWidget):
 
     def _log_toggled(self, on: bool):
         self._target()["log"] = on; self.rebuild()
+
+    def _set_log(self, i: int, on: bool):
+        self.specs[i]["log"] = on; self.rebuild()
 
     # ── public API (tree, defaults, other tabs) ──
     def add_species(self, names: List[str], unit: Optional[str] = None, panel: Optional[int] = None, log: Optional[bool] = None,
@@ -367,6 +396,7 @@ class TimeseriesTab(QWidget):
                 w = self._build_corr(i, spec)
             else:
                 w = InteractivePanel(self._title(i, spec), self.group, log=spec["log"], xlabel=(r == rows - 1))
+                w.on_log = lambda on, i=i: self._set_log(i, on)      # right-click menu = the 'log' box of that panel
                 self._fill_time(w, spec, obs, hv)
             self.grid.addWidget(w, r, c)
         try:
@@ -444,6 +474,10 @@ class TimeseriesTab(QWidget):
         t, xv = self._series(x, u)
         ys = [(f"{e[0]} [{e[1]}]", self._series(e[0], e[1])[1]) for e in spec["entries"]]
         w.plot(f"{x} [{u}]", xv, ys, t, f"{i + 1}  {x} vs " + ", ".join(e[0] for e in spec["entries"]))
+        for which in sorted(spec.get("log_axes", ())):              # log x / y chosen in the panel's menu
+            w.set_log(which, True)
+        w.on_log = lambda which, on, spec=spec: spec.__setitem__(
+            "log_axes", (set(spec.get("log_axes", ())) | {which}) if on else (set(spec.get("log_axes", ())) - {which}))
         return w
 
     def _save_png(self):

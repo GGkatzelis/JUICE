@@ -6,6 +6,9 @@ plot_interaction.py — the Overview's mouse interaction for any matplotlib canv
                                    # left-drag: pan · double-click: reset · hover: read the lines
     attach(canvas, hover=False)    # for canvases that already have their own hover/pick handlers
 
+    right-click (without dragging): menu with zoom in/out at that point, reset, and linear/log
+    for each axis (set_log, popup — also used by the Overview and Timeseries panels)
+
 Works on whatever axes are under the cursor, including twin axes drawn at the same place, and
 survives fig.clear()/redraws (the 'home' view is remembered per axes object on first use).  It
 stays out of the way while a NavigationToolbar pan/zoom mode is active.
@@ -17,12 +20,107 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
+CLICK_PX = 4          # a right-button press and release closer than this is a click (menu), not a drag (zoom)
+
+
+def zoom_axis(ax, which: str, v: float, f: float):
+    """Zoom one axis of `ax` by factor f around v in data units (log-aware); f < 1 zooms in."""
+    get, set_ = (ax.get_xlim, ax.set_xlim) if which == "x" else (ax.get_ylim, ax.set_ylim)
+    lo, hi = get()
+    scale = ax.get_xscale() if which == "x" else ax.get_yscale()
+    if scale == "log":
+        if v <= 0 or lo <= 0:
+            return
+        lv, llo, lhi = math.log10(v), math.log10(lo), math.log10(hi)
+        set_(10 ** (lv - (lv - llo) * f), 10 ** (lv + (lhi - lv) * f))
+    else:
+        set_(v - (v - lo) * f, v + (hi - v) * f)
+
+
+def is_log(ax, which: str) -> bool:
+    return (ax.get_xscale() if which == "x" else ax.get_yscale()) == "log"
+
+
+def _data_range(ax, which: str, positive: bool):
+    """Smallest and largest value on one axis of the data drawn in `ax` (lines and scatter points in
+    data coordinates; axvline/axvspan & co. are left out).  For the values only what lies in the current
+    x view counts, so a zoomed-in time window is fitted, not the whole day."""
+    xlo, xhi = sorted(ax.get_xlim())
+    found = []
+    pairs = [(ln.get_xdata(), ln.get_ydata()) for ln in ax.get_lines() if ln.get_visible() and ln.get_transform() == ax.transData]
+    for c in ax.collections:
+        try:
+            if c.get_visible() and c.get_offset_transform() == ax.transData:
+                off = np.asarray(c.get_offsets(), dtype=float)
+                if off.ndim == 2 and off.shape[1] == 2:
+                    pairs.append((off[:, 0], off[:, 1]))
+        except Exception:
+            pass
+    for xd, yd in pairs:
+        try:
+            x = np.asarray(xd, dtype=float).ravel(); y = np.asarray(yd, dtype=float).ravel()
+        except (TypeError, ValueError):
+            continue
+        if x.size != y.size:
+            continue
+        v = y[(x >= xlo) & (x <= xhi)] if which == "y" else x
+        v = v[np.isfinite(v)]
+        if positive:
+            v = v[v > 0]
+        if v.size:
+            found.append((float(v.min()), float(v.max())))
+    if not found:
+        return None
+    return min(f[0] for f in found), max(f[1] for f in found)
+
+
+def set_log(ax, which: str, on: bool) -> None:
+    """Switch one axis between linear and log and fit its range to the data on the new scale.  On log,
+    values <= 0 are left out and the range ends at 1e-5 of the largest value (else the floor of a
+    flushed chamber, 1e-7 ppb and less, squeezes the real data into the top of the plot)."""
+    if is_log(ax, which) == on:
+        return
+    scale = dict(value="log", nonpositive="mask") if on else dict(value="linear")
+    (ax.set_xscale if which == "x" else ax.set_yscale)(**scale)
+    set_ = ax.set_xlim if which == "x" else ax.set_ylim
+    rng = _data_range(ax, which, positive=on)
+    if rng is None:                                        # bars, images …: let matplotlib decide
+        ax.relim(); ax.autoscale(enable=True, axis=which); return
+    lo, hi = rng
+    if on:
+        lo = max(lo, hi * 1e-5)
+        pad = 10 ** (0.04 * max(math.log10(hi / lo), 0.5))
+        set_(lo / pad, hi * pad)
+    else:
+        pad = 0.05 * (hi - lo) or 0.05 * abs(hi) or 1.0
+        set_(lo - pad, hi + pad)
+
+
+def popup(canvas, entries) -> None:
+    """Context menu at the mouse.  entries: (text, callback), (text, callback, checked) for a tick
+    box, or None for a separator."""
+    from PyQt6.QtGui import QCursor
+    from PyQt6.QtWidgets import QMenu
+    menu = QMenu(canvas)
+    for e in entries:
+        if e is None:
+            menu.addSeparator(); continue
+        act = menu.addAction(e[0])
+        if len(e) > 2:
+            act.setCheckable(True); act.setChecked(bool(e[2]))
+        act.triggered.connect(lambda _checked=False, f=e[1]: f())
+    menu.exec(QCursor.pos())
+
+
+def is_click(drag_xy, event) -> bool:
+    """True when the button went up (about) where it went down."""
+    return event.x is not None and abs(event.x - drag_xy[0]) + abs(event.y - drag_xy[1]) < CLICK_PX
+
 
 class _Interaction:
     def __init__(self, canvas, hover: bool):
         self.canvas = canvas
         self.hover_on = hover
-        self._home: Dict[int, Tuple[tuple, tuple]] = {}
         self._drag = None
         self._marks = []
         canvas.mpl_connect("scroll_event", self._scroll)
@@ -44,8 +142,9 @@ class _Interaction:
         return [ax] + others
 
     def _remember(self, ax):
-        for a in self._stack(ax):
-            self._home.setdefault(id(a), (a.get_xlim(), a.get_ylim()))
+        for a in self._stack(ax):                  # on the axes object: ids are reused after fig.clear()
+            if getattr(a, "_juice_home", None) is None:
+                a._juice_home = (a.get_xlim(), a.get_ylim())
 
     @staticmethod
     def _mods():
@@ -57,18 +156,41 @@ class _Interaction:
         except Exception:
             return False, False
 
-    @staticmethod
-    def _zoom_axis(ax, which: str, v: float, f: float):
-        get, set_ = (ax.get_xlim, ax.set_xlim) if which == "x" else (ax.get_ylim, ax.set_ylim)
-        lo, hi = get()
-        scale = ax.get_xscale() if which == "x" else ax.get_yscale()
-        if scale == "log":
-            if v <= 0 or lo <= 0:
-                return
-            lv, llo, lhi = math.log10(v), math.log10(lo), math.log10(hi)
-            set_(10 ** (lv - (lv - llo) * f), 10 ** (lv + (lhi - lv) * f))
-        else:
-            set_(v - (v - lo) * f, v + (hi - v) * f)
+    _zoom_axis = staticmethod(zoom_axis)
+
+    def _reset(self, ax):
+        for a in self._stack(ax):
+            h = getattr(a, "_juice_home", None)
+            if h:
+                a.set_xlim(*h[0]); a.set_ylim(*h[1])
+        self.canvas.draw_idle()
+
+    def _menu(self, ax, event):
+        """Right-click menu: zoom at the clicked point, reset, linear/log for each axis drawn here."""
+        stack = self._stack(ax)
+        px, py = event.x, event.y
+
+        def zoom(which, f):
+            for a in (stack[:1] if which == "x" else stack):          # twins share x
+                xv, yv = a.transData.inverted().transform((px, py))
+                self._zoom_axis(a, which, xv if which == "x" else yv, f)
+            self.canvas.draw_idle()
+
+        def log(a, which, on):
+            set_log(a, which, on)
+            for b in stack:                                          # the new view is the one double-click returns to
+                b._juice_home = (b.get_xlim(), b.get_ylim())
+            self.canvas.draw_idle()
+
+        entries = [("Zoom in here", lambda: zoom("x", 0.5)), ("Zoom out", lambda: zoom("x", 2.0)),
+                   ("Zoom in values here", lambda: zoom("y", 0.5)), ("Zoom out values", lambda: zoom("y", 2.0)),
+                   ("Reset view   (double-click)", lambda: self._reset(ax)), None]
+        right = lambda a: a.yaxis.get_ticks_position() == "right"    # the clicked axes may be the twin
+        for a in sorted(stack, key=right):
+            name = "Log scale — values" + ("" if len(stack) == 1 else (" (right axis)" if right(a) else " (left axis)"))
+            entries.append((name, lambda a=a: log(a, "y", not is_log(a, "y")), is_log(a, "y")))
+        entries.append(("Log scale — horizontal axis", lambda: log(ax, "x", not is_log(ax, "x")), is_log(ax, "x")))
+        popup(self.canvas, entries)
 
     # ── events ──
     def _scroll(self, event):
@@ -93,18 +215,18 @@ class _Interaction:
         self._remember(ax)
         if event.button == 1:
             if event.dblclick:
-                for a in self._stack(ax):
-                    h = self._home.get(id(a))
-                    if h:
-                        a.set_xlim(*h[0]); a.set_ylim(*h[1])
-                self.canvas.draw_idle(); return
+                self._reset(ax); return
             pan_y = not ax.lines                              # scatter-only panels pan in both directions
             self._drag = ("pan", ax, event.x, event.y, ax.get_xlim(), [(a, a.get_ylim()) for a in self._stack(ax)], pan_y)
         elif event.button == 3:
             self._drag = ("zoomy", ax, event.x, event.y, ax.get_xlim(), [(a, a.get_ylim()) for a in self._stack(ax)], False)
 
-    def _release(self, _event):
-        self._drag = None
+    def _release(self, event):
+        drag, self._drag = self._drag, None
+        if drag is not None and drag[0] == "zoomy" and is_click(drag[2:4], event):
+            for a, lim in drag[5]:                            # undo the sub-pixel zoom of the 'drag'
+                a.set_ylim(*lim)
+            self._menu(drag[1], event)
 
     def _motion(self, event):
         if self._drag is not None and event.x is not None:
