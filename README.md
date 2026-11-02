@@ -23,6 +23,16 @@ pip install -r requirements.txt
 
 ## Quick start
 
+### Desktop icons (Windows)
+```bash
+python make_shortcut.py              # JUICE + JUICE Results icons on the Desktop
+python make_shortcut.py --startmenu  # also in the Start menu
+```
+**JUICE** opens the window for setting up and running experiments ([JUICE.bat](JUICE.bat)).
+**JUICE Results** opens the results and plotting viewer ([JUICE Results.bat](JUICE%20Results.bat)).
+Double-click it to pick a result, or drop a `.cs` file on it. Each click opens a new, independent
+window. Shortcuts hold this PC's paths, so they are not in git. Run the script once after cloning.
+
 ### GUI scenario builder
 ```bash
 python saphir_gui.py
@@ -90,9 +100,15 @@ See [architecture.md](architecture.md) for the physics, validation deep-dive, an
 
 To run and compare your own scenario, follow [docs/validation_with_claude.md](docs/validation_with_claude.md) — a step-by-step playbook (also pasteable directly into Claude Code or claude.ai to have it run the comparison and return a markdown report).
 
-## Citation
+## Citation and collaboration
 
-If you use JUICE in a publication, please cite the repository and contact the author for the corresponding methods reference.
+If you use JUICE in a publication, please cite it. GitHub's "Cite this repository" button gives the
+reference from [CITATION.cff](CITATION.cff). Please also contact us for the corresponding methods reference.
+
+JUICE is new research software. If you plan to use it for a publication, we strongly encourage you to
+contact us early. We are happy to help check that the setup and the results are correct. Where we
+contribute substantially to the analysis, co-authorship can be discussed in line with standard
+authorship guidelines. This is a request, not a condition of the license.
 
 ## License
 

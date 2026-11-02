@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: >-
+  If you use JUICE in a publication, please cite it as below. JUICE is new
+  research software: please contact the authors early when you plan to publish
+  results obtained with it (see "Citation and collaboration" in README.md).
+title: "JUICE — Jülich Utility for Integrating Chemical Equations"
+type: software
+authors:
+  - family-names: Gkatzelis
+    given-names: Georgios
+    email: g.gkatzelis@fz-juelich.de
+    affiliation: "Forschungszentrum Jülich GmbH, ICE-3"
+  - family-names: Rohrer
+    given-names: Franz
+    email: f.rohrer@fz-juelich.de
+    affiliation: "Forschungszentrum Jülich GmbH, ICE-3"
+repository-code: "https://github.com/GGkatzelis/JUICE"
+license: MIT
+version: "33.503"
+date-released: "2026-06-15"
+keywords:
+  - atmospheric chemistry
+  - chemical mechanism
+  - Master Chemical Mechanism
+  - MCM
+  - SAPHIR
+  - simulation chamber
+  - box model
