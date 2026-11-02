@@ -1,15 +1,23 @@
-[paths]
-easy_root     = "E:\\Python Code\\JUICE archive\\EASY"
-include_dir   = "E:\\Python Code\\JUICE archive\\EASY\\include files"
-output_root   = "E:\\Python Code\\JUICE archive\\JUICE"
+# JUICE settings (read by juice_gui.py, results_viewer.py, scenario_runner.py and the study tools).
+#
+# [paths] is intentionally absent: without it JUICE uses the folders inside this repository —
+#   easy_root    = MCM_tested_scenarios/IDL Input            (reference experiments)
+#   include_dir  = MCM_tested_scenarios/IDL Input/include files   (mechanism include sets)
+#   output_root  = MCM_tested_scenarios/JUICE archive/JUICE  (new experiments and results)
+# To work elsewhere, create FR_GUI.local.toml next to this file (never committed) with
+#   [paths]
+#   output_root = "D:\\my experiments"
+# Any key in the .local.toml overrides the value here.
 
 [comparison]
 favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO', 'kOH', 'HV', 'T', 'k(NO2+HV-->NO+O3)']"
 
 [solver]
-rtol_choices = "[0.01, 1e-06]"
+# The validated set (see README: regression against FACSIMILE). Changing these changes results.
+rtol_choices = "[0.01, 1e-04, 1e-06]"
 hmax = "60.0"
 atol = "10000.0"
+atol_floor = "100"
 step_column_patterns_extra = "[]"
 ode_backend = "numba"
 # solver_method: BDF (recommended for sub-step mode) or Radau (for continuous mode)
@@ -17,11 +25,15 @@ solver_method = "BDF"
 # jac_mode: analytic (fastest), none (FD, 56 extra ODE calls/update), sparse (future)
 jac_mode = "analytic"
 first_step = "1e-6"
-# Bottom-bar defaults restored on every startup
 interpolation = "piecewise"
-rtol_default = "1e-06"
+rtol_default = "1e-04"
 kv_pd = "true"
 perstep_snap = "true"
+# perstep_warm: warm BDF continuation across ENZ rows (sub-step mode); ~2x faster, spike-free
+perstep_warm = "true"
+# Newton control for sub-step modes (scipy default tol ~1e-3 / 4 iters under-converges trace species)
+newton_tol = "1e-6"
+newton_maxiter = "10"
 
 [viewer]
 quick_plot_left  = "['NO', 'NO2', 'O3']"
