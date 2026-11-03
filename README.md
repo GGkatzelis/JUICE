@@ -10,8 +10,8 @@ A Python simulation framework for SAPHIR chamber chemistry, replacing the legacy
 ## Installation
 
 ```bash
-git clone https://github.com/GGkatzelis/MCM_SAPHIR_Tool.git
-cd MCM_SAPHIR_Tool
+git clone https://github.com/GGkatzelis/JUICE.git
+cd JUICE
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -20,6 +20,10 @@ source .venv/bin/activate
 
 pip install -r requirements.txt
 ```
+The desktop launchers look for the virtual environment first as `.venv` inside the repository, then
+two folders up (`..\..\.venv`, a shared venv next to several projects), and otherwise use the
+`pythonw.exe` on the PATH. Everything else (reference scenarios, chamber profiles, the σ·φ photolysis
+table, the mechanism include sets) is in the repository; no other download is needed.
 
 ## Quick start
 
@@ -35,9 +39,9 @@ window. Shortcuts hold this PC's paths, so they are not in git. Run the script o
 
 ### GUI scenario builder
 ```bash
-python saphir_gui.py
+python juice_gui.py
 ```
-Opens the PyQt6 Scenario Builder. Workflow:
+Opens the PyQt6 experiment window (the same window the **JUICE** icon opens). Workflow:
 1. **Step 1** — Load chemistry: either an MCM `.fac` file (converted on the fly) or an existing EASY file, or build ENZ inputs from SAPHIR archive data.
 2. **Step 2** — Select mechanism files and constrained variables (H2O, T, NO, O3, photolysis rates, …).
 3. **Step 3** — Configure injections, custom reactions, ENZ interpolation mode (linear / piecewise).
@@ -59,7 +63,7 @@ Runs all test scenarios (`scene_01`, `scene_02`, `ethanol`, `mcm_full`) in both 
 
 ```
 .
-├── saphir_gui.py              # GUI scenario builder (main entry point)
+├── juice_gui.py               # GUI experiment window (main entry point)
 ├── scenario_runner.py         # Headless ODE executor
 ├── results_viewer.py          # Interactive viewer + process analysis (BudgetEngine)
 ├── easy_parser.py             # FACSIMILE .easy / .fac / .mech / .rate parser

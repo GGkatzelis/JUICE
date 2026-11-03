@@ -4,7 +4,8 @@ rem from a terminal) and returns immediately, so several experiments can be work
 rem in parallel.  Uses the venv's pythonw.exe (no console window) if present.
 setlocal
 set "HERE=%~dp0"
-set "PYW=%HERE%..\..\.venv\Scripts\pythonw.exe"
+set "PYW=%HERE%.venv\Scripts\pythonw.exe"
+if not exist "%PYW%" set "PYW=%HERE%..\..\.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=pythonw.exe"
 start "" "%PYW%" "%HERE%juice_gui.py" %*
 endlocal
