@@ -2590,11 +2590,13 @@ class ScenarioRunner:
         _write_csv(out_path, df, _juice_header(self._stem, getattr(self, '_ode_backend', 'python')), file_type='cs')
         print(f"  ... Saved to {out_path}")
 
-        # Export kv/pd only when requested via checkbox in FR_GUI
+        # Export kv/pd only when requested ("export_kv_pd" in the scenario JSON: the Run step's
+        # "Also write the reaction rates and production/loss budgets" box, run_benchmark.py --kv-pd)
         if self.cfg.get('export_kv_pd', False):
             self._export_kinetics(df)
         else:
-            print("  (kv/pd export skipped — enable checkbox in FR_GUI)")
+            print("  (kv/pd export skipped — tick 'Also write the reaction rates and production/loss "
+                  "budgets' on the Run step, or set \"export_kv_pd\": true in the scenario JSON)")
 
         return out_path
 
@@ -2919,7 +2921,7 @@ if __name__ == "__main__":
     _parser = _ap.ArgumentParser(description="Run a JUICE scenario simulation.")
     _parser.add_argument("config", help="Path to scenario_config.json")
     _parser.add_argument("--gui", action="store_true",
-                         help="Show the results viewer after simulation (used by FR_GUI)")
+                         help="Show the results viewer after the simulation")
     _parser.add_argument("--toml", default="",
                          help="Path to active TOML config (threads to viewer and solver)")
     _args = _parser.parse_args()

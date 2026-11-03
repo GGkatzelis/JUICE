@@ -4,8 +4,8 @@ experiment_wizard.py — guided scenario builder (Step 3 of the JUICE workflow)
 
 A QWizard that asks experiment questions and fills an `ExperimentSpec`
 (experiment_spec.py).  On Finish the backend writes <name>.enz, <name>.easy,
-the mechanism subset (if compounds were chosen) and <name>.experiment.json,
-then hands the .easy to FR_GUI (Open Scenario path).  The user never edits a
+the mechanism subset (if compounds were chosen) and <name>.experiment.json.
+Its pages are the steps of juice_gui.py (shared through ExperimentHost).  The user never edits a
 file; the review page shows the generated EASY and keeps an "expert overrides"
 box and a button to the block-level editor (easy_builder.EasyBuilderDialog).
 

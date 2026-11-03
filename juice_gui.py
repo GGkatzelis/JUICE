@@ -17,8 +17,8 @@ last step.  No pop-ups on the main path.
 The only thing a user edits is the experiment description (<name>.experiment.json).
 The input files (ENZ, EASY, scenario JSON) are generated from it in the project
 folder with the IDL/FACSIMILE naming (QNO, QO3, QH2O, Q_<name>; q<NAME> switches)
-and can be opened from the review panel, but never need to be.  FR_GUI.py remains
-the expert tool for file-level editing.
+and can be opened from the review panel, but never need to be.  (The former expert
+tool for file-level editing, FR_GUI.py, is not part of the JUICE repository.)
 
     python juice_gui.py                 # paths from GG_GUI.toml if present, else FR_GUI.toml
     python juice_gui.py -t FR_GUI.toml  # another TOML

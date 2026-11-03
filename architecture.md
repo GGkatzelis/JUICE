@@ -1,6 +1,125 @@
-# SAPHIR-MCM Tool: Architecture Overview
+# JUICE — Architecture
 
-The tool is a full-stack simulation framework replacing the legacy MCM/EASY Fortran-based workflow with a modern Python/ODE-solver ecosystem. It bridges raw chamber measurement data (`.enz` files) and the Master Chemical Mechanism (MCM) kinetics, with GUI-driven scenario building, stiff ODE solving, and interactive visualization.
+JUICE replaces the IDL/EASY + FACSIMILE workflow for SAPHIR (and now other) chamber experiments with
+Python. Its contract is strict: for the same experiment JUICE writes the **same EASY and ENZ input
+files** the IDL workflow writes, and its solver reproduces **FACSIMILE's results** from them.
+
+This document has two parts. **Part A** describes JUICE as it is (November 2026). **Part B** is the
+development history of March–April 2026: the bug hunts and design decisions that led here. Part B
+refers to files that have since been replaced (`saphir_gui.py`, `scenario_config.json` written by
+hand, `compare_vs_facsimile.py`); its physics and its lessons still apply.
+
+---
+
+# Part A — JUICE today
+
+## A1. The pipeline
+
+```
+<name>.experiment.json                       what the user edits (ExperimentSpec), in juice_gui.py
+        │  experiment_spec.write_experiment
+        ▼
+<name>.enz  +  <name>.easy                   IDL/FACSIMILE layout and naming (QNO, QO3, Q_<name>, q<NAME>)
+        │  elog_generator.generate_both      #include expanded → <name>_juice.elog + canonical .elog
+        │  idl_parser.parse_idl_easy         canonical elog + ENZ → scenario dict
+        │  scenario_prep.prepare_scenario    + the validated [solver] keys of FR_GUI.toml
+        ▼
+<name>.json                                  scenario the runner reads
+        │  scenario_runner.py
+        ▼
+<name>.cs  (+ .kv, .pd)                      FACSIMILE column format: concentrations, settings,
+        │                                    rate constants and turnovers, production/destruction
+        ▼
+results_viewer.py                            Overview, Timeseries, Process analysis, Reactivity,
+                                             Budgets, Chemical space, figure list → .pptx
+```
+
+An existing IDL-written `.easy` enters at the second box and takes the same path, which is how the
+reference scenes are checked. A study (`study.py`) is the same pipeline repeated over a grid: it
+modifies the `ExperimentSpec`, never a generated file.
+
+## A2. Modules
+
+| Area | Modules |
+|---|---|
+| Step window | `juice_gui.py` (5 steps: Experiment, Chemistry, Injections, Chamber, Run), `experiment_wizard.py` (the step pages), `experiment_plots.py`, `juice_theme.py`, `loading_box.py` |
+| Experiment → input files | `experiment_spec.py`, `easy_builder.py` (EASY form ↔ scene), `easy_scene.py` (lossless EASY document model and writer), `injection_calc.py` (µl / syringe / MFC → ppb, mixtures), `oh_reactivity.py` |
+| Conditions | `enz_builder.py` (SAPHIR archive NetCDF → ENZ, solar zenith angle), `saphir_wiki.py` (action log import), `measured_inputs.py` (user's own conditions file), `load_saphir_environment.py` (ENZ → interpolators) |
+| Chamber and light | `chambers.py` + `chambers/<id>.chamber.json`, `lamp_photolysis.py` + `photolysis/` (σ·φ at 298 K, lamp J ratios) |
+| Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py` |
+| Parsing and evaluation | `elog_generator.py`, `idl_parser.py`, `easy_parser.py`, `evaluator.py`, `mcm_kinetics.py`, `mechanism.py` |
+| Solver | `scenario_prep.py`, `scenario_runner.py` |
+| Results | `results_viewer.py`, `overview_tab.py`, `timeseries_tab.py`, `plot_interaction.py`, `report_basket.py`, `report_dock.py`, `column_file_reader.py` |
+| Studies | `study.py`, `study_runner.py` (command line), `study_window.py` |
+| Checks | `run_benchmark.py`, `compare_juice_facsimile.py`, `check_easy_roundtrip.py`, `check_lamp_chamber.py`, `tests/` |
+
+`mechanism_solver.py` is a leftover stub; its logic lives in `scenario_runner.py`.
+
+## A3. Settings
+
+`FR_GUI.toml` holds the **validated solver set**; changing it changes results:
+BDF with analytic Jacobian, Numba-compiled stoichiometry kernel, `rtol` 1e-4, `atol_floor` 100
+molec/cm³, `piecewise` interpolation, settings frozen per output step (`perstep_snap`) with warm BDF
+continuation across ENZ rows (`perstep_warm`), Newton tolerance 1e-6 / 10 iterations. The step window
+never sets numerics; `scenario_prep.solver_from_toml` copies them into every scenario JSON.
+
+`[paths]` is absent on purpose: JUICE then uses the folders inside the repository
+(`MCM_tested_scenarios/IDL Input` for references and include files, `MCM_tested_scenarios/JUICE
+archive/JUICE` for new experiments). A machine-specific `FR_GUI.local.toml` (never committed) overrides
+any key.
+
+## A4. Solver conventions worth knowing
+
+- **ENZ values are step functions** (`interpolation = "piecewise"`, as in FACSIMILE). Every ENZ row
+  boundary and every output step starts a new segment; all settings (J values, rate constants, T, M,
+  switches) are evaluated once at the segment start and held (`perstep_snap`).
+- **Boundary convention.** `load_saphir_environment.py` shifts each ENZ row time by +1 ns, so a value
+  looked up *at* a row time is still the previous row's value (left-hand limit). With an ENZ grid equal
+  to the output grid, as in every SAPHIR archive experiment and every experiment JUICE writes, this
+  reproduces FACSIMILE (scene_04 … scene_09). See A6 for the case where it does not.
+- **Thermal expansion.** At a row boundary where M changes, concentrations (and the BDF history) are
+  rescaled by M_new/M_old, as FACSIMILE does.
+- **O1D** is not integrated; it is written as its pseudo-steady state J1·[O3]/k_quench.
+- **Last definition wins** for parameters and `k[...] = ...` overrides; reactions are never
+  deduplicated, so an include set must not repeat a reaction (Part B, section 8).
+
+## A5. Validation
+
+`python run_benchmark.py` runs every reference scene that has `.easy`, `.enz` and a FACSIMILE `.cs`
+(scene_01 … scene_09) through the full pipeline and compares every column of the result with
+FACSIMILE: maximum relative deviation over the whole run, concentrations measured against
+max(max|FAC|, 100 molec/cm³), the solver's absolute tolerance. The current table is in the README.
+`python -m pytest` (≈ 1.5 min, also on GitHub Actions) runs the input-side self-tests for every scene,
+scene_04 against FACSIMILE, and the UV-lamp chamber check, which has no FACSIMILE reference and is
+checked against physics instead (photostationary state, H2O2 loss, dark chemistry) and against a
+pinned run.
+
+## A6. Known limitations (November 2026)
+
+1. **One-output-step lag with sparse ENZ files.** In scene_01, scene_02 and scene_03 the ENZ has
+   few rows (e.g. roof open at 3600 s, next row at 7200 s) while results are written every 10 s.
+   FACSIMILE applies a new row from its own time (lights on at 3600 s); JUICE applies it one output
+   step later (3610 s), because of the left-hand convention in A4. Concentrations are then off by
+   up to 8 % (injection ramps) or more at light and temperature steps. An experiment in which the
+   settings snapshot took the right-hand value made scene_01 match to 0.03 % and left scene_04/06
+   unchanged, but scene_03's temperature step and the printed switch columns still differed. The
+   convention has to be settled against FACSIMILE before changing it; until then build ENZ files
+   with one row per output step (what the step window does).
+2. **Trace species below ~10 molec/cm³.** In scene_07 and scene_09, three of ~1 200 and ~3 200
+   species differ by 2.6–6.7 %; all peak at a few molecules per cm³, near the solver tolerance.
+3. **mcm_full** (5 842 species) is not in the benchmark: its files are named `full_MCM.*`, not after
+   the folder, and its 100 MB `.cs` would dominate the run time.
+4. **Chamber profiles other than SAPHIR** come from public numbers (`docs/chamber_survey.md`) and are
+   marked `verified: false`. The **guaiacol/creosol add-on** is a draft.
+5. The **`easy-start-gui` branch** of the old `MCM_SAPHIR_Tool` repository (start from an existing
+   EASY/ENZ or JSON, scenario editor, isopleth scan) was never merged into JUICE.
+
+---
+
+# Part B — Development history, March–April 2026
+
+*The sections below are kept as written at the time. File names and some defaults have changed since
+(see Part A); the physics, the bugs and how they were found remain the reference.*
 
 ## 1. Data-Centric Design Pattern
 

@@ -1,25 +1,42 @@
 # JUICE — Jülich Utility for Integrating Chemical Equations
 
-A Python simulation framework for SAPHIR chamber chemistry, replacing the legacy MCM/EASY + FACSIMILE Fortran workflow with a modern Python/SciPy ecosystem. JUICE reads SAPHIR `.enz` environment files together with MCM `.easy` / `.fac` mechanism files, builds a stiff ODE system from user-selected reactions, solves it with `scipy.integrate.solve_ivp` (BDF/Radau), and provides an interactive viewer with process analysis.
+Box-model simulations of atmospheric simulation-chamber experiments with the Master Chemical
+Mechanism (MCM). JUICE replaces the IDL/EASY + FACSIMILE workflow used at the SAPHIR chamber
+(Forschungszentrum Jülich) with Python:
+
+- **Describe the experiment, not the files.** A step-by-step window takes the date and chamber
+  conditions (from the SAPHIR archive, the SAPHIR wiki log, or your own measured-conditions file),
+  the precursors, the injections and the chamber effects. From that one description JUICE writes the
+  ENZ and EASY input files exactly as the IDL workflow did, extracts the MCM subset, and runs it.
+- **FACSIMILE-equivalent solver.** A stiff BDF solver with an analytic Jacobian and a Numba kernel
+  reproduces FACSIMILE on the SAPHIR reference experiments (see [Validation](#validation)).
+- **Results you can work with.** Overview, time series, process analysis (production/destruction
+  budgets), OH reactivity, chemical space (volatility, oxidation state), comparison with SAPHIR
+  measurements, and a figure list that becomes a PowerPoint file.
+- **Studies.** Many experiments with one consistent change, or 1–2 axis sweeps (ozone isopleths,
+  NOx/VOC-sensitive regimes, sensitivities).
+- **Other chambers and UV lamps.** Chamber profiles (volume, dilution, walls, light source) and lamp
+  photolysis from the lamp spectrum.
 
 ## Requirements
 
-- **Python ≥ 3.11** (tested on 3.14.3)
-- Dependencies listed in [requirements.txt](requirements.txt): `numpy`, `scipy`, `pandas`, `matplotlib`, `PyQt6`
+- **Python ≥ 3.11** (tested on 3.14)
+- Windows is the tested platform (the GUI and launchers); the solver and tools are plain Python
+- Dependencies in [requirements.txt](requirements.txt): numpy, scipy, pandas, matplotlib, PyQt6,
+  numba, netCDF4, requests, Pillow, python-pptx, imageio, imageio-ffmpeg
 
 ## Installation
 
-```bash
+Windows (PowerShell):
+```powershell
 git clone https://github.com/GGkatzelis/JUICE.git
 cd JUICE
 python -m venv .venv
-# Windows
 .venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
 pip install -r requirements.txt
+python experiment_spec.py --selftest; if ($?) { python check_lamp_chamber.py }   # quick sanity check
 ```
+macOS / Linux: the same, with `source .venv/bin/activate` and `&&` instead of `; if ($?) { … }`.
 The desktop launchers look for the virtual environment first as `.venv` inside the repository, then
 two folders up (`..\..\.venv`, a shared venv next to several projects), and otherwise use the
 `pythonw.exe` on the PATH. Everything else (reference scenarios, chamber profiles, the σ·φ photolysis
@@ -37,98 +54,53 @@ python make_shortcut.py --startmenu  # also in the Start menu
 Double-click it to pick a result, or drop a `.cs` file on it. Each click opens a new, independent
 window. Shortcuts hold this PC's paths, so they are not in git. Run the script once after cloning.
 
-### GUI scenario builder
-```bash
+### The experiment window
+```powershell
 python juice_gui.py
 ```
-Opens the PyQt6 experiment window (the same window the **JUICE** icon opens). Workflow:
-1. **Step 1** — Load chemistry: either an MCM `.fac` file (converted on the fly) or an existing EASY file, or build ENZ inputs from SAPHIR archive data.
-2. **Step 2** — Select mechanism files and constrained variables (H2O, T, NO, O3, photolysis rates, …).
-3. **Step 3** — Configure injections, custom reactions, ENZ interpolation mode (linear / piecewise).
-4. **Run** — writes `scenario_config.json`, invokes `scenario_runner.py`, and launches `results_viewer.py` on completion.
+The same window the **JUICE** icon opens. Five steps down the left, a review panel on the right that
+always shows what the experiment contains:
 
-### Headless run
-```bash
-python scenario_runner.py "MCM_tested_scenarios/IDL Input/ethanol/scenario_config.json"
+1. **Experiment**: name, folder, date and time window, chamber, conditions (SAPHIR archive, your own
+   measured file, or constants), roof or lamp schedule; or start from a template, a saved
+   experiment, or an imported SAPHIR wiki log.
+2. **Chemistry**: precursors (the MCM subset is extracted for you) or an existing include set,
+   add-on chemistry, reaction-rate adjustments.
+3. **Injections**: what, how much (ppb, µl by syringe, gas syringe, mass-flow controller) and when;
+   mixtures; the OH reactivity each injection adds.
+4. **Chamber**: wall deposition, wall sources, background reactivity, dilution, initial values.
+5. **Run**: writes the input files, runs the solver and opens the results.
+
+You only edit the experiment description (`<name>.experiment.json`); the ENZ, EASY and scenario JSON
+are generated from it and can be opened from the review panel.
+
+### Results without the window
+```powershell
+python results_viewer.py path\to\<name>.cs
 ```
-Writes `simulation_results.csv`, `simulation_kinetics.npz`, `simulation_reactions.csv` next to the config, then launches the viewer.
+or drop a `.cs` file on the **JUICE Results** icon.
 
-### Benchmark suite (validates against FACSIMILE)
-```bash
-python run_benchmark.py
+### Command line
+```powershell
+python scenario_runner.py path\to\<name>.json --toml FR_GUI.toml          # one prepared run
+python study_runner.py path\to\<name>.study.json --workers 4 --yes        # a study
+python run_benchmark.py --workers 4                                       # JUICE vs FACSIMILE, scene_01..09
+python compare_juice_facsimile.py scene_04 --tol 0.02 --no-stop --juice-dir "MCM_tested_scenarios\JUICE archive\JUICE\benchmark\scene_04"
 ```
-Runs all test scenarios (`scene_01`, `scene_02`, `ethanol`, `mcm_full`) in both linear and piecewise interpolation modes, compares every species against the `.cs` FACSIMILE reference, prints agreement tables.
+`<name>.json` is the scenario the Run step writes next to the experiment's EASY and ENZ files. The
+benchmark writes its runs to `MCM_tested_scenarios\JUICE archive\JUICE\benchmark\` (not in git); the
+last line compares one of them again and lists every column.
 
-## Repository layout
-
+### Tests
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest                  # 26 tests, about 1.5 minutes
+python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
-.
-├── juice_gui.py               # GUI experiment window (main entry point)
-├── scenario_runner.py         # Headless ODE executor
-├── results_viewer.py          # Interactive viewer + process analysis (BudgetEngine)
-├── easy_parser.py             # FACSIMILE .easy / .fac / .mech / .rate parser
-├── idl_parser.py              # SAPHIR IDL-workflow .easy → JSON converter
-├── mcm_converter.py           # Raw MCM .fac → EASY include files
-├── mcm_kinetics.py            # KMT / Troe fall-off functions, COMPRC evaluator
-├── load_saphir_environment.py # .enz file loader → scipy interpolators
-├── mechanism.py               # Reaction / Mechanism dataclasses
-├── mechanism_solver.py        # Legacy stub (migrated into scenario_runner.py)
-├── run_benchmark.py           # Batch regression runner vs FACSIMILE
-├── compare_vs_facsimile.py    # Single-scenario comparison CLI
-├── diagnostic_comparison.py   # Side-by-side timeseries plot tool
-├── mcm_species_db.py          # MCM species catalogue + formula lookup
-├── enz_builder.py             # ENZ file builder dialog (GUI component)
-├── architecture.md            # Internal design notes
-├── mechanisms/                # base/<MCM download, unmodified, manifest+checksums>  addons/<EASY include sets, manifest>
-├── MCM_database/              # legacy test subsets (the MCM v3.3.1 download moved to mechanisms/base/MCM_v3.3.1)
-└── MCM_tested_scenarios/      # Reference scenarios + FACSIMILE .cs outputs
-    └── IDL Input/
-        ├── scene_01/  scene_02/  scene_03/   # Minimal validation cases
-        ├── ethanol/                          # Single-VOC chamber day
-        └── mcm_full/                         # Full-MCM (5842 species)
-```
-
-## Validation status
-
-JUICE is continuously regression-tested against FACSIMILE. Current agreement on the shipped scenarios (median ratio within ±2% counts as "matched"):
-
-| Scenario | Species within ±2% (linear / piecewise) | Notes |
-|---|---|---|
-| scene_01  | matched / matched | T=const, injection + dilution |
-| scene_02  | matched / matched | T step, thermal rescaling |
-| scene_03  | 15/15 / 15/15     | chemistry-source reactions |
-| ethanol   | 9/38 / 12/38      | baseline HO2 −7.6% propagates to peroxides; see `architecture.md` |
-| mcm_full  | ~20% / ~20%       | long-tail 5-30% from RO2 coupling + solver tolerance |
-
-Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
-experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
-is run headless and checked against physics that must hold (every J = 0 in the dark, dilution rate,
-extended photostationary state jNO₂[NO₂] = [NO](k[O₃]+k[HO₂]+k[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
-production only while lit, N₂O₅ at night) and against the pinned result in
-`MCM_tested_scenarios/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
-
-See [architecture.md](architecture.md) for the physics, validation deep-dive, and known limitations.
-
-To run and compare your own scenario, follow [docs/validation_with_claude.md](docs/validation_with_claude.md) — a step-by-step playbook (also pasteable directly into Claude Code or claude.ai to have it run the comparison and return a markdown report).
-
-## Citation and collaboration
-
-If you use JUICE in a publication, please cite it. GitHub's "Cite this repository" button gives the
-reference from [CITATION.cff](CITATION.cff). Please also contact us for the corresponding methods reference.
-
-JUICE is new research software. If you plan to use it for a publication, we strongly encourage you to
-contact us early. We are happy to help check that the setup and the results are correct. Where we
-contribute substantially to the analysis, co-authorship can be discussed in line with standard
-authorship guidelines. This is a request, not a condition of the license.
-
-## License
-
-[MIT](LICENSE) — free to use, modify, and redistribute with attribution.
-
-## Contact
-
-- Georgios Gkatzelis, Forschungszentrum Jülich GmbH — [g.gkatzelis@fz-juelich.de](mailto:g.gkatzelis@fz-juelich.de)
-- Franz Rohrer, Forschungszentrum Jülich GmbH — [f.rohrer@fz-juelich.de](mailto:f.rohrer@fz-juelich.de)
+The tests check the MCM download against its checksums, the EASY round-trip and builder for every
+reference scene, the experiment-description goldens (scene_05 and scene_09 rebuilt from a
+description give the IDL-written files), the chamber profiles, scene_04 against FACSIMILE, and the
+UV-lamp chamber. They also run on GitHub for every push to `main`.
 
 ## Chambers other than SAPHIR
 
@@ -201,3 +173,86 @@ first case alone, measures it and asks before starting the rest; finished runs a
 study is repeated or extended. Results: a table and CSV of metrics (O3 maximum, Ox gain while lit,
 OH mean, NOx at the end, …), an isopleth plot for two axes, lines with normalised sensitivities for
 one axis. Headless: `python study_runner.py <name>.study.json --workers 4 --yes`.
+
+## Validation
+
+`python run_benchmark.py` takes every reference scene in `MCM_tested_scenarios/IDL Input` that has
+the IDL-written `.easy`, its `.enz` and the FACSIMILE result `.cs`, runs it through the full JUICE
+pipeline with the validated solver settings, and compares **every column** of the result with
+FACSIMILE: the maximum relative deviation over the whole run, not a median. Concentrations are
+measured against max(max|FACSIMILE|, 100 molecules/cm³), the solver's absolute tolerance, so species
+the solver does not resolve in either program are not reported as 100 % off.
+
+Result of 3 November 2026 (tolerance ±2 %, 4 solver processes in parallel):
+
+| scene | settings within ±2 % | species within ±2 % | worst species | species within ±0.1 % | run time |
+|---|---|---|---|---|---|
+| scene_04 | 61/61 | 30/30 | NO3 0.24 % | 26/30 | 28 s |
+| scene_05 | 78/78 | 57/57 | NO3 0.12 % | 55/57 | 28 s |
+| scene_06 | 107/107 | 747/747 | C531O2 0.35 % | 670/747 | 66 s |
+| scene_07 | 92/92 | 1162/1165 | C924O2 2.6 % ¹ | 1098/1165 | 61 s |
+| scene_08 | 95/95 | 612/612 | SA 0.31 % | 603/612 | 53 s |
+| scene_09 | 110/110 | 3225/3228 | NC4PDCO2H 6.7 % ¹ | 1750/3228 | 3.8 min |
+| scene_01 | 5/8 | 0/2 | Y 8.4 % ² | 0/2 | 10 s |
+| scene_02 | 3/8 | 0/2 | Y 8.4 % ² | 0/2 | 10 s |
+| scene_03 | 30/56 | 11/22 | O 91 % ² | 6/22 | 26 s |
+
+Scenes 04–09 are SAPHIR experiments (one ENZ row per minute, as the archive and the step window write
+them): every setting (J values, rate constants, T, M, dilution) agrees, and so does essentially every
+species.
+¹ The three species outside ±2 % in scene_07 and in scene_09 peak at a few molecules per cm³.
+² scene_01–03 are small hand-written tests whose ENZ has only a few rows (lights on at 3600 s, the
+next row an hour later) while results are written every 10 s. JUICE applies each new row one output
+step (10 s) later than FACSIMILE does; that shift alone produces these deviations. It is the first
+known limitation in [architecture.md](architecture.md), section A6.
+
+Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
+experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
+is run headless and checked against physics that must hold (every J = 0 in the dark, dilution rate,
+extended photostationary state jNO₂[NO₂] = [NO](k[O₃]+k[HO₂]+k[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
+production only while lit, N₂O₅ at night) and against the pinned result in
+`MCM_tested_scenarios/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
+
+See [architecture.md](architecture.md) for how JUICE is built, the solver conventions, the known
+limitations, and the development history.
+
+## Repository layout
+
+```
+juice_gui.py                 experiment window (the JUICE icon); step pages in experiment_wizard.py
+results_viewer.py            results viewer (the JUICE Results icon); tabs in overview_tab.py, timeseries_tab.py
+study_window.py, study.py    studies; study_runner.py runs one from the command line
+experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
+scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
+scenario_runner.py           the solver
+chambers.py, chambers/       chamber profiles
+lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)
+mechanism_registry.py, mechanisms/   MCM v3.3.1 as downloaded (checksums) and add-on chemistry
+mcm_converter.py             MCM subset → EASY include files
+run_benchmark.py, compare_juice_facsimile.py, check_*.py, tests/   checks
+templates/, mixtures/        experiment templates, injection mixtures
+MCM_tested_scenarios/        reference scenes with their FACSIMILE results, include files,
+                             UV-lamp reference; JUICE archive/ holds your own runs (not in git)
+docs/                        chamber survey, lamp-photolysis literature and practice
+architecture.md              how JUICE is built
+FR_GUI.toml                  settings: the validated solver set; your own paths in FR_GUI.local.toml
+```
+
+## Citation and collaboration
+
+If you use JUICE in a publication, please cite it. GitHub's "Cite this repository" button gives the
+reference from [CITATION.cff](CITATION.cff). Please also contact us for the corresponding methods reference.
+
+JUICE is new research software. If you plan to use it for a publication, we strongly encourage you to
+contact us early. We are happy to help check that the setup and the results are correct. Where we
+contribute substantially to the analysis, co-authorship can be discussed in line with standard
+authorship guidelines. This is a request, not a condition of the license.
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and redistribute with attribution.
+
+## Contact
+
+- Georgios Gkatzelis, Forschungszentrum Jülich GmbH — [g.gkatzelis@fz-juelich.de](mailto:g.gkatzelis@fz-juelich.de)
+- Franz Rohrer, Forschungszentrum Jülich GmbH — [f.rohrer@fz-juelich.de](mailto:f.rohrer@fz-juelich.de)
