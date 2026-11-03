@@ -1,0 +1,30 @@
+name: tests
+
+# Runs the JUICE test suite (tests/, ~2 min) on every push and pull request to main:
+# MCM checksums, EASY round-trip and builder for scene_01..09, the experiment-description goldens,
+# chamber profiles, scene_04 against FACSIMILE, and the UV-lamp chamber check.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Test
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pytest -q
