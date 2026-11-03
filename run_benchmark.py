@@ -1,25 +1,55 @@
-"""Run all test scenarios in both interpolation modes and compare against FACSIMILE.
-Saves results as simulation_results_<mode>.csv and prints comparison tables.
-
-Usage: python run_benchmark.py [--skip-mcm-full]
 """
-import os, sys, json, time, shutil, re
-import pandas as pd
-import numpy as np
-from scipy.interpolate import interp1d
+run_benchmark.py — JUICE vs FACSIMILE on the reference scenarios.
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-SCENARIOS = [
-    ("scene_01", os.path.join(BASE, "MCM_tested_scenarios", "IDL Input", "scene_01")),
-    ("scene_02", os.path.join(BASE, "MCM_tested_scenarios", "IDL Input", "scene_02")),
-    ("ethanol",  os.path.join(BASE, "MCM_tested_scenarios", "IDL Input", "ethanol")),
-    ("mcm_full", os.path.join(BASE, "MCM_tested_scenarios", "IDL Input", "mcm_full")),
-]
-MODES = ["linear", "piecewise"]
+For every scene in MCM_tested_scenarios/IDL Input that has <scene>.easy, <scene>.enz and the
+FACSIMILE reference <scene>.cs (scene_01 … scene_09):
+
+    1. copy the .easy and .enz to <work>/<scene>/  (the reference folder is never written to)
+    2. prepare the scenario JSON exactly as the step GUI does (scenario_prep.prepare_scenario,
+       solver settings from FR_GUI.toml [solver] — the validated set)
+    3. run scenario_runner.py in its own process (N in parallel with --workers)
+    4. compare the JUICE .cs with the FACSIMILE .cs (compare_juice_facsimile.compare)
+
+and print one table: settings and concentrations within --tol, the worst species, run time.
+The same table is written to <work>/benchmark_results.md, the numbers to benchmark_results.json,
+each scene's full comparison to <work>/<scene>/<scene>_difference_JUICE_Facsimile.log.
+
+    python run_benchmark.py                          # all scenes, work dir = output_root/benchmark
+    python run_benchmark.py scene_03 scene_04        # some scenes
+    python run_benchmark.py --workers 3              # parallel solver processes
+    python run_benchmark.py --compare-only           # re-compare existing results, no runs
+    python run_benchmark.py --kv-pd                  # also export and compare rate constants (k, v)
+
+Exit code 0 when every scene's settings and concentrations are within --tol (default 2 %).
+
+`parse_cs_file` is kept for check_lamp_chamber.py.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as _dt
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import pandas as pd
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF_ROOT = os.path.join(HERE, "MCM_tested_scenarios", "IDL Input")
+TOML = os.path.join(HERE, "FR_GUI.toml")
+S_LABEL = "1. s-values (settings)"
+C_LABEL = "2. c-values (concentrations)"
 
 
 def parse_cs_file(cs_path):
-    """Parse FACSIMILE .cs output file."""
+    """Parse a FACSIMILE .cs output file into a DataFrame (TIME + one column per output)."""
     with open(cs_path, encoding='latin-1') as f:
         lines = f.readlines()
     col_names = ['TIME']
@@ -37,7 +67,7 @@ def parse_cs_file(cs_path):
                     float(vals[0]); float(vals[1])
                     data_start = i
                     break
-            except:
+            except ValueError:
                 pass
     rows = []
     for line in lines[data_start:]:
@@ -48,155 +78,184 @@ def parse_cs_file(cs_path):
             vals = [float(x) for x in line.split()]
             if len(vals) == len(col_names):
                 rows.append(vals)
-        except:
+        except ValueError:
             pass
     return pd.DataFrame(rows, columns=col_names)
 
 
-def compare_vs_facsimile(scenario_dir, sim_csv_path, ppb_threshold=0.001):
-    """Compare a simulation CSV against the FACSIMILE .cs in the same dir."""
-    cs_files = [f for f in os.listdir(scenario_dir)
-                if f.endswith('.cs') and not f.endswith('.cs.ps')]
-    if not cs_files:
-        return None
-
-    fac = parse_cs_file(os.path.join(scenario_dir, cs_files[0]))
-    sim = pd.read_csv(sim_csv_path)
-    sim_t = sim['TIME_s'].values
-    fac_t = fac['TIME'].values
-    common = [sp for sp in fac.columns if sp != 'TIME' and sp in sim.columns]
-
-    results = {}
-    for sp in common:
-        fi = interp1d(fac_t, fac[sp].values, fill_value='extrapolate')(sim_t)
-        mid = len(sim_t) // 2
-        s, f, M = sim[sp].values[mid:], fi[mid:], sim['M'].values[mid:]
-        s_ppb, f_ppb = s / M * 1e9, f / M * 1e9
-        mask = (np.abs(f_ppb) > ppb_threshold) & (np.abs(s_ppb) > ppb_threshold)
-        if mask.sum() < 3:
-            continue
-        pct = (np.median(s_ppb[mask] / f_ppb[mask]) - 1) * 100
-        results[sp] = pct
-    return results
+def reference_scenes() -> list[str]:
+    """Scenes with the three files the benchmark needs, in name order."""
+    out = []
+    for name in sorted(os.listdir(REF_ROOT)):
+        d = os.path.join(REF_ROOT, name)
+        if os.path.isdir(d) and all(os.path.isfile(os.path.join(d, f"{name}{ext}"))
+                                    for ext in (".easy", ".enz", ".cs")):
+            out.append(name)
+    return out
 
 
-def run_scenario(name, scenario_dir, mode):
-    """Run a scenario with the given interpolation mode, save results."""
-    config_path = os.path.join(scenario_dir, "scenario_config.json")
-    with open(config_path, 'r') as f:
-        cfg = json.load(f)
+def _worker_env(parallel: bool) -> dict:
+    env = dict(os.environ)
+    env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+    if parallel:      # one BLAS / numba thread per solver process, as study.py does
+        env.update({"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+                    "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1"})
+    return env
 
-    # Set interpolation mode
-    cfg['interpolation'] = mode
 
-    # Write temporary config
-    tmp_config = os.path.join(scenario_dir, f"_tmp_config_{mode}.json")
-    with open(tmp_config, 'w') as f:
-        json.dump(cfg, f, indent=4)
+def prepare(scene: str, work: str, kv_pd: bool) -> str:
+    """Copy the scene's inputs to the work folder and write the scenario JSON; returns its path."""
+    import scenario_prep as sp
+    src = os.path.join(REF_ROOT, scene)
+    dst = os.path.join(work, scene)
+    os.makedirs(dst, exist_ok=True)
+    for ext in (".easy", ".enz"):
+        shutil.copy2(os.path.join(src, scene + ext), dst)
+    res = {"easy": os.path.join(dst, scene + ".easy"), "enz": os.path.join(dst, scene + ".enz")}
+    include_dir = sp.load_paths(TOML)["include_dir"]
+    # the reference folder (and its chemistry/ subfolder) is searched for include files first
+    return sp.prepare_scenario(res, include_dir, export_kv_pd=kv_pd, toml_path=TOML,
+                               extra_dirs=[src, os.path.join(src, "chemistry")])
 
-    print(f"\n{'='*65}")
-    print(f" Running: {name} [{mode}]")
-    print(f"{'='*65}")
 
-    t0 = time.time()
+def prepare_quietly(scene: str, work: str, kv_pd: bool) -> tuple[str, str]:
+    """prepare() with its parser report written to <scene>_prepare.log; returns (json path, error)."""
+    os.makedirs(os.path.join(work, scene), exist_ok=True)
+    buf = io.StringIO()
     try:
-        # Import fresh each time to avoid stale state
-        import scenario_runner as sr
-        runner = sr.ScenarioRunner(tmp_config)
-        runner._setup_environment()
-        runner._build_mechanism()
-        runner._solve()
-        runner._export_results()
-        elapsed = time.time() - t0
-        print(f">>> Completed in {elapsed//60:.0f}m {elapsed%60:.1f}s")
+        with contextlib.redirect_stdout(buf):
+            path, err = prepare(scene, work, kv_pd), ""
     except Exception as e:
-        elapsed = time.time() - t0
-        print(f">>> FAILED after {elapsed:.1f}s: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up temp config
-        if os.path.exists(tmp_config):
-            os.remove(tmp_config)
-
-    # Rename output to mode-specific filename
-    src = os.path.join(scenario_dir, "simulation_results.csv")
-    dst = os.path.join(scenario_dir, f"simulation_results_{mode}.csv")
-    if os.path.exists(src):
-        shutil.copy2(src, dst)
-        print(f"  Saved: {dst}")
-        return dst, elapsed
-    return None, elapsed
+        path, err = "", f"preparation failed — {type(e).__name__}: {e}"
+    with open(os.path.join(work, scene, f"{scene}_prepare.log"), "w", encoding="utf-8") as fh:
+        fh.write(buf.getvalue())
+    return path, err
 
 
-def print_comparison_table(all_results):
-    """Print formatted comparison of all scenarios and modes."""
-    KEY_SPECIES = ['OH','O3','HO2','NO','NO2','HCHO','H2O2','HNO3',
-                   'CH3CHO','PAN','CO','C2H5OH','CH3COCH3']
-
-    print(f"\n\n{'='*80}")
-    print(f" COMPREHENSIVE COMPARISON: JUICE vs FACSIMILE")
-    print(f"{'='*80}\n")
-
-    for name in ["scene_01", "scene_02", "ethanol", "mcm_full"]:
-        if name not in all_results:
-            continue
-        data = all_results[name]
-        print(f"\n--- {name} ---")
-
-        # Print timing
-        for mode in MODES:
-            if mode in data and data[mode].get('time'):
-                t = data[mode]['time']
-                print(f"  {mode:12s}: {t//60:.0f}m {t%60:.1f}s")
-
-        # Print accuracy summary
-        for mode in MODES:
-            if mode in data and data[mode].get('results'):
-                r = data[mode]['results']
-                n2 = sum(1 for v in r.values() if abs(v) <= 2.0)
-                n5 = sum(1 for v in r.values() if abs(v) <= 5.0)
-                print(f"  {mode:12s}: {n2}/{len(r)} within +/-2%, "
-                      f"{n5}/{len(r)} within +/-5%")
-
-        # Print key species side-by-side
-        has_linear = 'linear' in data and data['linear'].get('results')
-        has_pw = 'piecewise' in data and data['piecewise'].get('results')
-        if has_linear or has_pw:
-            print(f"\n  {'Species':14s} {'Linear':>10s}  {'Piecewise':>10s}")
-            print(f"  {'':14s} {'':>10s}  {'':>10s}")
-            for sp in KEY_SPECIES:
-                l_val = data.get('linear', {}).get('results', {}).get(sp)
-                p_val = data.get('piecewise', {}).get('results', {}).get(sp)
-                l_str = f"{l_val:+.2f}%" if l_val is not None else "  ---"
-                p_str = f"{p_val:+.2f}%" if p_val is not None else "  ---"
-                if l_val is not None or p_val is not None:
-                    print(f"  {sp:14s} {l_str:>10s}  {p_str:>10s}")
+def run(scene: str, work: str, json_path: str, parallel: bool) -> dict:
+    """Solve one prepared scene in its own process; returns {'scene', 'seconds', 'error'}."""
+    t0 = time.monotonic()
+    log_path = os.path.join(work, scene, f"{scene}_run.log")
+    try:
+        with open(log_path, "w", encoding="utf-8") as log:
+            proc = subprocess.run([sys.executable, "-u", os.path.join(HERE, "scenario_runner.py"),
+                                   json_path, "--toml", TOML],
+                                  cwd=HERE, env=_worker_env(parallel), stdout=log, stderr=subprocess.STDOUT)
+        err = "" if proc.returncode == 0 else f"solver exit code {proc.returncode} (see {log_path})"
+        if not err and not os.path.isfile(os.path.join(work, scene, scene + ".cs")):
+            err = f"solver wrote no result (see {log_path})"
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    return {"scene": scene, "seconds": time.monotonic() - t0, "error": err}
 
 
-def main():
-    skip_mcm = '--skip-mcm-full' in sys.argv
-
-    all_results = {}
-
-    for name, scenario_dir in SCENARIOS:
-        if skip_mcm and name == 'mcm_full':
-            print(f"\n>>> Skipping mcm_full (--skip-mcm-full)")
-            continue
-
-        all_results[name] = {}
-
-        for mode in MODES:
-            csv_path, elapsed = run_scenario(name, scenario_dir, mode)
-            all_results[name][mode] = {'time': elapsed, 'csv': csv_path}
-
-            if csv_path:
-                results = compare_vs_facsimile(scenario_dir, csv_path)
-                if results:
-                    all_results[name][mode]['results'] = results
-
-    print_comparison_table(all_results)
+def compare(scene: str, work: str, tol: float, floor: float) -> dict:
+    """Run the comparison quietly (full report into the scene's log); returns its summary."""
+    import compare_juice_facsimile as cjf
+    log_path = os.path.join(work, scene, f"{scene}_difference_JUICE_Facsimile.log")
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            summary = cjf.compare(scene, tol, no_stop=True, floor=floor,
+                                  juice_dir_override=os.path.join(work, scene),
+                                  fac_dir_override=os.path.join(REF_ROOT, scene))
+    except Exception as e:
+        summary = {"ok": False, "groups": {}, "error": f"{type(e).__name__}: {e}"}
+    with open(log_path, "w", encoding="utf-8") as fh:
+        fh.write(buf.getvalue())
+    return summary
 
 
-if __name__ == '__main__':
-    main()
+def _group_cells(g: dict | None, tol: float) -> tuple[str, str]:
+    if not g:
+        return "—", "—"
+    within = g["n"] - g["n_exceed"]
+    worst = g["worst"][0] if g["worst"] else (0.0, "")
+    return f"{within}/{g['n']}", (f"{worst[1]} {worst[0]*100:.2g} %" if worst[1] else "—")
+
+
+def report(rows: list[dict], tol: float, floor: float) -> str:
+    """The results as a Markdown table (also printed)."""
+    lines = [f"JUICE vs FACSIMILE — {_dt.datetime.now():%Y-%m-%d %H:%M}, tolerance ±{tol*100:g} % "
+             f"(max relative deviation over the run; concentrations measured against "
+             f"max(max|FAC|, {floor:g} molec/cm³))", "",
+             "| scene | settings within | concentrations within | worst concentration | "
+             "within 0.1 % | run time | verdict |",
+             "|---|---|---|---|---|---|---|"]
+    for r in rows:
+        s = r["summary"]["groups"].get(S_LABEL)
+        c = r["summary"]["groups"].get(C_LABEL)
+        s_in, _ = _group_cells(s, tol)
+        c_in, c_worst = _group_cells(c, tol)
+        fine = (f"{sum(1 for rel, _ in c['all'] if rel <= 1e-3)}/{c['n']}" if c else "—")
+        t = r["run"]["seconds"] if r.get("run") else None
+        t_str = "—" if t is None else (f"{t:.0f} s" if t < 120 else f"{t/60:.1f} min")
+        problem = (r.get("run") or {}).get("error") or r["summary"].get("error", "")
+        ok = (not problem) and s is not None and c is not None and not s["n_exceed"] and not c["n_exceed"]
+        verdict = "pass" if ok else ("**FAIL** " + problem if problem else "**FAIL**")
+        lines.append(f"| {r['scene']} | {s_in} | {c_in} | {c_worst} | {fine} | {t_str} | {verdict} |")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="JUICE vs FACSIMILE on the reference scenarios.")
+    ap.add_argument("scenes", nargs="*", help="scene names (default: every reference scene)")
+    ap.add_argument("--work", default="", help="work folder (default: output_root/benchmark)")
+    ap.add_argument("--workers", type=int, default=1, help="solver processes in parallel (default 1)")
+    ap.add_argument("--tol", type=float, default=0.02, help="max relative deviation (default 0.02 = 2 %%)")
+    ap.add_argument("--floor", type=float, default=100.0,
+                    help="concentration floor, molec/cm³ (default 100 = the solver's atol_floor)")
+    ap.add_argument("--compare-only", action="store_true", help="compare existing results, do not run")
+    ap.add_argument("--kv-pd", action="store_true", help="export and compare k/v values too (slower)")
+    a = ap.parse_args(argv)
+
+    sys.path.insert(0, HERE)
+    import scenario_prep as sp
+    available = reference_scenes()
+    scenes = a.scenes or available
+    unknown = [s for s in scenes if s not in available]
+    if unknown:
+        print(f"not a reference scene (needs .easy, .enz and .cs in {REF_ROOT}): {', '.join(unknown)}")
+        return 2
+    work = a.work or os.path.join(sp.load_paths(TOML)["output_root"], "benchmark")
+    os.makedirs(work, exist_ok=True)
+    print(f"benchmark: {len(scenes)} scene(s) → {work}")
+
+    runs: dict[str, dict] = {}
+    if not a.compare_only:
+        parallel = a.workers > 1
+        prepared = {}
+        for s in scenes:                                   # sequential: the parsers print a lot
+            json_path, err = prepare_quietly(s, work, a.kv_pd)
+            if err:
+                runs[s] = {"scene": s, "seconds": 0.0, "error": err}
+                print(f"  {s}: {err}")
+            else:
+                prepared[s] = json_path
+        with ThreadPoolExecutor(max_workers=max(1, a.workers)) as pool:
+            futures = {s: pool.submit(run, s, work, j, parallel) for s, j in prepared.items()}
+            for s in prepared:
+                runs[s] = futures[s].result()
+                r = runs[s]
+                print(f"  {s}: {'solved' if not r['error'] else 'FAILED'} in {r['seconds']:.0f} s"
+                      + (f" — {r['error']}" if r["error"] else ""))
+
+    rows = []
+    for s in scenes:
+        summary = compare(s, work, a.tol, a.floor)
+        rows.append({"scene": s, "run": runs.get(s), "summary": summary})
+
+    table = report(rows, a.tol, a.floor)
+    print("\n" + table + "\n")
+    print(f"full comparisons: {work}\\<scene>\\<scene>_difference_JUICE_Facsimile.log")
+    with open(os.path.join(work, "benchmark_results.md"), "w", encoding="utf-8") as fh:
+        fh.write(table + "\n")
+    with open(os.path.join(work, "benchmark_results.json"), "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, indent=1, default=str)
+
+    ok = all(r["summary"].get("ok") and not (r.get("run") or {}).get("error") for r in rows)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
