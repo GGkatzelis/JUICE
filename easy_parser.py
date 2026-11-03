@@ -438,8 +438,10 @@ class EasyParser:
                         self.mech.aliases[alt_up] = canonical
                 return
 
-            # FUNCTION macro definition: NAME = FUNCTION[body]
-            func_m = re.match(r'(\w+)\s*=\s*FUNCTION\s*\[(.+)\]\s*$', clean_line, re.I)
+            # FUNCTION macro definition: NAME = FUNCTION[body]   (an inline "; comment" after the
+            # closing bracket is allowed, as in the pre-scan above — e.g. scene_01's
+            # DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]  ; P/(T*1.379E-19))
+            func_m = re.match(r'(\w+)\s*=\s*FUNCTION\s*\[(.+)\]\s*$', clean_line.split(';')[0].strip(), re.I)
             if func_m:
                 if not is_commented:
                     fname = func_m.group(1).strip().upper()
