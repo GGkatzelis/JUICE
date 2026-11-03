@@ -7,10 +7,17 @@ Usage:
     python compare_juice_facsimile.py scene_03 [--tol 1e-4] [--all]
 
 Options:
-    --tol   Max relative deviation threshold (default: 1e-4)
-    --all   Write all columns to log (default: top 100, with count warning)
+    --tol      Max relative deviation threshold (default: 1e-4)
+    --floor    Concentration floor in molec/cm³ (default: 100 = the solver's atol_floor): deviations
+               are measured against max(max|FAC|, floor), so species the solver does not resolve
+               (a few molecules per cm³) are not reported as 100 % off
+    --all      Write all columns to log (default: top 100, with count warning)
+    --no-stop  Continue through all groups after the first one that exceeds --tol
 
-Paths are read from FR_GUI.toml (easy_root, output_root).
+Paths come from FR_GUI.toml [paths] (+ FR_GUI.local.toml); without them the repository folders
+(easy_root = MCM_tested_scenarios/IDL Input, output_root = …/JUICE archive/JUICE) are used.
+Exit code 0 = every compared group within --tol, 1 = not (or a file is missing).
+compare() returns the same verdict as a summary dict (used by run_benchmark.py).
 Files compared (in order):
   1. s-values  : settings (KMT, J-values, COSX, T, M, …)
   2. k-values  : reaction rate constants  (needs *.kv)
@@ -22,8 +29,6 @@ Stops and reports the first column whose max relative deviation exceeds --tol.
 
 import sys
 import io
-if sys.platform == "win32" and sys.stdout is not None:
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 import os
 import re
 import argparse
@@ -267,15 +272,34 @@ def _show_juice_only_pd(pd_jui, p_jui):
 
 
 # ── Main comparison ────────────────────────────────────────────────────────
+# molec/cm³ — the solver's absolute tolerance (FR_GUI.toml [solver] atol_floor = 100, ≈ 4e-6 ppt):
+# differences below it are not resolved by the solver in either model, so they are not compared.
+DEFAULT_FLOOR = 100.0
+
+
+def _toml_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
+
+
 def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = False,
-            juice_dir_override: str = None, fac_dir_override: str = None):
-    # ── Read paths from TOML ─────────────────────────────────────────────
-    toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
-    with open(toml_path, "rb") as fh:
-        toml = tomllib.load(fh)
-    paths = toml.get("paths", {})
+            juice_dir_override: str = None, fac_dir_override: str = None,
+            floor: float = DEFAULT_FLOOR) -> dict:
+    """Compare one scenario and print the report.  Returns a summary:
+
+        {"ok": bool, "groups": {label: {"n": int, "n_exceed": int,
+                                        "worst": [(max_rel, column), ...]}}}
+
+    `floor` (molec/cm³) is the smallest scale a concentration's deviation is measured against:
+    max|JUICE − FAC| / max(max|FAC|, floor).  Species that never rise above the solver's absolute
+    tolerance (SO3, Cl at 1e-10 … 1e-170, late MCM products at a few molec/cm³) then count as
+    agreeing instead of as 100 % off.
+    Settings (J values, rate constants) are compared without a floor."""
+    # ── Paths: [paths] of the TOML (+ .local.toml), defaulting to the repository folders ──
+    from scenario_prep import load_paths
+    paths = load_paths(_toml_path())
     easy_root   = paths.get("easy_root",   "")
     output_root = paths.get("output_root", "")
+    summary = {"ok": True, "groups": {}}
 
     juice_dir = juice_dir_override or os.path.join(output_root, scenario)
     easy_dir  = fac_dir_override   or os.path.join(easy_root,  scenario)
@@ -313,9 +337,9 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     print(f"{'='*60}")
 
     if not os.path.isfile(cs_fac_path):
-        sys.exit(f"FACSIMILE .cs not found: {cs_fac_path}")
+        raise FileNotFoundError(f"FACSIMILE .cs not found: {cs_fac_path}")
     if not os.path.isfile(cs_jui_path):
-        sys.exit(f"JUICE .cs not found: {cs_jui_path}")
+        raise FileNotFoundError(f"JUICE .cs not found: {cs_jui_path}")
 
     fac = load_facsimile_cs(cs_fac_path)   # duplicate last row removed by _trim_boundary_rows
     jui = load_column_file(cs_jui_path)
@@ -337,7 +361,7 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     fac = pd.DataFrame(fac_aligned, index=t_ref)
 
     if len(t_ref) == 0:
-        sys.exit("No overlapping time range between JUICE and FACSIMILE output.")
+        raise ValueError("No overlapping time range between JUICE and FACSIMILE output.")
 
     # Case-insensitive column matching: FACSIMILE uses lowercase ENZ names (jno2),
     # JUICE uses uppercase (JNO2). Rename JUICE columns to FAC case where they
@@ -397,16 +421,16 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
               f"{'...' if len(jui_only) > 10 else ''})")
     print(f"Time points   : {len(t_ref)}\n")
 
-    def _compare_group(label, cols, jui_df, fac_df):
+    def _compare_group(label, cols, jui_df, fac_df, floor_=0.0):
         print(f"{'-'*60}")
-        print(f"  {label} ({len(cols)} columns)")
+        print(f"  {label} ({len(cols)} columns" + (f"; floor {floor_:g} molec/cm³" if floor_ > 0 else "") + ")")
         print(f"{'-'*60}")
         worst = []
         for col in cols:
             j = jui_df[col].values.astype(float)
             f = fac_df[col].values.astype(float)
             diff = j - f
-            scale = np.nanmax(np.abs(f))
+            scale = max(np.nanmax(np.abs(f)), floor_)
             rel = np.nanmax(np.abs(j)) if scale == 0 else np.nanmax(np.abs(diff)) / scale
             # Direction at the point of maximum absolute deviation
             idx_max = np.argmax(np.abs(diff))
@@ -434,26 +458,29 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
             remaining_exceed = sum(1 for r, *_ in worst[limit:] if r > tol)
             if remaining_exceed:
                 print(f"  ... {remaining_exceed} more columns exceed tolerance (not shown; use --all)")
+        _ranked = [(float(r), c) for r, c, *_ in sorted(worst, reverse=True)]
+        summary["groups"][label] = {"n": n_total, "n_exceed": n_exceed, "worst": _ranked[:10], "all": _ranked}
         exceeded = [(rel, col) for rel, col, *_ in worst if rel > tol]
         if exceeded:
+            summary["ok"] = False
             rel, col = exceeded[0]
             return False, col, rel
         return True, None, None
 
     groups = [
-        ("1. s-values (settings)", s_cols, jui, fac),
-        ("2. c-values (concentrations)", c_cols, jui, fac),
+        ("1. s-values (settings)", s_cols, jui, fac, 0.0),
+        ("2. c-values (concentrations)", c_cols, jui, fac, floor),
     ]
 
-    for label, cols, jui_df, fac_df in groups:
+    for label, cols, jui_df, fac_df, floor_ in groups:
         if not cols:
             print(f"\n  {label}: no common columns — skipped")
             continue
-        ok, bad_col, bad_rel = _compare_group(label, cols, jui_df, fac_df)
+        ok, bad_col, bad_rel = _compare_group(label, cols, jui_df, fac_df, floor_)
         if not ok:
             print(f"\n*** {'CONTINUES' if no_stop else 'STOP'}: {label} — '{bad_col}' max_rel={bad_rel:.2e} exceeds {tol:g} ***")
             if not no_stop:
-                return
+                return summary
 
     # k-values and v-values: compare against FACSIMILE .kv if available
     if os.path.isfile(kv_jui_path):
@@ -489,6 +516,10 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
                         worst.append((rel, rxn, direction, np.nanmean(jv), np.nanmean(j)))
                     worst.sort(key=lambda x: x[0], reverse=True)
                     n_exceed = sum(1 for r, *_ in worst if r > tol)
+                    summary["groups"][label] = {"n": len(worst), "n_exceed": n_exceed,
+                                                "worst": [(float(r), x) for r, x, *_ in worst[:10]]}
+                    if n_exceed:
+                        summary["ok"] = False
                     for rel, rxn, direction, mj, mf in worst[:10]:
                         flag = '  *** EXCEEDS TOLERANCE ***' if rel > tol else ''
                         print(f"  {rxn:45}  max_rel={rel:.2e}  {direction}  "
@@ -583,6 +614,10 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
                             _rel = np.max(np.abs(_koh_j[_mask] - _koh_f[_mask]) / _sc)
                             _tag = "*** EXCEEDS TOLERANCE ***" if _rel > tol else ""
                             print(f"  max_rel  = {_rel:.2e}  {_tag}")
+                            summary["groups"]["6. kOH"] = {"n": 1, "n_exceed": int(_rel > tol),
+                                                           "worst": [(float(_rel), "kOH")]}
+                            if _rel > tol:
+                                summary["ok"] = False
                         _koh_done = True
                 except Exception as _e:
                     print(f"  [WARNING] FACSIMILE pd: {_e}")
@@ -594,11 +629,21 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
         print("  kOH not computed (pd file or OH missing).")
 
     print(f"\n{'='*60}")
-    print("  All compared groups within tolerance.")
+    if summary["ok"]:
+        print(f"  All compared groups within tolerance ({tol:g}).")
+    else:
+        for label, g in summary["groups"].items():
+            if g["n_exceed"]:
+                print(f"  {label}: {g['n_exceed']} of {g['n']} exceed {tol:g}"
+                      f" (worst: {g['worst'][0][1]} {g['worst'][0][0]:.2e})")
     print(f"{'='*60}\n")
+    return summary
 
 
 if __name__ == "__main__":
+    # µ, ³, ─ on a Windows console; only when run as a script, never when imported
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         description="Compare JUICE vs FACSIMILE output for a scenario.")
     parser.add_argument("scenario", help="Scenario name (e.g. scene_03)")
@@ -612,14 +657,14 @@ if __name__ == "__main__":
                         help="Override JUICE output directory (default: output_root/scenario)")
     parser.add_argument("--fac-dir", default=None,
                         help="Override FACSIMILE reference directory (default: easy_root/scenario)")
+    parser.add_argument("--floor", type=float, default=DEFAULT_FLOOR,
+                        help=f"Concentration floor in molec/cm³ for the relative deviation "
+                             f"(default: {DEFAULT_FLOOR:g}; 0 = none)")
     args = parser.parse_args()
 
-    # Derive log path from TOML output_root
-    toml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml")
-    with open(toml_path, "rb") as fh:
-        _toml = tomllib.load(fh)
-    _juice_dir = args.juice_dir or os.path.join(
-        _toml.get("paths", {}).get("output_root", "."), args.scenario)
+    # Log next to the JUICE output (output_root from the TOML, repository default without [paths])
+    from scenario_prep import load_paths
+    _juice_dir = args.juice_dir or os.path.join(load_paths(_toml_path())["output_root"], args.scenario)
     os.makedirs(_juice_dir, exist_ok=True)
     log_path = os.path.join(_juice_dir,
                             f"{args.scenario}_difference_JUICE_Facsimile.log")
@@ -643,10 +688,15 @@ if __name__ == "__main__":
                  f"{_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     sys.stdout = _Tee(_saved_stdout, log_fh)
 
+    _summary = {"ok": False}
     try:
-        compare(args.scenario, args.tol, show_all=args.all, no_stop=args.no_stop,
-                juice_dir_override=args.juice_dir, fac_dir_override=args.fac_dir)
+        _summary = compare(args.scenario, args.tol, show_all=args.all, no_stop=args.no_stop,
+                           juice_dir_override=args.juice_dir, fac_dir_override=args.fac_dir,
+                           floor=args.floor)
+    except (FileNotFoundError, ValueError) as _e:
+        print(f"\n*** {_e}")
     finally:
         sys.stdout = _saved_stdout
         log_fh.close()
     print(f"\nLog written to: {log_path}")
+    sys.exit(0 if _summary.get("ok") else 1)
