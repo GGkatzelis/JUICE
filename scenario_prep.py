@@ -49,25 +49,93 @@ def pick_toml(argv) -> str:
     return ""
 
 
-def solver_from_toml(toml_path: str) -> dict:
-    """The solver keys scenario_runner reads from the scenario JSON (not from the TOML),
-    taken from the TOML's [solver] section so every run uses the validated set.
-    Fallbacks are the validated values, never the runner's own (python / linear / 1e-2)."""
+# ── Solver profiles ──────────────────────────────────────────────────────────
+# Two validated ways to run the same chemistry.  Both agree with FACSIMILE far inside the 2 % benchmark
+# tolerance for every species that reaches 1 ppt (benchmark 2026-11-04, scenes 04-09); they differ in
+# run time and in how tightly they track FACSIMILE.  The TOML may override the numbers in
+# [solver.profiles.<name>]; the names and these defaults are the reference.
+SOLVER_PROFILES: Dict[str, dict] = {
+    "fast": {
+        "rtol": 1e-4, "perstep_warm": True,
+        "label": "Fast (rtol 1e-4, warm continuation)",
+        "summary": "About half the run time of 'precise'. Every species above 1 ppt within 0.6 % of FACSIMILE, "
+                   "O3, NOx, OH and HO2 within 0.25 %; trace species below 1e-6 ppt at most 7 % off. "
+                   "For O3, SOA and product studies, sweeps and isopleths.",
+    },
+    "precise": {
+        "rtol": 1e-6, "perstep_warm": False,
+        "label": "Precise (rtol 1e-6, cold restart per ENZ row)",
+        "summary": "About twice the run time. In large mechanisms (scene_06-09) O3, NOx, OH and HO2 within 0.03 % "
+                   "of FACSIMILE (5-10x tighter than 'fast'), every species above 1 ppt within 0.35 % (scene_09: 0.06 %). "
+                   "Rare large relative excursions (up to 5x) in species below 0.01 ppt. "
+                   "For validation against FACSIMILE and reference runs.",
+    },
+}
+DEFAULT_PROFILE = "fast"
+
+
+def _tobool(v) -> bool:
+    return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _read_solver_section(toml_path: str) -> dict:
     sol: dict = {}
-    for p in (toml_path, toml_path[:-5] + ".local.toml" if toml_path.endswith(".toml") else ""):
+    for p in (toml_path, toml_path[:-5] + ".local.toml" if toml_path and toml_path.endswith(".toml") else ""):
         if p and os.path.isfile(p):
             try:
                 with open(p, "rb") as fh:
                     sol.update(tomllib.load(fh).get("solver", {}))
             except Exception as e:
                 print(f"[scenario_prep] could not read {p}: {e}")
+    return sol
+
+
+def resolve_profile(sol: dict, profile: str | None = None) -> dict:
+    """{'solver_profile', 'rtol', 'perstep_warm'} from a [solver] section.
+
+    `profile` (or the section's `profile` key) names one of SOLVER_PROFILES, with the numbers of
+    [solver.profiles.<name>] on top.  A section without a `profile` key and with rtol_default is a
+    settings file from before profiles existed: its rtol_default / perstep_warm are used as written
+    (profile 'custom'), so an old TOML reproduces exactly what it did."""
+    name = (profile or sol.get("profile") or "").strip().lower()
+    if not name and "rtol_default" in sol:
+        return {"solver_profile": "custom", "rtol": float(sol["rtol_default"]),
+                "perstep_warm": _tobool(sol.get("perstep_warm", False))}
+    name = name or DEFAULT_PROFILE
+    if name not in SOLVER_PROFILES:
+        raise ValueError(f"unknown solver profile '{name}' (choose {', '.join(SOLVER_PROFILES)})")
+    p = dict(SOLVER_PROFILES[name])
+    p.update((sol.get("profiles", {}) or {}).get(name, {}))
+    return {"solver_profile": name, "rtol": float(p["rtol"]), "perstep_warm": _tobool(p["perstep_warm"])}
+
+
+def solver_profiles(toml_path: str = "") -> Dict[str, dict]:
+    """The profiles with the TOML's numbers applied: {name: {rtol, perstep_warm, label, summary}}."""
+    sol = _read_solver_section(toml_path)
+    out = {}
+    for name, p in SOLVER_PROFILES.items():
+        out[name] = {**p, **resolve_profile({"profiles": sol.get("profiles", {})}, name)}
+    return out
+
+
+def default_profile(toml_path: str = "") -> str:
+    """The profile a run uses when nobody chooses: [solver] profile, else 'custom' for a pre-profile TOML."""
+    return resolve_profile(_read_solver_section(toml_path))["solver_profile"]
+
+
+def solver_from_toml(toml_path: str, profile: str | None = None) -> dict:
+    """The solver keys scenario_runner reads from the scenario JSON (not from the TOML),
+    taken from the TOML's [solver] section so every run uses a validated set.
+    `profile` ('fast' | 'precise') overrides the TOML's [solver] profile.
+    Fallbacks are the validated values, never the runner's own (python / linear / 1e-2)."""
+    sol = _read_solver_section(toml_path)
 
     def _f(key, default):
         try:
             return float(sol.get(key, default))
         except (TypeError, ValueError):
             return default
-    return {"rtol": _f("rtol_default", 1e-4),
+    return {**resolve_profile(sol, profile),
             "ode_backend": str(sol.get("ode_backend", "numba")),
             "solver_method": str(sol.get("solver_method", "BDF")),
             "jac_mode": str(sol.get("jac_mode", "analytic")),

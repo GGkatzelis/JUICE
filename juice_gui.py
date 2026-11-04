@@ -43,7 +43,7 @@ from PyQt6.QtGui import QPixmap, QIcon
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
                              QCheckBox, QProgressBar, QTextEdit, QMessageBox, QFileDialog, QSplitter, QTabWidget, QFrame,
-                             QDialog, QFormLayout, QDialogButtonBox)
+                             QDialog, QFormLayout, QDialogButtonBox, QComboBox)
 from PyQt6.QtGui import QKeySequence
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -65,7 +65,8 @@ ACCENT, ACCENT_DARK, ACCENT_SOFT = theme.ACCENT, theme.ACCENT_DARK, theme.ACCENT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-from scenario_prep import load_paths, pick_toml, solver_from_toml, prepare_scenario   # no-Qt helpers shared with study_runner
+from scenario_prep import (load_paths, pick_toml, solver_from_toml, prepare_scenario,   # no-Qt helpers shared with study_runner
+                           solver_profiles, default_profile)
 
 
 def blank_spec() -> ExperimentSpec:
@@ -504,10 +505,28 @@ class RunPage(QWidget):
         self.kvpd = QCheckBox("Also write the reaction rates and production/loss budgets "
                               "(large files; needed for the process analysis and reactivity views in the viewer)")
         self.kvpd.setChecked(True); g.addWidget(self.kvpd, r, 0, 1, 4); r += 1
+        # Solver profile: the two validated ways to run (FR_GUI.toml [solver]); the TOML's profile is preselected.
+        g.addWidget(QLabel("Solver"), r, 0); self.solver = QComboBox()
+        self._profiles = solver_profiles(self.win.toml_path)
+        for name, p in self._profiles.items():
+            self.solver.addItem(p["label"], name)
+        dflt = default_profile(self.win.toml_path)
+        if dflt in self._profiles:
+            self.solver.setCurrentIndex(self.solver.findData(dflt))
+        else:                                   # a settings file from before profiles: its own rtol / restart mode
+            sol = solver_from_toml(self.win.toml_path)
+            self.solver.insertItem(0, f"From the settings file (rtol {sol['rtol']:g}, "
+                                      f"{'warm' if sol['perstep_warm'] else 'cold restart'})", None)
+            self.solver.setCurrentIndex(0)
+        self.solver.setToolTip("\n\n".join(f"{p['label']}:\n{p['summary']}" for p in self._profiles.values()))
+        g.addWidget(self.solver, r, 1, 1, 3); r += 1
+        self.solver_note = QLabel(""); self.solver_note.setWordWrap(True)
+        self.solver_note.setStyleSheet("color: #555555;"); g.addWidget(self.solver_note, r, 1, 1, 3); r += 1
+        self.solver.currentIndexChanged.connect(self._solver_changed); self._solver_changed()
         lay.addLayout(g)
-        lay.addWidget(_info(f"The solver runs with the validated settings from {os.path.basename(self.win.toml_path) or 'the TOML'} "
-                            "(the same for every experiment, so runs stay comparable with FACSIMILE). "
-                            "Benchmark and tolerance experiments belong in the expert tool, not here."))
+        lay.addWidget(_info(f"Both solver profiles are validated against FACSIMILE (settings in {os.path.basename(self.win.toml_path) or 'the TOML'}). "
+                            "Fast is the everyday choice; Precise tracks FACSIMILE 5-10x more tightly for validation runs. "
+                            "Compare runs only within one profile. Benchmark and tolerance experiments belong in the expert tool, not here."))
         hb = QHBoxLayout()
         self.prep_btn = QPushButton("1. Prepare input files"); self.prep_btn.setObjectName("primary"); self.prep_btn.clicked.connect(self.prepare); hb.addWidget(self.prep_btn)
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
@@ -528,6 +547,14 @@ class RunPage(QWidget):
     def refresh(self):
         self.folder.setText(self.win.out_dir())
 
+    def _solver_changed(self, *_a):
+        name = self.solver.currentData()
+        self.solver_note.setText(self._profiles[name]["summary"] if name in self._profiles
+                                 else "The rtol and restart mode written in the settings file (no profile set there).")
+        self.json_path = ""                     # the prepared JSON carries the solver: prepare again
+        if hasattr(self, "run_btn"):
+            self.run_btn.setEnabled(False)
+
     def prepare(self) -> str:
         """Write ENZ/EASY/experiment.json and the scenario JSON.  Returns the JSON path ('' on error)."""
         self.refresh()
@@ -539,7 +566,8 @@ class RunPage(QWidget):
         self.bar.setValue(0); self.bar.setFormat("preparing …"); QApplication.processEvents()    # white while working, green when done
         try:
             res = self.win.write_all()
-            self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path)
+            self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path,
+                                              solver=solver_from_toml(self.win.toml_path, self.solver.currentData()))
         except Exception as e:
             self.log.append(f"Prepare failed: {e}"); self.bar.setValue(0); self.bar.setFormat("prepare failed"); return ""
         out = os.path.dirname(self.json_path)
@@ -924,8 +952,11 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         except Exception as e:
             row("Base mechanisms", f"not readable: {e}")
         sol = solver_from_toml(self.toml_path)
-        row("Solver", f"{sol['solver_method']} ({sol['jac_mode']} Jacobian, {sol['ode_backend']}), rtol {sol['rtol']:g}, "
+        row("Solver", f"{sol['solver_method']} ({sol['jac_mode']} Jacobian, {sol['ode_backend']}), "
                       f"{sol['interpolation']} inputs, first step {sol['first_step']:g} s")
+        row("Default solver profile", f"{sol['solver_profile']}: rtol {sol['rtol']:g}, "
+                                      f"{'warm continuation' if sol['perstep_warm'] else 'cold restart per ENZ row'} "
+                                      "(the Run step can pick the other profile per run)")
         row("Python", sys.executable)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         if self.toml_path:

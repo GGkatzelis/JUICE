@@ -84,17 +84,19 @@ or drop a `.cs` file on the **JUICE Results** icon.
 ```powershell
 python scenario_runner.py path\to\<name>.json --toml FR_GUI.toml          # one prepared run
 python study_runner.py path\to\<name>.study.json --workers 4 --yes        # a study
+python scenario_runner.py path\to\<name>.json --solver precise            # the same run, precise profile
 python run_benchmark.py --workers 4                                       # JUICE vs FACSIMILE, scene_01..09
-python compare_juice_facsimile.py scene_04 --tol 0.02 --no-stop --juice-dir "MCM_tested_scenarios\JUICE archive\JUICE\benchmark\scene_04"
+python run_benchmark.py --workers 4 --solver precise                      # ... with the precise profile
+python compare_juice_facsimile.py scene_04 --tol 0.02 --no-stop --juice-dir "MCM_tested_scenarios\JUICE archive\JUICE\benchmark\fast\scene_04"
 ```
 `<name>.json` is the scenario the Run step writes next to the experiment's EASY and ENZ files. The
-benchmark writes its runs to `MCM_tested_scenarios\JUICE archive\JUICE\benchmark\` (not in git); the
-last line compares one of them again and lists every column.
+benchmark writes its runs to `MCM_tested_scenarios\JUICE archive\JUICE\benchmark\<profile>\` (not in
+git); the last line compares one of them again and lists every column.
 
 ### Tests
 ```powershell
 pip install -r requirements-dev.txt
-python -m pytest                  # 26 tests, about 1.5 minutes
+python -m pytest                  # 33 tests, about 1.5 minutes
 python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
 The tests check the MCM download against its checksums, the EASY round-trip and builder for every
@@ -205,6 +207,30 @@ species.
 next row an hour later) while results are written every 10 s. JUICE applies each new row one output
 step (10 s) later than FACSIMILE does; that shift alone produces these deviations. It is the first
 known limitation in [architecture.md](architecture.md), section A6.
+
+The table is the **fast** solver profile, the default.
+
+### Solver profiles: fast or precise
+
+JUICE has two validated ways to solve the same chemistry. Choose one in the Run step of the
+experiment window, in the study window (one profile per study), or with `--solver fast|precise` on
+`scenario_runner.py` and `run_benchmark.py`. The default is `profile` in `FR_GUI.toml [solver]`.
+
+| | **fast** (default) | **precise** |
+|---|---|---|
+| Numerics | rtol 1e-4, warm BDF continuation across ENZ rows | rtol 1e-6, cold restart at every ENZ row |
+| Run time | 1× (scene_09: 3.8 min) | about 2× (scene_09: 7.2 min) |
+| O3, NO, NO2, OH, HO2 vs FACSIMILE | within 0.25 % | within 0.03 % in scene_06–09 |
+| Every species above 1 ppt | within 0.6 % | within 0.35 % (scene_09: 0.06 %) |
+| Species below 0.01 ppt | at most 7 % off (all below 1e-6 ppt) | rare large *relative* excursions, up to 5× (≤ 5·10⁴ molecules/cm³, ≈ 0.002 ppt) |
+| Use for | O3, SOA and product studies, sweeps, isopleths | validation against FACSIMILE, reference runs |
+
+Benchmark of 4 November 2026, scenes 04–09; "within" = maximum relative deviation over the whole
+run. Both profiles give the same answer for anything a chamber instrument can measure (~1 ppt
+detection limit). In the small mechanisms (scene_04/05) fast is even slightly tighter. Under precise,
+`run_benchmark.py` reports scene_04 as FAIL: sulfuric acid (SA), peaking far below 1 ppt, is 96 % off.
+Compare runs only within one profile: the difference between the profiles (up to 0.5 %) is larger
+than the difference between two runs with the same profile.
 
 Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
 experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)

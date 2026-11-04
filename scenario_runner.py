@@ -1837,6 +1837,21 @@ class ScenarioRunner:
                 _solver_toml = _tl.load(_fh).get('solver', {})
         except Exception:
             _solver_toml = {}
+        # Solver profile (fast | precise): a JSON written by scenario_prep carries rtol, perstep_warm and
+        # solver_profile.  An older JSON without perstep_warm gets the TOML's profile, so rtol and the
+        # restart mode always come as a validated pair (rtol 1e-6 with warm continuation diverges).
+        if 'perstep_warm' not in self.cfg:
+            try:
+                from scenario_prep import resolve_profile as _resolve_profile
+                _prof = _resolve_profile(_solver_toml)
+                if 'rtol' in self.cfg and float(self.cfg['rtol']) != _prof['rtol']:
+                    _prof['perstep_warm'] = float(self.cfg['rtol']) > 1e-5    # keep the JSON's rtol, pair it safely
+                    _prof['solver_profile'] = 'custom'
+                    _prof['rtol'] = float(self.cfg['rtol'])
+                self.cfg.update(_prof)
+            except Exception as _e:
+                print(f"  [SOLVER] could not resolve the solver profile: {_e}")
+        print(f"  [SOLVER] profile={self.cfg.get('solver_profile', '?')}")
         step_limit = float(_hmax_easy) if _hmax_easy is not None \
                      else float(_solver_toml.get('hmax', 60.0))
         # rtol from JSON (set by GUI) takes precedence over TOML default
@@ -2924,9 +2939,23 @@ if __name__ == "__main__":
                          help="Show the results viewer after the simulation")
     _parser.add_argument("--toml", default="",
                          help="Path to active TOML config (threads to viewer and solver)")
+    _parser.add_argument("--solver", choices=["fast", "precise"], default=None,
+                         help="solver profile, overriding the one written into the JSON: fast = rtol 1e-4 with "
+                              "warm continuation (~2x faster); precise = rtol 1e-6 with a cold restart per ENZ row "
+                              "(tightest agreement with FACSIMILE). See FR_GUI.toml [solver]")
     _args = _parser.parse_args()
 
     runner = ScenarioRunner(_args.config)
+    if _args.solver:
+        from scenario_prep import resolve_profile
+        _sec = {}
+        try:
+            import tomllib as _tl
+            with open(_args.toml or os.path.join(os.path.dirname(os.path.abspath(__file__)), "FR_GUI.toml"), "rb") as _fh:
+                _sec = _tl.load(_fh).get("solver", {})
+        except Exception:
+            pass
+        runner.cfg.update(resolve_profile(_sec, _args.solver))
     runner._show_viewer = _args.gui
     runner._toml_path   = _args.toml
     runner.run()

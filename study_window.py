@@ -32,7 +32,7 @@ import numpy as np
 
 import juice_theme as theme
 import study as S
-from scenario_prep import pick_toml, load_paths, HERE
+from scenario_prep import pick_toml, load_paths, HERE, solver_profiles, solver_from_toml
 from experiment_spec import load_spec, ACTIONS
 from experiment_wizard import _info, _more_info
 
@@ -222,6 +222,14 @@ class StudyWindow(QMainWindow):
         gl.addWidget(QLabel("Parallel runs"), 0, 0); self.workers = QSpinBox(); self.workers.setRange(1, max(1, os.cpu_count() or 1))
         self.workers.setToolTip("Each run is its own process pinned to one core (BLAS/numba threads = 1).  Leave one core free for yourself."); gl.addWidget(self.workers, 0, 1)
         self.kvpd = QCheckBox("write kv/pd files (large; off for sweeps)"); gl.addWidget(self.kvpd, 0, 2, 1, 2)
+        gl.addWidget(QLabel("Solver"), 1, 0); self.solver = QComboBox()
+        self._profiles = solver_profiles(self.toml_path)
+        for name, p in self._profiles.items():
+            self.solver.addItem(p["label"], name)
+        self.solver.addItem("From the settings file (no profile there)", "custom")
+        self.solver.setToolTip("One solver for every run of the study, so the runs stay comparable.\n\n"
+                               + "\n\n".join(f"{p['label']}:\n{p['summary']}" for p in self._profiles.values()))
+        self.solver.currentIndexChanged.connect(self._solver_changed); gl.addWidget(self.solver, 1, 1, 1, 3)
         hb = QHBoxLayout()
         self.check_btn = QPushButton("Check"); self.check_btn.clicked.connect(self._check); hb.addWidget(self.check_btn)
         self.check_btn.setToolTip("Lists what the study will run and anything it cannot do. Writes and runs nothing.")
@@ -234,7 +242,7 @@ class StudyWindow(QMainWindow):
         self.run_btn.setToolTip("Runs every case that has no finished result yet, in parallel.")
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self._stop); hb.addWidget(self.stop_btn)
         self.stop_btn.setToolTip("Stops the running cases; finished ones are kept and skipped next time.")
-        hb.addStretch(); gl.addLayout(hb, 1, 0, 1, 4)
+        hb.addStretch(); gl.addLayout(hb, 2, 0, 1, 4)
         exec_help = _more_info("Usual order: Check → Run pilot, then estimate → yes. Finished runs are never redone.", [
             "<b>Check</b>: lists what will run (axes, changes) and what cannot work, e.g. a reaction not in an experiment's subset. Writes nothing.",
             "<b>Write inputs only</b>: writes every run's .easy, .enz and scenario JSON into &lt;study&gt;/runs/&lt;run&gt;/ without running. "
@@ -247,11 +255,11 @@ class StudyWindow(QMainWindow):
             "points later only runs the new ones.",
             "<b>Parallel runs</b>: each run is its own process on one core. Leave a core free if you keep working on the machine.",
             "<b>kv/pd files</b>: rates and production/loss budgets for the process analysis in the viewer; large, so off for sweeps."], "ⓘ What the buttons do")
-        exec_help.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(exec_help, 5, 0, 1, 4)
-        self.bar = QProgressBar(); self.bar.setFormat("%v / %m runs"); gl.addWidget(self.bar, 2, 0, 1, 4)
-        self.status = QLabel("—"); self.status.setWordWrap(True); self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.status, 3, 0, 1, 4)
+        exec_help.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(exec_help, 6, 0, 1, 4)
+        self.bar = QProgressBar(); self.bar.setFormat("%v / %m runs"); gl.addWidget(self.bar, 3, 0, 1, 4)
+        self.status = QLabel("—"); self.status.setWordWrap(True); self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.status, 4, 0, 1, 4)
         self.ready = QLabel(""); self.ready.setWordWrap(True); self.ready.setStyleSheet("color:#6a4c93; font-style: italic")
-        self.ready.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.ready, 4, 0, 1, 4)
+        self.ready.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred); gl.addWidget(self.ready, 5, 0, 1, 4)
         ll.addWidget(g)
         ll.addStretch()
         self.name.textChanged.connect(self._readiness); self.folder.textChanged.connect(self._readiness)
@@ -566,6 +574,7 @@ class StudyWindow(QMainWindow):
                     else:
                         target.clear(); values.clear()
             self.workers.setValue(max(1, min(self.workers.maximum(), workers))); self.kvpd.setChecked(kvpd)
+            self.solver.setCurrentIndex(max(0, self.solver.findData(self._study_profile(st))))
         finally:
             self._loading = False
         self.setWindowTitle(f"JUICE — Study · {name}")
@@ -605,9 +614,40 @@ class StudyWindow(QMainWindow):
         st.workers = self.workers.value(); st.export_kv_pd = self.kvpd.isChecked()
         if not st.toml:
             st.toml = self.toml_path
-        if not st.solver:
-            st.solver = S.solver_from_toml(st.toml)
+        prof = self.solver.currentData()
+        if not st.solver or (prof != "custom" and prof != self._study_profile(st)):
+            st.solver = solver_from_toml(st.toml, None if prof == "custom" else prof)
         return st
+
+    def _study_profile(self, st: S.Study) -> str:
+        """The solver profile a study's frozen solver keys belong to (studies from before profiles: by rtol)."""
+        if not st.solver:
+            return solver_from_toml(st.toml or self.toml_path)["solver_profile"]
+        if st.solver.get("solver_profile"):
+            return st.solver["solver_profile"]
+        # an old study froze only rtol; with rtol 1e-4 it ran warm via the TOML, i.e. what 'fast' is now
+        return "fast" if float(st.solver.get("rtol", 0) or 0) == self._profiles["fast"]["rtol"] else "custom"
+
+    def _solver_changed(self, *_a):
+        """One solver per study: refuse a change once runs have finished with the other one."""
+        if self._loading:
+            return
+        st = self.study
+        try:
+            done = (sum(1 for p in S.plan_runs(st) if S.is_done(p))
+                    if st.folder and os.path.isdir(os.path.join(st.folder, "runs")) else 0)
+        except Exception:
+            done = 0
+        if done and self.solver.currentData() != self._study_profile(st):
+            QMessageBox.warning(self, "Solver profile",
+                                f"{done} run(s) of this study already finished with the "
+                                f"'{self._study_profile(st)}' solver. A study keeps one solver so its runs stay "
+                                "comparable: save it as a new study (new folder) to run it with the other profile.")
+            self.solver.blockSignals(True)
+            self.solver.setCurrentIndex(max(0, self.solver.findData(self._study_profile(st))))
+            self.solver.blockSignals(False)
+            return
+        self._count()
 
     def _add_mod(self, m: S.Modification = None):
         r = self.mods.rowCount(); self.mods.insertRow(r)

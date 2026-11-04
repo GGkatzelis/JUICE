@@ -57,11 +57,42 @@ modifies the `ExperimentSpec`, never a generated file.
 
 ## A3. Settings
 
-`FR_GUI.toml` holds the **validated solver set**; changing it changes results:
-BDF with analytic Jacobian, Numba-compiled stoichiometry kernel, `rtol` 1e-4, `atol_floor` 100
-molec/cm³, `piecewise` interpolation, settings frozen per output step (`perstep_snap`) with warm BDF
-continuation across ENZ rows (`perstep_warm`), Newton tolerance 1e-6 / 10 iterations. The step window
-never sets numerics; `scenario_prep.solver_from_toml` copies them into every scenario JSON.
+`FR_GUI.toml` holds the **validated solver settings**; changing them changes results:
+BDF with analytic Jacobian, Numba-compiled stoichiometry kernel, `atol_floor` 100 molec/cm³,
+`piecewise` interpolation, settings frozen per output step (`perstep_snap`), Newton tolerance 1e-6 /
+10 iterations. The step window never sets numerics; `scenario_prep.solver_from_toml` copies them into
+every scenario JSON.
+
+**Solver profiles.** `rtol` and the restart mode come as a validated pair, the profile
+(`[solver] profile`, numbers in `[solver.profiles.*]`, reference values and descriptions in
+`scenario_prep.SOLVER_PROFILES`):
+
+- `fast`: rtol 1e-4 with warm BDF continuation across ENZ rows (`perstep_warm`). The default since
+  2 November 2026.
+- `precise`: rtol 1e-6 with a cold restart at every ENZ row, the set used before 2 November.
+
+The JSON records `rtol`, `perstep_warm` and `solver_profile`. Choices:
+
+- per run in the Run step, or with `scenario_runner.py --solver`
+- per study, frozen in the `.study.json`; a study refuses to change it once runs have finished
+- `run_benchmark.py --solver`
+
+Rules learned on the way (benchmark of 4 November 2026, see the README table):
+
+- **Never combine rtol 1e-6 with warm continuation.** It diverges in trace species: HCOCO3 1.4e5 %
+  in scene_06, HO13C4O2 1.3e4 % in scene_09. `tests/test_profiles.py` guards this.
+- **Precise is tighter but not cleaner.** Its cold restarts re-ramp the step size at every row, and
+  species below 0.01 ppt then show large relative excursions (BUTAL2NO3 5×, MGLYOO 1.9×, HO5C6CO3
+  1.5×, SA ~1×; absolute size at most ~5·10⁴ molec/cm³, CH3OCHO at 0.002 ppt). The benchmark's ±2 %
+  rule therefore fails scene_04 (SA) and scene_06/09 under precise, though no species above 1 ppt is
+  affected. Fast has excursions too, but small: at most 7 %, all in species below 1e-6 ppt.
+- **Fast costs accuracy only in large mechanisms.** In scene_06–09, main species are 0.1–0.25 % off
+  under fast vs 0.02–0.03 % under precise. In scene_04/05, fast is slightly tighter.
+- **Results from the two profiles differ by up to ~0.5 %.** Compare runs within one profile.
+- **A pre-profile TOML** (with `rtol_default` and no `profile` key) is used exactly as written
+  (profile `custom`). Example: the 2 November file `f91383b^:FR_GUI.toml` is rtol 1e-6, cold.
+- **A pre-profile scenario JSON** (with `rtol` and no `perstep_warm`) gets the TOML's profile when its
+  rtol matches. Otherwise it gets a safe pairing: warm only if rtol > 1e-5.
 
 `[paths]` is absent on purpose: JUICE then uses the folders inside the repository
 (`MCM_tested_scenarios/IDL Input` for references and include files, `MCM_tested_scenarios/JUICE

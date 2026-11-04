@@ -13,7 +13,13 @@
 favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO', 'kOH', 'HV', 'T', 'k(NO2+HV-->NO+O3)']"
 
 [solver]
-# The validated set (see README: regression against FACSIMILE). Changing these changes results.
+# The validated settings (see README: regression against FACSIMILE). Changing these changes results.
+# profile: which of the two validated profiles a run uses unless the GUI, a study or --solver picks the other.
+#   fast    — rtol 1e-4, warm continuation across ENZ rows. ~2x faster. Every species > 1 ppt within 0.6 %
+#             of FACSIMILE (O3/NOx/OH/HO2 within 0.25 %). For O3, SOA and product studies.
+#   precise — rtol 1e-6, cold restart at every ENZ row. ~2x slower. Main species within 0.03 % in large
+#             mechanisms; rare excursions (up to 5x) in species < 0.01 ppt. For validation and reference runs.
+profile = "fast"
 rtol_choices = "[0.01, 1e-04, 1e-06]"
 hmax = "60.0"
 atol = "10000.0"
@@ -26,14 +32,21 @@ solver_method = "BDF"
 jac_mode = "analytic"
 first_step = "1e-6"
 interpolation = "piecewise"
-rtol_default = "1e-04"
 kv_pd = "true"
 perstep_snap = "true"
-# perstep_warm: warm BDF continuation across ENZ rows (sub-step mode); ~2x faster, spike-free
-perstep_warm = "true"
 # Newton control for sub-step modes (scipy default tol ~1e-3 / 4 iters under-converges trace species)
 newton_tol = "1e-6"
 newton_maxiter = "10"
+
+# The numbers behind each profile. rtol 1e-6 needs the cold restart: with warm continuation it
+# diverges in trace species (HCOCO3 x1400 in scene_06), so never combine the two.
+[solver.profiles.fast]
+rtol = "1e-04"
+perstep_warm = "true"
+
+[solver.profiles.precise]
+rtol = "1e-06"
+perstep_warm = "false"
 
 [viewer]
 quick_plot_left  = "['NO', 'NO2', 'O3']"

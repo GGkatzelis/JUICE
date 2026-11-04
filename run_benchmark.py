@@ -6,7 +6,7 @@ FACSIMILE reference <scene>.cs (scene_01 … scene_09):
 
     1. copy the .easy and .enz to <work>/<scene>/  (the reference folder is never written to)
     2. prepare the scenario JSON exactly as the step GUI does (scenario_prep.prepare_scenario,
-       solver settings from FR_GUI.toml [solver] — the validated set)
+       solver settings from FR_GUI.toml [solver], profile fast or precise)
     3. run scenario_runner.py in its own process (N in parallel with --workers)
     4. compare the JUICE .cs with the FACSIMILE .cs (compare_juice_facsimile.compare)
 
@@ -19,6 +19,8 @@ each scene's full comparison to <work>/<scene>/<scene>_difference_JUICE_Facsimil
     python run_benchmark.py --workers 3              # parallel solver processes
     python run_benchmark.py --compare-only           # re-compare existing results, no runs
     python run_benchmark.py --kv-pd                  # also export and compare rate constants (k, v)
+    python run_benchmark.py --solver precise         # the slower, tighter solver profile (default: the
+                                                     # TOML's [solver] profile); work dir .../benchmark/<profile>
 
 Exit code 0 when every scene's settings and concentrations are within --tol (default 2 %).
 
@@ -44,6 +46,8 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 REF_ROOT = os.path.join(HERE, "MCM_tested_scenarios", "IDL Input")
 TOML = os.path.join(HERE, "FR_GUI.toml")
+PROFILE: str | None = None          # --solver: fast | precise (None = the TOML's [solver] profile)
+PROFILE_DESC = ""                   # the resolved profile, for the report header
 S_LABEL = "1. s-values (settings)"
 C_LABEL = "2. c-values (concentrations)"
 
@@ -115,7 +119,8 @@ def prepare(scene: str, work: str, kv_pd: bool) -> str:
     include_dir = sp.load_paths(TOML)["include_dir"]
     # the reference folder (and its chemistry/ subfolder) is searched for include files first
     return sp.prepare_scenario(res, include_dir, export_kv_pd=kv_pd, toml_path=TOML,
-                               extra_dirs=[src, os.path.join(src, "chemistry")])
+                               extra_dirs=[src, os.path.join(src, "chemistry")],
+                               solver=sp.solver_from_toml(TOML, PROFILE))
 
 
 def prepare_quietly(scene: str, work: str, kv_pd: bool) -> tuple[str, str]:
@@ -178,7 +183,7 @@ def report(rows: list[dict], tol: float, floor: float) -> str:
     """The results as a Markdown table (also printed)."""
     lines = [f"JUICE vs FACSIMILE — {_dt.datetime.now():%Y-%m-%d %H:%M}, tolerance ±{tol*100:g} % "
              f"(max relative deviation over the run; concentrations measured against "
-             f"max(max|FAC|, {floor:g} molec/cm³))", "",
+             f"max(max|FAC|, {floor:g} molec/cm³))"] + ([f"solver profile: {PROFILE_DESC}"] if PROFILE_DESC else []) + ["",
              "| scene | settings within | concentrations within | worst concentration | "
              "within 0.1 % | run time | verdict |",
              "|---|---|---|---|---|---|---|"]
@@ -209,20 +214,28 @@ def main(argv=None) -> int:
     ap.add_argument("--kv-pd", action="store_true", help="export and compare k/v values too (slower)")
     ap.add_argument("--toml", default="", help="settings file for the solver (default FR_GUI.toml), "
                                                "e.g. to compare two solver sets")
+    ap.add_argument("--solver", choices=["fast", "precise"], default=None,
+                    help="solver profile (default: the TOML's [solver] profile). fast = rtol 1e-4, warm; "
+                         "precise = rtol 1e-6, cold restart per ENZ row, ~2x slower, tightest agreement")
     a = ap.parse_args(argv)
-    global TOML
+    global TOML, PROFILE, PROFILE_DESC
     if a.toml:
         TOML = os.path.abspath(a.toml)
+    PROFILE = a.solver
 
     sys.path.insert(0, HERE)
     import scenario_prep as sp
+    profile = sp.solver_from_toml(TOML, PROFILE)
+    PROFILE_DESC = (f"{profile['solver_profile']} (rtol {profile['rtol']:g}, "
+                    f"{'warm continuation' if profile['perstep_warm'] else 'cold restart per ENZ row'})")
+    print(f"solver profile: {PROFILE_DESC}")
     available = reference_scenes()
     scenes = a.scenes or available
     unknown = [s for s in scenes if s not in available]
     if unknown:
         print(f"not a reference scene (needs .easy, .enz and .cs in {REF_ROOT}): {', '.join(unknown)}")
         return 2
-    work = a.work or os.path.join(sp.load_paths(TOML)["output_root"], "benchmark")
+    work = a.work or os.path.join(sp.load_paths(TOML)["output_root"], "benchmark", profile["solver_profile"])
     os.makedirs(work, exist_ok=True)
     print(f"benchmark: {len(scenes)} scene(s) → {work}")
 
