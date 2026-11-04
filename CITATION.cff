@@ -16,8 +16,8 @@ authors:
     affiliation: "Forschungszentrum Jülich GmbH, ICE-3"
 repository-code: "https://github.com/GGkatzelis/JUICE"
 license: MIT
-version: "33.503"
-date-released: "2026-06-15"
+version: "4.0"
+date-released: "2026-11-04"
 keywords:
   - atmospheric chemistry
   - chemical mechanism
