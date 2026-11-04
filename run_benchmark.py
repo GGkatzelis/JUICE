@@ -207,7 +207,12 @@ def main(argv=None) -> int:
                     help="concentration floor, molec/cm³ (default 100 = the solver's atol_floor)")
     ap.add_argument("--compare-only", action="store_true", help="compare existing results, do not run")
     ap.add_argument("--kv-pd", action="store_true", help="export and compare k/v values too (slower)")
+    ap.add_argument("--toml", default="", help="settings file for the solver (default FR_GUI.toml), "
+                                               "e.g. to compare two solver sets")
     a = ap.parse_args(argv)
+    global TOML
+    if a.toml:
+        TOML = os.path.abspath(a.toml)
 
     sys.path.insert(0, HERE)
     import scenario_prep as sp
