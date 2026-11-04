@@ -5,8 +5,11 @@ make_shortcut.py — put a JUICE icon on the Desktop (and optionally the Start m
     python make_shortcut.py --here       # JUICE.lnk inside the project folder instead
     python make_shortcut.py --startmenu  # also Start Menu\Programs\JUICE.lnk
 
-Each click opens a new, independent JUICE window (JUICE.bat uses `start` + pythonw), so
-several experiments can be worked on in parallel without a terminal.  Windows only.
+One icon for everything: it opens the JUICE start menu (juice_start.py): new experiment, saved
+experiment, new study, results of one experiment, results of a study.  Each click opens a new,
+independent menu (JUICE.bat uses `start` + pythonw), so another window can be opened while others
+are running.  A file dropped on the icon opens straight in the right window.  The separate
+"JUICE Results" icon of earlier versions is removed when this script finds it.  Windows only.
 
 A .lnk always stores absolute paths of the machine it was made on, so it is NOT synced
 through git (JUICE.lnk is ignored); JUICE.bat is, and works anywhere.  After a clone or on
@@ -22,7 +25,22 @@ BAT_RESULTS = os.path.join(HERE, "JUICE Results.bat")
 ICO = os.path.join(HERE, "JUICE.ico")
 
 
-def make(link_path: str, target: str = BAT, description: str = "JUICE - chamber experiment to model run") -> None:
+DESCRIPTION = "JUICE - set up and run chamber experiments and studies, or look at their results"
+
+
+def remove_old_results_icon(folder: str) -> None:
+    """Delete the 'JUICE Results' shortcut earlier versions of this script made (only if it points to our .bat)."""
+    old = os.path.join(folder, "JUICE Results.lnk")
+    if not os.path.isfile(old):
+        return
+    ps = f'(New-Object -ComObject WScript.Shell).CreateShortcut("{old}").TargetPath'
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+    if os.path.normcase(r.stdout.strip()) == os.path.normcase(BAT_RESULTS):
+        os.remove(old)
+        print("removed", old, "(the start menu of the JUICE icon covers it)")
+
+
+def make(link_path: str, target: str = BAT, description: str = DESCRIPTION) -> None:
     ps = f'''
 $s = (New-Object -ComObject WScript.Shell).CreateShortcut("{link_path}")
 $s.TargetPath = "{target}"
@@ -36,6 +54,19 @@ $s.Save()
         raise SystemExit(f"could not create {link_path}: {r.stderr.strip()}")
     print("created", link_path)
     set_app_id(link_path)
+
+
+def desktop_folder() -> str:
+    """The real Desktop (OneDrive can move it away from ~/Desktop), asked from Windows directly
+    (a PowerShell round trip garbles non-ASCII paths such as 'Jülich')."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 0x10, None, 0, buf) == 0 and os.path.isdir(buf.value):  # CSIDL_DESKTOPDIRECTORY
+            return buf.value
+    except Exception:
+        pass
+    return os.path.join(os.path.expanduser("~"), "Desktop")
 
 
 APP_ID = "FZJ.JUICE"      # the AppUserModelID every JUICE window sets (juice_theme.taskbar_identity)
@@ -62,14 +93,9 @@ def set_app_id(link_path: str, app_id: str = APP_ID) -> bool:
 if __name__ == "__main__":
     if not sys.platform.startswith("win"):
         raise SystemExit("Windows only")
-    if "--here" in sys.argv:
-        make(os.path.join(HERE, "JUICE.lnk"))
-        make(os.path.join(HERE, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")
-    else:
-        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-        make(os.path.join(desktop, "JUICE.lnk"))
-        make(os.path.join(desktop, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")
+    folders = [HERE if "--here" in sys.argv else desktop_folder()]
     if "--startmenu" in sys.argv:
-        start = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
-        make(os.path.join(start, "JUICE.lnk"))
-        make(os.path.join(start, "JUICE Results.lnk"), BAT_RESULTS, "JUICE results viewer - open a result file (drop a .cs on it)")
+        folders.append(os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs"))
+    for f in folders:
+        make(os.path.join(f, "JUICE.lnk"))
+        remove_old_results_icon(f)

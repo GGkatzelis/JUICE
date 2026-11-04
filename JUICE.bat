@@ -1,11 +1,14 @@
 @echo off
-rem JUICE launcher: opens a NEW, independent window each time it is run (double-click or
-rem from a terminal) and returns immediately, so several experiments can be worked on
-rem in parallel.  Uses the venv's pythonw.exe (no console window) if present.
+rem JUICE launcher: opens the JUICE start menu (new experiment, saved experiment, new study,
+rem results of one experiment, results of a study).  Every run is a NEW, independent menu and
+rem returns immediately, so another window can be opened while others are still open.
+rem A file dropped on this launcher (or its shortcut) opens straight in the right window:
+rem   .cs -> results viewer, .study.json -> study window, .experiment.json -> experiment window.
+rem Uses the venv's pythonw.exe (no console window) if present.
 setlocal
 set "HERE=%~dp0"
 set "PYW=%HERE%.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=%HERE%..\..\.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=pythonw.exe"
-start "" "%PYW%" "%HERE%juice_gui.py" %*
+start "" "%PYW%" "%HERE%juice_start.py" %*
 endlocal

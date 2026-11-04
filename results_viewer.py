@@ -5582,25 +5582,17 @@ def main():
         if _LOADER is not None:
             _LOADER.hide()
         here = os.path.dirname(os.path.abspath(__file__))
-        start_dir = ""
         if not args.toml:
             args.toml = next((p for p in (os.path.join(here, "GG_GUI.toml"), os.path.join(here, "FR_GUI.toml")) if os.path.isfile(p)), None)
-        try:
-            import tomllib as _tl
-            with open(args.toml, "rb") as fh:
-                _paths = _tl.load(fh).get("paths", {})
-            start_dir = next((d for d in (_paths.get("output_root"), _paths.get("easy_root")) if d and os.path.isdir(d)), "")
-        except Exception:
-            pass
-        if not start_dir:
-            scenarios_root = os.path.join(here, "MCM_tested_scenarios")
-            start_dir = scenarios_root if os.path.isdir(scenarios_root) else os.getcwd()
-        csv_path, _ = QFileDialog.getOpenFileName(
-            None, "Open a JUICE or FACSIMILE result", start_dir,
-            "Results (*.cs *_cs.csv);;All files (*)"
-        )
-        if not csv_path:
-            print(">>> [VIEWER] No file selected. Exiting.")
+        # First question: one experiment's results, or a study's?  (juice_start: the same choice as the start menu)
+        from juice_start import choose_results, launch
+        choice = choose_results(None, args.toml or "")
+        if not choice:
+            print(">>> [VIEWER] Nothing chosen. Exiting.")
+            return
+        kind, csv_path = choice
+        if kind == "study":                       # a study opens in the study window (results table, isopleths, runs)
+            launch("study", [csv_path], args.toml or "")
             return
         if _LOADER is not None:
             _LOADER.show()

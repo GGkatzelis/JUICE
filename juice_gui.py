@@ -881,8 +881,9 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         self.wiki_memory = None                        # a new experiment starts without the last import
         self.load_spec(blank_spec()); self.steps.setCurrentRow(0); self.review.refresh()
 
-    def _open(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Open experiment", self.easy_root, "Experiment (*.experiment.json)")
+    def _open(self, p: str = ""):
+        if not p:
+            p, _ = QFileDialog.getOpenFileName(self, "Open experiment", self.easy_root, "Experiment (*.experiment.json)")
         if not p:
             return
         try:
@@ -986,6 +987,9 @@ def main(argv=None):
     w = JuiceWindow(pick_toml(argv))
     w.show()
     theme.force_taskbar_icon(w)              # the taskbar reads the icon from the native window
+    exp = next((a for a in argv[1:] if a.endswith(".experiment.json") and os.path.isfile(a)), "")
+    if exp:                                  # from the start menu or a file dropped on the icon
+        w._open(exp)
     return app.exec()
 
 

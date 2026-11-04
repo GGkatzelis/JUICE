@@ -44,21 +44,35 @@ table, the mechanism include sets) is in the repository; no other download is ne
 
 ## Quick start
 
-### Desktop icons (Windows)
+### Desktop icon (Windows)
 ```bash
-python make_shortcut.py              # JUICE + JUICE Results icons on the Desktop
+python make_shortcut.py              # the JUICE icon on the Desktop
 python make_shortcut.py --startmenu  # also in the Start menu
 ```
-**JUICE** opens the window for setting up and running experiments ([JUICE.bat](JUICE.bat)).
-**JUICE Results** opens the results and plotting viewer ([JUICE Results.bat](JUICE%20Results.bat)).
-Double-click it to pick a result, or drop a `.cs` file on it. Each click opens a new, independent
-window. Shortcuts hold this PC's paths, so they are not in git. Run the script once after cloning.
+The **JUICE** icon ([JUICE.bat](JUICE.bat) → [juice_start.py](juice_start.py)) opens a start
+menu:
+
+| Model an experiment | Look at results |
+|---|---|
+| New experiment (from scratch) | Results of one experiment (`.cs`) |
+| Open a saved experiment (`.experiment.json`) | Results of a study (`.study.json`) |
+| New study (sweep, or several experiments with one change) | |
+
+- **One window per choice.** The choice opens in its own window and the menu closes. Click the icon
+  again for another window at any time, while others are still open.
+- **Dropping a file on the icon** opens it straight away: a `.cs` in the results viewer, a
+  `.study.json` in the study window, an `.experiment.json` in the experiment window.
+- **Shortcuts are not in git.** They hold this PC's paths, so run the script once after cloning.
+  It also removes the separate "JUICE Results" icon of earlier versions.
+- **[JUICE Results.bat](JUICE%20Results.bat)** still opens the viewer directly. Started without a
+  file, it first asks: one experiment, or a study?
 
 ### The experiment window
 ```powershell
 python juice_gui.py
 ```
-The same window the **JUICE** icon opens. Five steps down the left, a review panel on the right that
+The window behind "New experiment" in the start menu (`python juice_gui.py <name>.experiment.json`
+opens a saved one). Five steps down the left, a review panel on the right that
 always shows what the experiment contains:
 
 1. **Experiment**: name, folder, date and time window, chamber, conditions (SAPHIR archive, your own
@@ -78,7 +92,8 @@ are generated from it and can be opened from the review panel.
 ```powershell
 python results_viewer.py path\to\<name>.cs
 ```
-or drop a `.cs` file on the **JUICE Results** icon.
+or drop a `.cs` file on the **JUICE** icon. Without a file, the viewer first asks whether you want
+the results of one experiment or of a study (a study opens in the study window).
 
 ### Command line
 ```powershell
@@ -245,8 +260,9 @@ limitations, and the development history.
 ## Repository layout
 
 ```
-juice_gui.py                 experiment window (the JUICE icon); step pages in experiment_wizard.py
-results_viewer.py            results viewer (the JUICE Results icon); tabs in overview_tab.py, timeseries_tab.py
+juice_start.py               start menu (the JUICE icon): opens one of the windows below
+juice_gui.py                 experiment window; step pages in experiment_wizard.py
+results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
 study_window.py, study.py    studies; study_runner.py runs one from the command line
 experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
 scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
