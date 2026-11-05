@@ -57,11 +57,13 @@ menu:
 | New experiment (from scratch) | Results of one experiment (`.cs`) |
 | Open a saved experiment (`.experiment.json`) | Results of a study (`.study.json`) |
 | New study (sweep, or several experiments with one change) | |
+| Run a FACSIMILE experiment (`.easy` / `.elog`) | |
 
 - **One window per choice.** The choice opens in its own window and the menu closes. Click the icon
   again for another window at any time, while others are still open.
 - **Dropping a file on the icon** opens it straight away: a `.cs` in the results viewer, a
-  `.study.json` in the study window, an `.experiment.json` in the experiment window.
+  `.study.json` in the study window, an `.experiment.json` in the experiment window, an `.easy` or
+  `.elog` in the FACSIMILE-experiment window.
 - **Shortcuts are not in git.** They hold this PC's paths, so run the script once after cloning.
   It also removes the separate "JUICE Results" icon of earlier versions.
 - **[JUICE Results.bat](JUICE%20Results.bat)** still opens the viewer directly. Started without a
@@ -88,6 +90,28 @@ always shows what the experiment contains:
 You only edit the experiment description (`<name>.experiment.json`); the ENZ, EASY and scenario JSON
 are generated from it and can be opened from the review panel.
 
+### Experiments set up for FACSIMILE
+```powershell
+python facsimile_run.py path\to\<name>.easy      # or <name>.elog
+```
+The window behind "Run a FACSIMILE experiment": an experiment modelled with FACSIMILE earlier runs
+in JUICE from its own input files, without an experiment description. Choose the `.easy`, or the
+`.elog` EASY wrote for that run (every include inline, exactly as used; preferred when it exists next
+to the `.easy`). JUICE finds the ENZ file the `FILES[ENZ]` line names, copies the inputs to a work
+folder under `output_root\facsimile\<name>\` (the original folder is not touched), prepares and runs
+them with the chosen solver profile, and opens the results. With an `.easy`, the `#include` files are
+looked up in the experiment folder, its `chemistry\` subfolder, the include folders you add in the
+window (remembered) and JUICE's own include folder; missing ones are listed after "Prepare".
+When the FACSIMILE results (`<name>.cs`) lie next to the inputs, **Compare with FACSIMILE** sets the
+two runs against each other (±2 %, as the benchmark) and writes the full report to the work folder.
+
+JUICE reads the EASY version that made the run from the `.fac` / `.out` next to it, because EASY
+5.96b and 6.00 differ in one rule: a `FUNCTION` macro defined more than once (as `PHTFKT` is in a
+SAPHIR scenario: clear-sky first, jNO2-scaled later) applies from its own line on in 5.96b, while in
+6.00 the last definition applies everywhere. The J values differ by about 40 % between the two, so
+the run follows the rule of its EASY. Without a `.fac` / `.out`, JUICE uses the 6.00 rule, as for its
+own experiments.
+
 ### Results without the window
 ```powershell
 python results_viewer.py path\to\<name>.cs
@@ -111,13 +135,14 @@ git); the last line compares one of them again and lists every column.
 ### Tests
 ```powershell
 pip install -r requirements-dev.txt
-python -m pytest                  # 33 tests, about 1.5 minutes
+python -m pytest                  # 53 tests, about 1.5 minutes
 python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
 The tests check the MCM download against its checksums, the EASY round-trip and builder for every
 reference scene, the experiment-description goldens (scene_05 and scene_09 rebuilt from a
-description give the IDL-written files), the chamber profiles, scene_04 against FACSIMILE, and the
-UV-lamp chamber. They also run on GitHub for every push to `main`.
+description give the IDL-written files), the chamber profiles, the validation notes (dark
+experiments, plot labels), the EASY-version rule for redefined `FUNCTION` macros, scene_04 against
+FACSIMILE, and the UV-lamp chamber. They also run on GitHub for every push to `main`.
 
 ## Chambers other than SAPHIR
 
@@ -264,6 +289,7 @@ juice_start.py               start menu (the JUICE icon): opens one of the windo
 juice_gui.py                 experiment window; step pages in experiment_wizard.py
 results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
 study_window.py, study.py    studies; study_runner.py runs one from the command line
+facsimile_run.py             runs an experiment set up for FACSIMILE (.easy / .elog) and compares
 experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
 scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
 scenario_runner.py           the solver

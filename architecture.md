@@ -21,6 +21,7 @@ hand, `compare_vs_facsimile.py`); its physics and its lessons still apply.
         ▼
 <name>.enz  +  <name>.easy                   IDL/FACSIMILE layout and naming (QNO, QO3, Q_<name>, q<NAME>)
         │  elog_generator.generate_both      #include expanded → <name>_juice.elog + canonical .elog
+        │                                    (FUNCTION scope per EASY version, A4)
         │  idl_parser.parse_idl_easy         canonical elog + ENZ → scenario dict
         │  scenario_prep.prepare_scenario    + the validated [solver] keys of FR_GUI.toml
         ▼
@@ -113,6 +114,16 @@ any key.
 - **O1D** is not integrated; it is written as its pseudo-steady state J1·[O3]/k_quench.
 - **Last definition wins** for parameters and `k[...] = ...` overrides; reactions are never
   deduplicated, so an include set must not repeat a reaction (Part B, section 8).
+- **A `FUNCTION` macro defined more than once** follows the EASY version that made the run
+  (`elog_generator.easy_version`, read from the `.fac`/`.out` next to a FACSIMILE run;
+  `function_scope_for`): EASY 6.00 applies the last definition everywhere (the canonical elog keeps
+  only that one), EASY 5.96b applies a definition from its own line on (the canonical elog keeps
+  every definition and `easy_parser` versions them as `NAME`, `NAME__2`, … so each use binds to the
+  definition in effect at its line). `PHTFKT` is the case that matters: clear-sky in
+  `<mech>.fac.saphir.incl` where `J1..J61` are defined, jNO2-scaled in `j_clear_sky.incl` and
+  `saphir.jmeasured_02.incl` — about 40 % apart. scene_01/02 and campaign runs made before 2026 are
+  5.96b, scene_03–09 are 6.00; JUICE's own experiments (no `.fac`) use the 6.00 rule.
+- **`#include` names may contain spaces**; the name runs to the end of the line or a `;` comment.
 
 ## A5. Validation
 

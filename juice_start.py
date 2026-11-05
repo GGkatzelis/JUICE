@@ -25,7 +25,8 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QGroupB
                              QPushButton, QVBoxLayout, QWidget)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py"}
+SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py",
+           "facsimile": "facsimile_run.py"}
 
 
 def _toml_args(toml: str) -> list:
@@ -47,6 +48,8 @@ def open_file(path: str, toml: str = "") -> bool:
         return launch("experiment", [path], toml)
     if p.endswith(".cs") or p.endswith("_cs.csv"):
         return launch("results", [path], toml)
+    if p.endswith((".easy", ".elog")):
+        return launch("facsimile", [path], toml)
     return False
 
 
@@ -168,6 +171,9 @@ class StartWindow(QWidget):
         self._add(gl, "New study", "Many runs at once: sweep one experiment's injections or conditions over a grid "
                   "(isopleths, sensitivities), or run several experiments with one change.",
                   lambda: launch("study", [], self.toml))
+        self._add(gl, "Run a FACSIMILE experiment", "An experiment modelled with FACSIMILE earlier (its .easy or .elog, "
+                  "e.g. a campaign day): JUICE runs the same inputs and compares with the FACSIMILE results.",
+                  lambda: launch("facsimile", [], self.toml))
         gl.addStretch(); cols.addWidget(g, 1)
 
         g = QGroupBox("Look at results"); gl = QVBoxLayout(g); gl.setSpacing(8)
@@ -222,7 +228,8 @@ def main(argv=None) -> int:
         if open_file(files[0], toml):
             return 0
         QMessageBox.warning(None, "JUICE", f"JUICE does not know what to open {os.path.basename(files[0])} with.\n"
-                                           "It opens .cs results, .study.json studies and .experiment.json experiments.")
+                                           "It opens .cs results, .study.json studies, .experiment.json experiments "
+                                           "and .easy / .elog FACSIMILE experiments.")
     w = StartWindow(toml); w.show(); theme.force_taskbar_icon(w)
     return app.exec()
 

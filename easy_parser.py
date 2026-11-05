@@ -66,6 +66,12 @@ class EasyParser:
         self.include_dir = include_dir
         self.rates_map = {}
         self.functions = {}   # NAME → FUNCTION[body] template (from EASY files)
+        # FUNCTION macros are expanded where they are USED (EASY semantics): a redefinition only
+        # applies to the statements after it.  The first definition keeps its name; a different
+        # later body becomes NAME__2, NAME__3, …, and raw definitions stored for the evaluator
+        # are rewritten to call the version in effect at their line.
+        self._fn_current = {}   # NAME → versioned name in effect (NAME, NAME__2, …)
+        self._fn_bodies = {}    # versioned name → body
         # Canon keys of reactions explicitly disabled by -/-> across ALL parse() calls.
         # scenario_runner uses this to retroactively drop already-materialised reactions.
         self.disabled_rxn_keys = set()
@@ -144,7 +150,8 @@ class EasyParser:
         def include_replacer(match):
             return self.preprocess(match.group(1).strip())
         # Only match #include that is NOT preceded by a semicolon (i.e. not commented out).
-        content = re.sub(r'(?m)^[^;]*#include\s+["\']?([^"\'\s]+)["\']?', include_replacer, content)
+        # The name runs to the end of the line or a ';' comment and may contain spaces.
+        content = re.sub(r'(?m)^[^;]*#include[ \t]+["\']?([^"\';\r\n]+?)["\']?[ \t]*(?=;|\r?$)', include_replacer, content)
         content = re.sub(r'\$\s*\n', '', content) 
         return content
 
@@ -191,6 +198,8 @@ class EasyParser:
         # Pre-scan 0: collect ALL FUNCTION definitions before Pass 1 so that
         # parameters defined before their function macro (e.g. KFPAN=COMPRC(...)
         # appearing in an include before COMPRC=FUNCTION[...]) are still expanded.
+        # Only the FIRST definition of a name is taken here (a use before any definition binds to
+        # the first one); redefinitions take effect in Pass 1 at their own line.
         _func_re = re.compile(r'^(\w+)\s*=\s*FUNCTION\s*\[(.+)\]\s*$', re.I)
         for _l in lines:
             _s = _l.strip()
@@ -200,8 +209,16 @@ class EasyParser:
             if _fm:
                 _fname = _fm.group(1).strip().upper()
                 _fbody = _fm.group(2).strip()
-                self.functions[_fname] = _fbody
-                self.mech.functions[_fname] = _fbody
+                if _fname not in self.functions:
+                    self.functions[_fname] = _fbody
+                    self.mech.functions[_fname] = _fbody
+
+        def _versioned(text: str) -> str:
+            """Rewrite calls NAME( → NAME__n( for macros redefined before this line."""
+            for _n, _v in self._fn_current.items():
+                if _v != _n:
+                    text = re.sub(rf'\b{_n}\s*\(', f'{_v}(', text, flags=re.I)
+            return text
 
         # Pre-scan 1b: collect ALIAS directives so species substitution is available
         # before Pass 1 processes reactions and parameters.
@@ -445,14 +462,27 @@ class EasyParser:
             if func_m:
                 if not is_commented:
                     fname = func_m.group(1).strip().upper()
-                    body  = func_m.group(2).strip()
+                    body  = _versioned(func_m.group(2).strip())   # nested macros: the versions in effect now
+                    cur = self._fn_current.get(fname)
+                    if cur is None:
+                        vname = fname                              # first definition keeps the name
+                    elif self._fn_bodies.get(cur) == body:
+                        vname = cur                                # identical redefinition: nothing changes
+                    else:
+                        n = 2
+                        while f"{fname}__{n}" in self._fn_bodies:
+                            n += 1
+                        vname = f"{fname}__{n}"                    # a new body from this line on
+                    self._fn_current[fname] = vname
+                    self._fn_bodies[vname] = body
+                    # inline expansion (mech.parameters, rates) uses the definition in effect now
                     self.functions[fname] = body
                     self.mech.functions[fname] = body
                     from mechanism import FunctionEntry
-                    # Last-wins: replace existing entry with same name
+                    # the evaluator resolves calls by name: every version stays available
                     self.mech.function_entries = [
-                        e for e in self.mech.function_entries if e.name != fname]
-                    self.mech.function_entries.append(FunctionEntry(name=fname, definition=body))
+                        e for e in self.mech.function_entries if e.name != vname]
+                    self.mech.function_entries.append(FunctionEntry(name=vname, definition=body))
                 return
 
             # Parameter definitions
@@ -478,7 +508,7 @@ class EasyParser:
                                    if '=' in line_for_rxn else expr)
                         self.mech.s_entries = [
                             e for e in self.mech.s_entries if e.name != name]
-                        self.mech.s_entries.append(SEntry(name=name, definition=raw_def))
+                        self.mech.s_entries.append(SEntry(name=name, definition=_versioned(raw_def)))
                 return
 
             if is_commented:
@@ -507,13 +537,13 @@ class EasyParser:
                 else:
                     norm_key = raw_rxn_key
                 self.rates_map[norm_key] = rate_param_name
-                self._k_raw_defs[norm_key] = f"{func.upper()}({args})"
+                self._k_raw_defs[norm_key] = _versioned(f"{func.upper()}({args})")
                 # Phase 1: register in s_entries if not already there (from a separate param line).
                 # Mark synthetic so it is excluded from cs export (not in EASY script explicitly).
                 from mechanism import SEntry
                 if not any(e.name == rate_param_name for e in self.mech.s_entries):
                     self.mech.s_entries.append(
-                        SEntry(name=rate_param_name, definition=f"{func.upper()}({args})",
+                        SEntry(name=rate_param_name, definition=_versioned(f"{func.upper()}({args})"),
                                is_synthetic=True))
                 return
 
@@ -537,14 +567,14 @@ class EasyParser:
                     new_rate = f"JSCALE * {args.split(',')[0].strip()}"
                 self.mech.parameters[rate_param_name] = new_rate
                 self.rates_map[norm_key] = rate_param_name
-                self._k_raw_defs[norm_key] = f"PHOTMMSC({args})"
+                self._k_raw_defs[norm_key] = _versioned(f"PHOTMMSC({args})")
                 # Phase 1: register in s_entries so the evaluator can use it.
                 # Mark synthetic: J_HV_* names never appear in the EASY script explicitly.
                 from mechanism import SEntry
                 self.mech.s_entries = [e for e in self.mech.s_entries
                                        if e.name != rate_param_name]
                 self.mech.s_entries.append(
-                    SEntry(name=rate_param_name, definition=f"PHOTMMSC({args})",
+                    SEntry(name=rate_param_name, definition=_versioned(f"PHOTMMSC({args})"),
                            is_synthetic=True))
                 return
 
@@ -573,7 +603,7 @@ class EasyParser:
                     norm_key = raw_key
                 self.rates_map[norm_key] = rate_val
                 raw_def = line_for_rxn.split('=', 1)[1].strip() if '=' in line_for_rxn else rate_val
-                self._k_raw_defs[norm_key] = raw_def
+                self._k_raw_defs[norm_key] = _versioned(raw_def)
 
         def _parse_line_pass2(line):
             """Pass 2: register bare reaction lines using the complete rates_map."""

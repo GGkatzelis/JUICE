@@ -81,7 +81,9 @@ def generate_juice_elog(easy_path: str,
             is_commented = stripped.startswith((';', '*'))
 
             if not is_commented:
-                m = re.match(r'^[^;]*#include\s+["\']?(\S+?)["\']?\s*(?:;.*)?$',
+                # the name runs to the end of the line or a ';' comment and may contain spaces
+                # ('#include 2024-07-15.VOC input.incl')
+                m = re.match(r'^[^;]*#include\s+["\']?([^;"\'\r\n]+?)["\']?\s*(?:;.*)?$',
                              line, re.I)
                 if m:
                     inc_name = m.group(1).strip()
@@ -168,7 +170,13 @@ def _definition_key(line: str):
     if m:
         return ('FACS', m.group(1).strip().upper())
 
-    # X = anything  (parameter / function / constant assignment)
+    # X = FUNCTION[...]: a text macro.  EASY 6.00 lets the LAST definition apply everywhere (it is
+    # deduplicated like a parameter); EASY 5.96b expands a macro where it is USED, so there every
+    # definition stays in place (see FUNCTION_SCOPE_*).
+    if re.match(r'^[A-Za-z_]\w*\s*=\s*FUNCTION\s*\[', stripped, re.I):
+        return ('FUNCTION', re.match(r'^([A-Za-z_]\w*)', stripped).group(1).upper())
+
+    # X = anything  (parameter / constant assignment)
     m = re.match(r'^([A-Za-z_]\w*)\s*=', stripped)
     if m:
         return ('PARAM', m.group(1).strip().upper())
@@ -176,8 +184,55 @@ def _definition_key(line: str):
     return None
 
 
+# How a FUNCTION macro that is defined more than once applies — this differs between EASY
+# versions, and a FACSIMILE run is only reproduced with the rule of the EASY that made it:
+#   'last' (EASY 6.00, and JUICE's own experiments): the last definition applies everywhere.
+#   'use'  (EASY 5.96b): a definition applies from its own line on.  Example (SAPHIR scenarios):
+#          PHTFKT is defined clear-sky in <mech>.fac.saphir.incl, where J1..J61 use it, and
+#          redefined jNO2-scaled in j_clear_sky.incl and saphir.jmeasured_02.incl — EASY 5.96b
+#          gives clear-sky J values, EASY 6.00 jNO2-scaled ones (~40 % apart).
+FUNCTION_SCOPE_LAST = "last"
+FUNCTION_SCOPE_USE = "use"
+
+
+def easy_version(*folders, stem: str = "") -> str:
+    """The EASY version that wrote a FACSIMILE run ('6.00', '5.96b', …) read from the
+    '* Facsimile-Script / EASY Ver. X' header of a .fac / .out in the given folders
+    (<stem>.fac / <stem>.out first), or '' when there is none."""
+    rx = re.compile(r'EASY\s+Ver\.\s*([0-9][0-9.]*[a-z]?)', re.I)
+    for d in folders:
+        if not d or not os.path.isdir(d):
+            continue
+        names = sorted(os.listdir(d))
+        cands = ([f"{stem}.fac", f"{stem}.out"] if stem else []) + \
+                [n for n in names if n.lower().endswith(('.fac', '.out'))]
+        for n in cands:
+            p = os.path.join(d, n)
+            if not os.path.isfile(p):
+                continue
+            try:
+                with open(p, encoding='latin-1') as fh:
+                    for _ in range(60):
+                        line = fh.readline()
+                        if not line:
+                            break
+                        m = rx.search(line)
+                        if m:
+                            return m.group(1)
+            except OSError:
+                continue
+    return ""
+
+
+def function_scope_for(version: str) -> str:
+    """'use' for EASY before 6 (5.96b), else 'last' (6.00, or no FACSIMILE run known)."""
+    m = re.match(r'(\d+)', version or "")
+    return FUNCTION_SCOPE_USE if m and int(m.group(1)) < 6 else FUNCTION_SCOPE_LAST
+
+
 def make_canonical_elog(raw_elog_path: str,
-                         output_path: str = None) -> str:
+                         output_path: str = None,
+                         function_scope: str = FUNCTION_SCOPE_LAST) -> str:
     """Deduplicate the raw elog so every definition key appears only once.
 
     Algorithm:
@@ -195,10 +250,16 @@ def make_canonical_elog(raw_elog_path: str,
     with open(raw_elog_path, encoding='utf-8', errors='replace') as fh:
         lines = fh.readlines()
 
+    def _key(line):
+        k = _definition_key(line)
+        if k is not None and k[0] == 'FUNCTION' and function_scope == FUNCTION_SCOPE_USE:
+            return None          # EASY 5.96b: every FUNCTION definition stays where it is
+        return k
+
     # Forward pass: key → index of last occurrence
     key_last: dict = {}
     for i, line in enumerate(lines):
-        k = _definition_key(line)
+        k = _key(line)
         if k is not None:
             key_last[k] = i   # overwrite → last index wins
 
@@ -206,7 +267,7 @@ def make_canonical_elog(raw_elog_path: str,
     kept = []
     removed = 0
     for i, line in enumerate(lines):
-        k = _definition_key(line)
+        k = _key(line)
         if k is None or key_last[k] == i:
             kept.append(line)
         else:
@@ -223,6 +284,8 @@ def make_canonical_elog(raw_elog_path: str,
         fh.write(f"; Erzeugt aus: {raw_elog_path}\n")
         fh.write(f"; Datum: {ts}\n")
         fh.write(f"; Entfernte Mehrfach-Definitionen: {removed}\n")
+        fh.write(f"; FUNCTION scope: {function_scope}"
+                 f" ({'EASY 5.96b: a definition applies from its line on' if function_scope == FUNCTION_SCOPE_USE else 'EASY 6.00: the last definition applies everywhere'})\n")
         fh.write(f";\n")
         fh.writelines(kept)
 
@@ -235,11 +298,13 @@ def make_canonical_elog(raw_elog_path: str,
 
 def generate_both(easy_path: str,
                   search_dirs: list = None,
-                  output_dir: str = None) -> tuple:
+                  output_dir: str = None,
+                  function_scope: str = FUNCTION_SCOPE_LAST) -> tuple:
     """Generate raw elog and canonical elog from an EASY file.
 
     output_dir: directory for the output files (default: same dir as easy_path).
                 Set to the JUICE scenario folder so the elogs land there.
+    function_scope: 'last' (EASY 6.00) or 'use' (EASY 5.96b) — see FUNCTION_SCOPE_*.
 
     Returns (raw_elog_path, canonical_elog_path).
     """
@@ -254,7 +319,7 @@ def generate_both(easy_path: str,
     raw_path   = generate_juice_elog(easy_path,
                                      search_dirs=search_dirs,
                                      output_path=raw_path)
-    canon_path = make_canonical_elog(raw_path, output_path=canon_path)
+    canon_path = make_canonical_elog(raw_path, output_path=canon_path, function_scope=function_scope)
 
     # Remove stale copies next to the .easy file (from runs before output_dir was set).
     if output_dir and os.path.isdir(output_dir):

@@ -144,18 +144,30 @@ def solver_from_toml(toml_path: str, profile: str | None = None) -> dict:
 
 
 def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, toml_path: str = "",
-                     extra_dirs: Iterable[str] = (), solver: dict | None = None) -> str:
+                     extra_dirs: Iterable[str] = (), solver: dict | None = None,
+                     easy_version: str | None = None) -> str:
     """EASY + ENZ (from write_experiment) → canonical elog → scenario JSON next to them.
     `extra_dirs` are searched for include files after the run folder and before include_dir
     (a study run uses its base experiment's chemistry folder).  `solver` replaces the TOML's
-    [solver] keys when given (a study freezes them once for all its runs).  Returns the JSON path."""
-    from elog_generator import generate_both
+    [solver] keys when given (a study freezes them once for all its runs).
+    `easy_version` is the EASY that made the FACSIMILE run to reproduce ('5.96b', '6.00'); it sets
+    how redefined FUNCTION macros apply.  None = read it from a .fac/.out in the run folder or
+    extra_dirs; '' or not found = EASY 6.00 rules (JUICE's own experiments).  Returns the JSON path."""
+    from elog_generator import generate_both, easy_version as _easy_version, function_scope_for
     from idl_parser import parse_idl_easy
     out = os.path.dirname(res["easy"])
-    dirs = [out, os.path.join(out, "chemistry")] + [d for d in extra_dirs if d] + [include_dir]
-    raw, canon = generate_both(res["easy"], search_dirs=dirs, output_dir=out)
+    extra = [d for d in extra_dirs if d]
+    dirs = [out, os.path.join(out, "chemistry")] + extra + [include_dir]
+    if easy_version is None:
+        stem = os.path.splitext(os.path.basename(res["easy"]))[0]
+        easy_version = _easy_version(out, *extra, stem=stem)
+    scope = function_scope_for(easy_version)
+    print(f"[scenario_prep] EASY version {easy_version or '(none: JUICE rules = 6.00)'}: "
+          f"FUNCTION scope '{scope}'")
+    raw, canon = generate_both(res["easy"], search_dirs=dirs, output_dir=out, function_scope=scope)
     cfg = parse_idl_easy(canon, enz_path=res["enz"], chemistry_folder=out, include_fallbacks=dirs[1:])
-    cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon, "export_kv_pd": bool(export_kv_pd)})
+    cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon, "export_kv_pd": bool(export_kv_pd),
+                "easy_version": easy_version or "", "function_scope": scope})
     cfg.update(solver if solver is not None else solver_from_toml(toml_path))
     name = os.path.splitext(os.path.basename(res["easy"]))[0]
     path = os.path.join(out, name + ".json")

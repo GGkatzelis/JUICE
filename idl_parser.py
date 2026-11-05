@@ -228,7 +228,7 @@ def _read_easy_lines_expanded(easy_path: str, chemistry_folder: str = None,
             is_commented = stripped.startswith((";", "*"))
             clean = _strip_inline_comment(stripped)
 
-            inc_m = re.match(r"#include\s+(\S+)", clean, re.I)
+            inc_m = re.match(r"#include\s+(.+)", clean, re.I)          # names may contain spaces
             if inc_m and not is_commented:
                 inc_name = inc_m.group(1).strip().strip('"\'')
                 ext = os.path.splitext(inc_name)[1].lower()
@@ -335,7 +335,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             _s = _line.strip()
             _cmt = _s.startswith((";", "*"))
             _cl  = re.sub(r';.*', '', _s).strip()
-            _im  = re.match(r"#include\s+(\S+)", _cl, re.I)
+            _im  = re.match(r"#include\s+(.+)", _cl, re.I)
             if _im:
                 _fn = _im.group(1).strip().lower()
                 if '.dil.mech' in _fn or '.dil.rate' in _fn:
@@ -381,9 +381,9 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             continue
 
         # #include
-        inc = re.match(r"#include\s+(\S+)", clean, re.I)
+        inc = re.match(r"#include\s+(.+)", clean, re.I)
         if inc and not is_commented:
-            mechanism_files_raw.append(inc.group(1).strip())
+            mechanism_files_raw.append(inc.group(1).strip().strip('"\''))
             continue
 
         # k[lhs --> rhs] = CONST(rate)  or  k[...] = rate

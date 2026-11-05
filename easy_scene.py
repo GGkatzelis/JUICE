@@ -46,7 +46,7 @@ from typing import Dict, List, Optional, Tuple
 # Level 1 — document model
 # ─────────────────────────────────────────────────────────────────────────────
 
-_RX_INCLUDE  = re.compile(r"^#include\s+(\S+)\s*$", re.I)
+_RX_INCLUDE  = re.compile(r"^#include\s+(.+?)\s*$", re.I)          # names may contain spaces
 _RX_FILES    = re.compile(r"^FILES\s*\[\s*(\w+)\s*\]\s*=\s*(.+?)\s*$", re.I)
 _RX_FACS     = re.compile(r"^FACS\s*\[\s*(\w+)\s*\]\s*=\s*(.+?)\s*$", re.I)
 _RX_INITIAL  = re.compile(r"^INITIAL\s*\[\s*([\w*]+)\s*\]\s*=\s*(.+?)\s*$", re.I)
