@@ -484,8 +484,7 @@ def events_to_import(events: List[WikiEvent], date: str = "", T_K: float = 298.0
     for o in opens:
         imp.checks.append(("warning", f"{o}: roof opened without a close entry — closes at the end of the window"))
         imp.roof_open.append((o, "23:59"))
-    if not imp.roof_open:
-        imp.checks.append(("warning", "no roof open/close (R/r) entries: dark experiment"))
+    # no roof entries = a dark experiment: not a problem (the experiment check notes it as such)
     if not imp.injections:
         imp.checks.append(("warning", "no injection entries found"))
     imp.injections.sort(key=lambda e: _hhmm_to_min(e.start) if e.start else 0)

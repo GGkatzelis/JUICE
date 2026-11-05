@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBox
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
                              mechanism_species, render_easy, easy_form, write_experiment,
-                             H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS, ACTIONS, ACTION_ORDER)
+                             H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS, ACTIONS, ACTION_ORDER, level_icon)
 from easy_builder import scan_mechanisms, EasyBuilderDialog, DILUTE_DEF
 import saphir_wiki
 import injection_calc as ic
@@ -1245,10 +1245,10 @@ class ReviewPage(QWizardPage):
             self.checks.clear()
             self._has_error = False
             for level, m in msgs:
-                it = QListWidgetItem(("✖ " if level == "error" else "⚠ ") + m)
+                it = QListWidgetItem(level_icon(level) + m)
                 self.checks.addItem(it)
                 self._has_error |= level == "error"
-            if not msgs:
+            if not any(lvl != "info" for lvl, _m in msgs):
                 self.checks.addItem(QListWidgetItem("✔ No problems found"))
             self.summary.setPlainText(self._summary(spec))
         except Exception as e:

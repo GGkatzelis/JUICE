@@ -885,8 +885,17 @@ def mechanism_species(include_dir: str, stem: str) -> set:
     return names
 
 
+LEVEL_ICON = {"error": "✖ ", "warning": "⚠ ", "info": "ℹ "}
+
+
+def level_icon(level: str) -> str:
+    """The mark a validation level is shown with in the GUIs."""
+    return LEVEL_ICON.get(level, "⚠ ")
+
+
 def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[Tuple[str, str]]:
-    """Return (level, message) items; level is 'error' or 'warning'."""
+    """Return (level, message) items; level is 'error' (must be fixed), 'warning' (check it) or
+    'info' (a note on what the experiment is, nothing to fix — e.g. a dark experiment)."""
     msgs: List[Tuple[str, str]] = []
     c = spec.conditions
     if not (c.date and c.start and c.end):
@@ -917,9 +926,11 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
                             msgs.append(("warning", "Measured inputs file: " + note))
             except Exception as e:
                 msgs.append(("error", f"Measured inputs file cannot be read: {e}"))
+    light = _profile(c).light_type
+    dark_run = not c.roof_open            # roof never open / lights never on: photolysis settings do not matter
     try:
         src = input_sources(spec)
-        if src.get("photolysis", "").startswith("NO measured"):
+        if src.get("photolysis", "").startswith("NO measured") and not dark_run:
             msgs.append(("warning", "Photolysis: measured J values selected but none found — the J columns would be 0 (switch to clear sky or provide them)."))
         if c.source in ("archive", "file"):
             consts = [k for k in ("temperature", "humidity", "flow") if src.get(k, "").startswith("constant")]
@@ -931,15 +942,14 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         pass
     if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only:
         msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
-    light = _profile(c).light_type
-    if c.j_source == "measured" and c.source == "manual" and light == "sun":
+    if c.j_source == "measured" and c.source == "manual" and light == "sun" and not dark_run:
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
                                 "(no photolysis). Use 'clear sky' or provide archive data."))
-    if light == "lamps" and not float(_profile(c).light.get("jno2_full_s1", 0) or 0) and c.source != "file":
+    if light == "lamps" and not dark_run and not float(_profile(c).light.get("jno2_full_s1", 0) or 0) and c.source != "file":
         msgs.append(("error", "The chamber profile gives no jNO2 at full lamp power and no file with jNO2 is used: no photolysis."))
-    if not c.roof_open and light != "dark":
-        msgs.append(("warning", "Roof never opens (HV = 0 all day): dark experiment." if light == "sun"
-                     else "Lights never on (HV = 0 all day): dark experiment."))
+    if dark_run and light != "dark":
+        msgs.append(("info", "Roof never opens: run as a dark experiment (no photolysis)." if light == "sun"
+                     else "Lights never on: run as a dark experiment (no photolysis)."))
     seen_cols = set()
     for inj in spec.injections:
         col = inj.enz_column()
@@ -965,6 +975,8 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
     if not spec.injections:
         msgs.append(("warning", "No injections defined."))
     for note in spec.import_notes:
+        if note.lstrip("⚠✖ ").startswith("no roof open/close"):   # older wiki imports: covered by the dark-experiment note above
+            continue
         msgs.append(("warning", "Import: " + note.lstrip("⚠✖ ").strip()))
     return msgs
 

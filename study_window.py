@@ -33,7 +33,7 @@ import numpy as np
 import juice_theme as theme
 import study as S
 from scenario_prep import pick_toml, load_paths, HERE, solver_profiles, solver_from_toml
-from experiment_spec import load_spec, ACTIONS
+from experiment_spec import load_spec, ACTIONS, level_icon
 from experiment_wizard import _info, _more_info
 
 F = theme.PLOT_FONT
@@ -837,8 +837,8 @@ class StudyWindow(QMainWindow):
         for m in st.modifications:
             self._log(f"  change: {m.kind} {m.target} {m.value}")
         for lvl, m in msgs:
-            self._log(("✖ " if lvl == "error" else "⚠ ") + m)
-        if not msgs:
+            self._log(level_icon(lvl) + m)
+        if not any(lvl != "info" for lvl, _ in msgs):
             self._log("✔ nothing to fix")
         self.tabs.setCurrentWidget(self.msgs)
         return not any(lvl == "error" for lvl, _ in msgs)

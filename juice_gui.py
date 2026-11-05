@@ -44,11 +44,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QListWidget, QListWidgetItem, QStackedWidget, QPushButton, QGroupBox, QScrollArea,
                              QCheckBox, QProgressBar, QTextEdit, QMessageBox, QFileDialog, QSplitter, QTabWidget, QFrame,
                              QDialog, QFormLayout, QDialogButtonBox, QComboBox)
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtGui import QKeySequence, QColor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources
+from experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources, level_icon
 from experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
 from elog_generator import generate_both
 from idl_parser import parse_idl_easy
@@ -325,14 +325,35 @@ class ReviewPanel(QWidget):
         st = QWidget(); sl = QVBoxLayout(st); sl.setSpacing(4)
         self.summary = QLabel(""); self.summary.setWordWrap(True); self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         sl.addWidget(self.summary)                                 # one line: name, day, time window, conditions
-        self.checks_title = QLabel("<b>Needs attention</b>"); sl.addWidget(self.checks_title)
-        self.checks = QListWidget(); self.checks.setMaximumHeight(120); self.checks.setWordWrap(True)
-        self.checks.setToolTip("click an entry: the step it belongs to opens and the field is pointed out"); sl.addWidget(self.checks)
+        # 'Needs attention' and 'What goes into the input files' share the space below; drag the
+        # handle between them to give either more room (the split is remembered)
+        top = QWidget(); tl = QVBoxLayout(top); tl.setContentsMargins(0, 0, 0, 0); tl.setSpacing(4)
+        self.checks_title = QLabel("<b>Needs attention</b>"); tl.addWidget(self.checks_title)
+        self.checks = QListWidget(); self.checks.setMinimumHeight(40); self.checks.setWordWrap(True)
+        self.checks.setToolTip("click an entry: the step it belongs to opens and the field is pointed out"); tl.addWidget(self.checks, stretch=1)
         self.checks.itemClicked.connect(self._guide_clicked)
         self.fix = QLabel(""); self.fix.setWordWrap(True); self.fix.setStyleSheet("color: #9a6b00; font-size: 10px; padding: 2px 4px;"); self.fix.hide()
-        sl.addWidget(self.fix)
-        sl.addWidget(QLabel("<b>What goes into the input files</b>"))
-        self.bullets = QListWidget(); self.bullets.setWordWrap(True); sl.addWidget(self.bullets, stretch=1)
+        tl.addWidget(self.fix)
+        bot = QWidget(); bl = QVBoxLayout(bot); bl.setContentsMargins(0, 4, 0, 0); bl.setSpacing(4)
+        bl.addWidget(QLabel("<b>What goes into the input files</b>"))
+        self.bullets = QListWidget(); self.bullets.setMinimumHeight(40); self.bullets.setWordWrap(True); bl.addWidget(self.bullets, stretch=1)
+        self.split = QSplitter(Qt.Orientation.Vertical); self.split.addWidget(top); self.split.addWidget(bot)
+        self.split.setChildrenCollapsible(False); self.split.setHandleWidth(7)
+        self.split.setStyleSheet("QSplitter::handle:vertical { background: #d8d8d8; margin: 2px 40px; border-radius: 2px; }"
+                                 "QSplitter::handle:vertical:hover { background: #6b3e85; }")
+        self.split.handle(1).setToolTip("drag to give 'Needs attention' or 'What goes into the input files' more room")
+        self.split.handle(1).setCursor(Qt.CursorShape.SplitVCursor)
+        self.split.setStretchFactor(0, 1); self.split.setStretchFactor(1, 2); self.split.setSizes([160, 320])
+        try:
+            from PyQt6.QtCore import QSettings
+            self._settings = QSettings("FZJ", "JUICE")
+            state = self._settings.value("review/attention_split")
+            if state is not None:
+                self.split.restoreState(state)
+            self.split.splitterMoved.connect(lambda *_: self._settings.setValue("review/attention_split", self.split.saveState()))
+        except Exception:
+            pass
+        sl.addWidget(self.split, stretch=1)
         self.tabs.addTab(st, "Summary")
         self.plot = InputsPlot(win, "all", height=6.0); self.tabs.addTab(self.plot, "Inputs plot")
         ft = QWidget(); fl = QVBoxLayout(ft)
@@ -363,12 +384,17 @@ class ReviewPanel(QWidget):
                              f"{', step ' + str(c.step_s) + ' s' if getattr(c, 'step_s', None) else ''}")
         self.fix.hide()
         n_err = sum(1 for lvl, _m in msgs if lvl == "error")
-        self.checks_title.setText("<b>Needs attention</b>" + (f" — {n_err} to fix before running, {len(msgs) - n_err} to check" if msgs else " — nothing"))
-        for lvl, m in msgs:
-            it = QListWidgetItem(("✖ " if lvl == "error" else "⚠ ") + m); it.setData(Qt.ItemDataRole.UserRole, (lvl, m))
-            it.setToolTip("click: go to the step and see how to fix it"); self.checks.addItem(it)
-        if not msgs:
+        n_warn = sum(1 for lvl, _m in msgs if lvl == "warning")
+        self.checks_title.setText("<b>Needs attention</b>" + (f" — {n_err} to fix before running, {n_warn} to check" if n_err + n_warn else " — nothing"))
+        if not n_err + n_warn:
             self.checks.addItem(QListWidgetItem("✔ No problems found"))
+        for lvl, m in sorted(msgs, key=lambda x: {"error": 0, "warning": 1}.get(x[0], 2)):   # notes last
+            it = QListWidgetItem(level_icon(lvl) + m); it.setData(Qt.ItemDataRole.UserRole, (lvl, m))
+            if lvl == "info":
+                it.setForeground(QColor("#666666")); it.setToolTip("a note on this experiment, nothing to fix")
+            else:
+                it.setToolTip("click: go to the step and see how to fix it")
+            self.checks.addItem(it)
         for b in spec_bullets(spec):
             self.bullets.addItem(QListWidgetItem("• " + b))
         self.refresh_files()
@@ -446,9 +472,9 @@ class ReviewPanel(QWidget):
         if msg.startswith("Measured J values"):
             return (0, "There is no archive data for this day: switch the conditions to manual (clear-sky photolysis), "
                        "or correct the date / archive path.", focus(c.src_manual))
-        if msg.startswith("Roof never opens"):
-            return (0, "If the chamber roof was opened, add the open and close time to the roof table; a dark experiment needs nothing.",
-                    lambda: (c.roof.setFocus()))
+        if msg.startswith(("Roof never opens", "Lights never on")):
+            return (0, "Nothing to fix for a dark experiment. If the roof was opened (lights switched on), add the open and "
+                       "close times to the roof table.", lambda: (c.roof.setFocus()))
         return (None, "", None)
 
     def _guide_clicked(self, item):
@@ -864,7 +890,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
     def _update_states(self, msgs):
         if not msgs and is_blank(self.collect_spec()):
             self._state[:RUN_STEP] = ["todo"] * RUN_STEP; self._paint_states(); return
-        txt = " ".join(m for _, m in msgs).lower()
+        txt = " ".join(m for lvl, m in msgs if lvl != "info").lower()      # notes (e.g. a dark experiment) mark no step
         self._state[0] = "error" if any(k in txt for k in ("date", "time window", "conditions come from")) else ("warn" if "j values" in txt or "roof" in txt else "ok")
         self._state[1] = "error" if "no chemistry" in txt else "ok"
         self._state[2] = "warn" if "injection" in txt else "ok"
