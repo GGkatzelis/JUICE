@@ -165,6 +165,10 @@ def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, tom
     print(f"[scenario_prep] EASY version {easy_version or '(none: JUICE rules = 6.00)'}: "
           f"FUNCTION scope '{scope}'")
     raw, canon = generate_both(res["easy"], search_dirs=dirs, output_dir=out, function_scope=scope)
+    from elog_generator import case_variants
+    for name, spellings in case_variants(raw).items():
+        print(f"[scenario_prep] WARNING: {' and '.join(spellings)} — FACSIMILE keeps these as different species, "
+              f"JUICE as one ({name})")
     cfg = parse_idl_easy(canon, enz_path=res["enz"], chemistry_folder=out, include_fallbacks=dirs[1:])
     cfg.update({"folder": out, "enz_path": res["enz"], "elog_path": canon, "export_kv_pd": bool(export_kv_pd),
                 "easy_version": easy_version or "", "function_scope": scope})

@@ -413,6 +413,7 @@ class ScenarioRunner:
         elog_path = self.cfg.get('elog_path', '')
         if elog_path and not os.path.isabs(elog_path):
             elog_path = os.path.join(self.root, elog_path)
+        self._va_src = getattr(self, '_va_src', {})     # NAME → source text of its compiled expression
         if elog_path and os.path.isfile(elog_path):
             print(f"  [MECHANISM] Using JUICE elog: {os.path.basename(elog_path)}")
             parser = EasyParser(base_path=os.path.dirname(elog_path))
@@ -430,6 +431,7 @@ class ScenarioRunner:
                 p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
                 p_clean = p_clean.strip()
                 try:
+                    self._va_src[p_name.upper()] = p_clean
                     self.var_assignments.append(
                         (p_name.upper(), compile(p_clean, '<string>', 'eval')))
                 except Exception as e:
@@ -633,6 +635,7 @@ class ScenarioRunner:
             p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)   # re-apply D→E
             p_clean = p_clean.strip()
             try:
+                self._va_src[p_name.upper()] = p_clean
                 self.var_assignments.insert(0, (p_name.upper(), compile(p_clean, '<string>', 'eval')))
             except Exception as e:
                 print(f"[WARNING] Could not compile IDL parameter {p_name}: {e}")
@@ -881,11 +884,28 @@ class ScenarioRunner:
                         'JO3', 'JNO3', 'JNO2_1', 'DENSITY'}
         _known = _va_names | _sp_names | _env_names | _ctx_names | _math_names | _phys_names
         _unresolved = []
+        _va_src = getattr(self, '_va_src', {})
+        _added_species = {}
         for va_name, code in self.var_assignments:
             for co_name in code.co_names:
                 co_up = co_name.upper()
-                if co_up not in _known and not co_up.startswith('_'):
-                    _unresolved.append((va_name, co_name))
+                if co_up in _known or co_up.startswith('_') or co_up in _added_species:
+                    continue
+                src = _va_src.get(va_name.upper(), '')
+                if src and not re.search(rf'\b{re.escape(co_name)}\s*\(', src, re.I):
+                    # A plain name, not a call: FACSIMILE takes any such name in an expression as
+                    # a variable (a species with no reactions, holding INITIAL[*]).  Do the same,
+                    # so a sum such as RO2 that names a species the mechanism does not have (a
+                    # truncated include: 'COHM2CO' for COHM2CO3) runs as it did in FACSIMILE.
+                    _added_species[co_up] = va_name
+                    continue
+                _unresolved.append((va_name, co_name))
+        if _added_species:
+            for co_up, va_name in _added_species.items():
+                print(f"  [WARNING] '{co_up}' in {va_name} is in no reaction: kept as a species without "
+                      f"chemistry, as FACSIMILE does (a misspelt species in the include file?)")
+            self.mechanism.species = sorted(set(self.mechanism.species) | set(_added_species))
+            all_species.update(_added_species)
         if _unresolved:
             lines = '\n'.join(f"  {va} uses '{co}'" for va, co in _unresolved[:10])
             raise RuntimeError(

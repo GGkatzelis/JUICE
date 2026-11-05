@@ -124,6 +124,12 @@ any key.
   `saphir.jmeasured_02.incl` — about 40 % apart. scene_01/02 and campaign runs made before 2026 are
   5.96b, scene_03–09 are 6.00; JUICE's own experiments (no `.fac`) use the 6.00 rule.
 - **`#include` names may contain spaces**; the name runs to the end of the line or a `;` comment.
+- **Two FACSIMILE habits JUICE reproduces with a warning.** A plain name in a parameter expression
+  that is in no reaction (a truncated include: `COHM2CO` for `COHM2CO3` in an RO2 sum) is kept as a
+  species without chemistry holding `INITIAL[*]`, as FACSIMILE does; only a missed `NAME(` call
+  still stops the run (`scenario_runner._finalize_mechanism`). And FACSIMILE is case-sensitive while
+  JUICE is not: a name written `XNOY` and `XNOy` is two species there and one here —
+  `elog_generator.case_variants` reports such names when the scenario is prepared.
 
 ## A5. Validation
 

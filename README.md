@@ -135,7 +135,7 @@ git); the last line compares one of them again and lists every column.
 ### Tests
 ```powershell
 pip install -r requirements-dev.txt
-python -m pytest                  # 53 tests, about 1.5 minutes
+python -m pytest                  # 54 tests, about 1.5 minutes
 python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
 The tests check the MCM download against its checksums, the EASY round-trip and builder for every

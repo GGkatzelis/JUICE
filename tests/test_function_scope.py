@@ -42,6 +42,12 @@ def test_canonical_use_keeps_every_function_definition(tmp_path):
     assert lines == ["F = FUNCTION[(%1)*2]", "A = F(1)", "F = FUNCTION[(%1)*3]", "B = F(1)", "X = CONST(2)"]
 
 
+def test_case_variants_are_reported(tmp_path):
+    p = tmp_path / "x_juice.elog"
+    p.write_text("qNO-->NO+XNOY\nk[qNO-->NO+XNOY]=CONST(1)\nXNOy+DIL-->\nSHONO = CONST(1)\nshono = CONST(2)\nNO2 + HV --> NO + O\n", encoding="latin-1")
+    assert eg.case_variants(str(p)) == {"XNOY": ["XNOY", "XNOy"], "SHONO": ["SHONO", "shono"]}
+
+
 def test_parser_versions_a_redefined_function(tmp_path):
     """With both definitions present, A uses the first body and B the second — in the inline
     expansion and in the evaluator's entries."""

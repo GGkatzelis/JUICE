@@ -292,6 +292,28 @@ def make_canonical_elog(raw_elog_path: str,
     return output_path
 
 
+def case_variants(elog_path: str) -> dict:
+    """Names written in more than one case in the reactions and assignments of an elog,
+    {NAME: ['XNOY', 'XNOy']}.  FACSIMILE is case-sensitive and keeps these as different species;
+    JUICE is not and merges them — worth a warning when reproducing a FACSIMILE run."""
+    seen: dict = {}
+    rx_tok = re.compile(r'[A-Za-z][A-Za-z0-9_]*')
+    with open(elog_path, encoding='latin-1') as fh:
+        for line in fh:
+            s = line.split(';')[0].strip()
+            if not s or s.startswith(('*', '#')):
+                continue
+            if '-->' in s and not re.match(r'^k\s*\[', s, re.I):
+                names = rx_tok.findall(s.replace('-/->', '-->'))
+            else:
+                m = re.match(r'^([A-Za-z][A-Za-z0-9_]*)\s*=', s)
+                names = [m.group(1)] if m else []
+            for n in names:
+                if n.upper() not in ('HV', 'DIL', 'CONST', 'INPUT', 'FUNCTION'):
+                    seen.setdefault(n.upper(), set()).add(n)
+    return {k: sorted(v) for k, v in seen.items() if len(v) > 1}
+
+
 # ---------------------------------------------------------------------------
 # Combined entry point: generate both files
 # ---------------------------------------------------------------------------
