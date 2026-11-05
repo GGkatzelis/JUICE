@@ -21,13 +21,23 @@ def test_compare_reports_missing_result(tmp_path):
                     fac_dir_override=os.path.join(IDL_INPUT, "scene_04"))
 
 
+# Concentration floor for this test: 1e-3 ppt (≈ 2.5e4 molec/cm³), a thousand times below the 1 ppt
+# 'trace' tier.  The benchmark's own default (100 molec/cm³ = the solver's atol) is kept for detailed
+# comparisons, but at that level species that stay at a few molecules/cm³ are rounding noise and
+# depend on the CPU: SA in scene_04 (mean ≈ 3 molec/cm³, ~1e-7 ppt) is 0.03 % off FACSIMILE on one
+# machine and 3.3 % on the GitHub runner — a difference of ~3 molecules/cm³.  Settings (J, k) are
+# always compared without a floor.
+TEST_FLOOR = 2.5e4
+
+
 @pytest.mark.slow
 def test_scene_04_matches_facsimile(tmp_path):
-    """scene_04 (inorganic + CH4 chemistry, SAPHIR day): every setting and species within 2 %."""
+    """scene_04 (inorganic + CH4 chemistry, SAPHIR day): every setting within 2 %, and every species
+    that rises above 1e-3 ppt within 2 %."""
     import run_benchmark
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = run_benchmark.main(["scene_04", "--work", str(tmp_path)])
+        rc = run_benchmark.main(["scene_04", "--work", str(tmp_path), "--floor", str(TEST_FLOOR)])
     assert rc == 0, out.getvalue()
 
 
