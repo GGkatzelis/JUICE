@@ -25,8 +25,7 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QGroupB
                              QPushButton, QVBoxLayout, QWidget)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py",
-           "facsimile": "facsimile_run.py"}
+SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py"}
 
 
 def _toml_args(toml: str) -> list:
@@ -40,16 +39,15 @@ def launch(kind: str, args: list = (), toml: str = "") -> bool:
 
 
 def open_file(path: str, toml: str = "") -> bool:
-    """The window that belongs to a file: .cs → viewer, .study.json → study, .experiment.json → experiment."""
+    """The window that belongs to a file: .cs → viewer, .study.json → study, .experiment.json → experiment,
+    .easy / .elog → the experiment window with its FACSIMILE import open on the file."""
     p = path.lower()
     if p.endswith(".study.json"):
         return launch("study", [path], toml)
-    if p.endswith(".experiment.json"):
+    if p.endswith(".experiment.json") or p.endswith((".easy", ".elog")):
         return launch("experiment", [path], toml)
     if p.endswith(".cs") or p.endswith("_cs.csv"):
         return launch("results", [path], toml)
-    if p.endswith((".easy", ".elog")):
-        return launch("facsimile", [path], toml)
     return False
 
 
@@ -171,9 +169,9 @@ class StartWindow(QWidget):
         self._add(gl, "New study", "Many runs at once: sweep one experiment's injections or conditions over a grid "
                   "(isopleths, sensitivities), or run several experiments with one change.",
                   lambda: launch("study", [], self.toml))
-        self._add(gl, "Run a FACSIMILE experiment", "An experiment modelled with FACSIMILE earlier (its .easy or .elog, "
-                  "e.g. a campaign day): JUICE runs the same inputs and compares with the FACSIMILE results.",
-                  lambda: launch("facsimile", [], self.toml))
+        self._add(gl, "Import a FACSIMILE experiment", "An experiment modelled with FACSIMILE earlier (its .easy and ENZ, "
+                  "e.g. a campaign day) becomes a JUICE experiment: look at it, change it, run it, compare with the FACSIMILE results.",
+                  self._import_facsimile)
         gl.addStretch(); cols.addWidget(g, 1)
 
         g = QGroupBox("Look at results"); gl = QVBoxLayout(g); gl.setSpacing(8)
@@ -205,6 +203,11 @@ class StartWindow(QWidget):
         p = pick_experiment(self, self.toml)
         return launch("experiment", [p], self.toml) if p else None
 
+    def _import_facsimile(self):
+        p, _ = QFileDialog.getOpenFileName(self, "FACSIMILE experiment to import", _start_dir(self.toml),
+                                           "FACSIMILE experiment (*.easy *.elog);;All files (*)")
+        return launch("experiment", [p], self.toml) if p else None
+
     def _open_result(self):
         p = pick_result(self, self.toml)
         return launch("results", [p], self.toml) if p else None
@@ -229,7 +232,7 @@ def main(argv=None) -> int:
             return 0
         QMessageBox.warning(None, "JUICE", f"JUICE does not know what to open {os.path.basename(files[0])} with.\n"
                                            "It opens .cs results, .study.json studies, .experiment.json experiments "
-                                           "and .easy / .elog FACSIMILE experiments.")
+                                           "and imports .easy / .elog FACSIMILE experiments.")
     w = StartWindow(toml); w.show(); theme.force_taskbar_icon(w)
     return app.exec()
 

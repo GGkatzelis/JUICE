@@ -443,7 +443,7 @@ def form_from_spec(s: SceneSpec) -> EasyForm:
 
     # measured: rebuild rows from the encounter-ordered items
     f.j_rows, f.setting_rows, f.j_overrides = [], [], {}
-    alias_of = {a: n for n, a, _c, _cm in SETTINGS if a}
+    alias_of = {a.upper(): n for n, a, _c, _cm in SETTINGS if a}        # T_in / HV_in / H2O_in, looked up upper-cased
     pending_alias: Dict[str, Setting] = {}
     names_seen = set()
     for item in s.measured_items:

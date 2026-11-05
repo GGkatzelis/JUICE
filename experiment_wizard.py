@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBox
 
 from experiment_spec import (ExperimentSpec, Conditions, InjectionEvent, ChamberEffects,
                              list_templates, load_template, load_spec, save_spec, validate,
-                             mechanism_species, render_easy, easy_form, write_experiment,
+                             mechanism_species, known_species_for, render_easy, easy_form, write_experiment,
                              H2O_IMPURITY_DEFAULTS, STANDARD_COLUMNS, ACTIONS, ACTION_ORDER, level_icon)
 from easy_builder import scan_mechanisms, EasyBuilderDialog, DILUTE_DEF
 import saphir_wiki
@@ -251,10 +251,14 @@ class StartPage(QWizardPage):
         wb = QPushButton("Import experiment log …"); wb.clicked.connect(lambda: self.wiz.import_from_wiki(self)); hb.addWidget(wb)
         wb.setToolTip("Fetch the day's SAPHIR wiki page, load a saved page or text file, or paste your own notes "
                       "('HH:MM <code> …' lines) — all end in the same action-log check")
+        fb = QPushButton("Import a FACSIMILE experiment …"); fb.clicked.connect(lambda: self.wiz.import_from_facsimile(self)); hb.addWidget(fb)
+        fb.setToolTip("An experiment modelled with FACSIMILE earlier: its .easy and ENZ fill the steps (conditions from the ENZ, "
+                      "chemistry, injections, chamber effects); everything stays editable")
         hb.addStretch(); lay.addLayout(hb)
         lay.addWidget(_info("Wiki import and pasted notes read the action log (roof, humidification, injections), "
                             "switch to the archive for the measured conditions when the day folder exists, and leave "
-                            "everything editable in the following steps."))
+                            "everything editable in the following steps. A FACSIMILE import reads the .easy and takes the "
+                            "measured conditions from the ENZ of that run."))
         hb2 = QHBoxLayout(); hb2.addWidget(QLabel("Template (optional)"))
         self.tpl_combo = QComboBox()
         self.templates = list_templates()
@@ -340,7 +344,7 @@ class ConditionsPage(QWizardPage):
         lay.addWidget(QLabel("<b>Chamber conditions</b> — temperature, pressure, humidity, flow and photolysis frequencies "
                              "drive the rate constants and the air density; the model needs them for every minute."))
         self.src_archive = QRadioButton("Measured — from the SAPHIR archive (T, P, humidity, flow, J values, NO, NO2, O3)")
-        self.src_file = QRadioButton("Measured — from a file you provide (CSV or Excel: time + T, p, humidity, flow, roof, J values, NO, NO2, O3)")
+        self.src_file = QRadioButton("Measured — from a file you provide (CSV, Excel or an ENZ: time + T, p, humidity, flow, roof, J values, NO, NO2, O3)")
         self.src_manual = QRadioButton("Manual — constant values, clear-sky photolysis (no measurements available)")
         for rb in (self.src_archive, self.src_file, self.src_manual):
             rb.toggled.connect(self._source_changed)
@@ -453,7 +457,8 @@ class ConditionsPage(QWizardPage):
             self._file_status()
 
     def _browse_input(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Measured inputs table", self.input_path.text() or "", "Tables (*.csv *.txt *.xlsx *.xls);;All files (*)")
+        p, _ = QFileDialog.getOpenFileName(self, "Measured inputs table", self.input_path.text() or "",
+                                           "Tables and ENZ files (*.csv *.txt *.xlsx *.xls *.enz);;All files (*)")
         if p:
             self.input_path.setText(p); self.src_file.setChecked(True)
 
@@ -576,6 +581,15 @@ class ChemistryPage(QWizardPage):
         self.mech_combo = QComboBox(); self.mech_combo.setEditable(True)
         self.mech_combo.addItems([""] + list(scan_mechanisms(wiz.include_dir))); hb2.addWidget(self.mech_combo, stretch=1)
         lay.addLayout(hb2)
+        # more folders with include files: an imported FACSIMILE experiment keeps its mechanism where it is
+        hb2b = QHBoxLayout(); hb2b.addWidget(QLabel("Include folders"))
+        self.include_dirs = QListWidget(); self.include_dirs.setMaximumHeight(52)
+        self.include_dirs.setToolTip("Searched (with their subfolders) for the #include files of the experiment before JUICE's own include "
+                                     "folder — the folder of an imported FACSIMILE experiment, or any folder holding a mechanism include set.")
+        hb2b.addWidget(self.include_dirs, stretch=1)
+        vb = QVBoxLayout(); b = QPushButton("Add …"); b.clicked.connect(self._add_include_dir); vb.addWidget(b)
+        b = QPushButton("Remove"); b.clicked.connect(self._remove_include_dir); vb.addWidget(b); hb2b.addLayout(vb)
+        lay.addLayout(hb2b)
         lay.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
                             "the CHANEL template shows how a mixture is written as mole fractions."))
 
@@ -724,6 +738,30 @@ class ChemistryPage(QWizardPage):
             self.chosen.takeItem(self.chosen.row(it))
         self.update_tree()
 
+    # ── include folders ──
+    def include_dir_list(self) -> List[str]:
+        return [self.include_dirs.item(i).text() for i in range(self.include_dirs.count())]
+
+    def _add_include_dir(self):
+        p = QFileDialog.getExistingDirectory(self, "Folder with include files", self.wiz.easy_root)
+        if p and p not in self.include_dir_list():
+            self.include_dirs.addItem(p); self._refresh_mechanisms()
+
+    def _remove_include_dir(self):
+        for it in self.include_dirs.selectedItems():
+            self.include_dirs.takeItem(self.include_dirs.row(it))
+        self._refresh_mechanisms()
+
+    def _refresh_mechanisms(self):
+        """The 'Existing mechanism' list: JUICE's include folder plus the include folders of the experiment."""
+        keep = self.mech_combo.currentText()
+        stems = dict(scan_mechanisms(self.wiz.include_dir))
+        for d in self.include_dir_list():
+            stems.update(scan_mechanisms(d))
+        self.mech_combo.blockSignals(True)
+        self.mech_combo.clear(); self.mech_combo.addItems([""] + sorted(stems)); self.mech_combo.setCurrentText(keep)
+        self.mech_combo.blockSignals(False)
+
     def set_from(self, spec: ExperimentSpec):
         i = self.base_combo.findData(spec.base_mechanism)
         self.base_combo.setCurrentIndex(i if i >= 0 else 0)
@@ -732,6 +770,10 @@ class ChemistryPage(QWizardPage):
         self.chosen.clear()
         for p in spec.precursors:
             self.chosen.addItem(p)
+        self.include_dirs.clear()
+        for d in spec.include_dirs:
+            self.include_dirs.addItem(d)
+        self._refresh_mechanisms()
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         (self.mode_existing if spec.mechanism_stem else self.mode_inorganic if spec.inorganic_only else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
@@ -748,6 +790,7 @@ class ChemistryPage(QWizardPage):
         spec.reaction_adjustments = [(a, b, c) for a, b, c in _rows(self.adjust) if a.strip()]
         spec.base_mechanism = self.base_id()
         spec.addons = self.addon_ids()
+        spec.include_dirs = self.include_dir_list()
 
     def validatePage(self) -> bool:
         if self.mode_existing.isChecked() and not self.mech_combo.currentText().strip():
@@ -1240,7 +1283,7 @@ class ReviewPage(QWizardPage):
         try:
             spec = self.wiz.collect_spec()
             self.preview.setPlainText(render_easy(spec))
-            known = mechanism_species(self.wiz.include_dir, spec.mechanism_stem) if spec.mechanism_stem else None
+            known = known_species_for(spec, self.wiz.include_dir) if spec.mechanism_stem else None
             msgs = validate(spec, known)
             self.checks.clear()
             self._has_error = False
@@ -1867,7 +1910,8 @@ class ExperimentHost:
         spec = ExperimentSpec(name=self.page_start.name_edit.text().strip() or "experiment",
                               title=b.title, mech_incl_suffix=b.mech_incl_suffix, use_anorg=b.use_anorg,
                               use_j_clear_sky_incl=b.use_j_clear_sky_incl, hmax=b.hmax, outstep=b.outstep,
-                              extra_includes=list(b.extra_includes), template=b.template)
+                              extra_includes=list(b.extra_includes), template=b.template,
+                              easy_version=b.easy_version, reference_cs=b.reference_cs)
         spec.conditions = self.page_cond.get()
         self.page_chem.apply(spec)
         spec.injections = self.page_inj.get()
@@ -1876,6 +1920,23 @@ class ExperimentHost:
         spec.overrides = [l.strip() for l in self.page_review.overrides.toPlainText().splitlines() if l.strip()]
         spec.import_notes = list(self.import_notes)
         return spec
+
+    # ── FACSIMILE import ──────────────────────────────────────────────────────
+    def import_from_facsimile(self, parent=None, path: str = ""):
+        """An experiment set up for FACSIMILE (.easy + ENZ) → the pages, with its folder as the project
+        folder's sibling: <project>/<name>/ holds the copied ENZ and, after 'Prepare', the generated files."""
+        from facsimile_import import ImportDialog
+        project = self.page_start.out_edit.text().strip() or self.easy_root
+        dlg = ImportDialog(parent or self, path=path, project_root=project, include_dir=self.include_dir)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.result_spec is None:
+            return
+        self.wiki_memory = None
+        spec = dlg.result_spec
+        self.load_spec(spec)
+        self.page_start.name_edit.setText(spec.name)
+        self.page_start.out_edit.setText(dlg.project_root)
+        if hasattr(self, "steps"):
+            self.steps.setCurrentRow(0)
 
     # ── wiki import ───────────────────────────────────────────────────────────
     def import_from_wiki(self, parent=None, paste: bool = False):

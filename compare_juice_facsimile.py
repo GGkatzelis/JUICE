@@ -283,7 +283,7 @@ def _toml_path() -> str:
 
 def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = False,
             juice_dir_override: str = None, fac_dir_override: str = None,
-            floor: float = DEFAULT_FLOOR) -> dict:
+            floor: float = DEFAULT_FLOOR, fac_stem: str = None) -> dict:
     """Compare one scenario and print the report.  Returns a summary:
 
         {"ok": bool, "groups": {label: {"n": int, "n_exceed": int,
@@ -293,7 +293,9 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     max|JUICE − FAC| / max(max|FAC|, floor).  Species that never rise above the solver's absolute
     tolerance (SO3, Cl at 1e-10 … 1e-170, late MCM products at a few molec/cm³) then count as
     agreeing instead of as 100 % off.
-    Settings (J values, rate constants) are compared without a floor."""
+    Settings (J values, rate constants) are compared without a floor.
+    `fac_stem` names the FACSIMILE files when they are not called like the JUICE run (an imported
+    experiment renamed in the GUI): <fac_dir>/<fac_stem>.cs/.kv/.pd."""
     # ── Paths: [paths] of the TOML (+ .local.toml), defaulting to the repository folders ──
     from scenario_prep import load_paths
     paths = load_paths(_toml_path())
@@ -303,8 +305,9 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
 
     juice_dir = juice_dir_override or os.path.join(output_root, scenario)
     easy_dir  = fac_dir_override   or os.path.join(easy_root,  scenario)
+    fac_stem  = fac_stem or scenario
 
-    cs_fac_path = os.path.join(easy_dir,  f"{scenario}.cs")
+    cs_fac_path = os.path.join(easy_dir,  f"{fac_stem}.cs")
     # Support both naming conventions.
     # Prefer the newer file when both exist (elog-based runs use _juice suffix).
     def _find_juice_file(suffix):
@@ -321,8 +324,8 @@ def compare(scenario: str, tol: float, show_all: bool = False, no_stop: bool = F
     cs_jui_path = _find_juice_file(".cs")
     kv_jui_path = _find_juice_file(".kv")
     pd_jui_path = _find_juice_file(".pd")
-    kv_fac_path = os.path.join(easy_dir, f"{scenario}.kv")
-    pd_fac_path = os.path.join(easy_dir, f"{scenario}.pd")
+    kv_fac_path = os.path.join(easy_dir, f"{fac_stem}.kv")
+    pd_fac_path = os.path.join(easy_dir, f"{fac_stem}.pd")
 
     # ── Load files ───────────────────────────────────────────────────────
     def _mtime(p):

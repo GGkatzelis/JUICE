@@ -28,6 +28,8 @@ Solver numerics come from the TOML (solver_from_toml), never from this window.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -55,6 +57,9 @@ from idl_parser import parse_idl_easy
 import injection_calc as ic
 import juice_theme as theme
 import mechanism_registry as mreg
+
+COMPARE_FLOOR = 2.5e4      # molec/cm³ ≈ 1e-3 ppt, as tests/test_solver.py: below this CPU rounding dominates
+COMPARE_TOL = 0.02         # the benchmark tolerance
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGO = theme.LOGO
@@ -559,6 +564,12 @@ class RunPage(QWidget):
         self.run_btn = QPushButton("2. Run simulation"); self.run_btn.setObjectName("primary"); self.run_btn.setEnabled(False); self.run_btn.clicked.connect(self.run); hb.addWidget(self.run_btn)
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self.stop); hb.addWidget(self.stop_btn)
         self.view_btn = QPushButton("3. Open results"); self.view_btn.setObjectName("primary"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
+        # an imported FACSIMILE experiment remembers the FACSIMILE results it came with
+        self.cmp_btn = QPushButton("Compare with FACSIMILE"); self.cmp_btn.setEnabled(False); self.cmp_btn.clicked.connect(self.compare)
+        self.cmp_btn.setToolTip(f"The FACSIMILE results this experiment was imported with, against this run: max relative deviation over "
+                                f"the run, ±{COMPARE_TOL*100:g} %; concentrations measured against at least {COMPARE_FLOOR:g} molec/cm³ "
+                                "(≈ 1e-3 ppt); settings (J values, rate constants) without a floor")
+        hb.addWidget(self.cmp_btn)
         self.study_btn = QPushButton("Sweep this experiment …")
         self.study_btn.setToolTip("Saves this experiment and opens the study window on it: pick which of its injections, sources or "
                                   "initial values to vary over a grid (isopleth, sensitivities).")
@@ -573,6 +584,8 @@ class RunPage(QWidget):
 
     def refresh(self):
         self.folder.setText(self.win.out_dir())
+        self.cmp_btn.setVisible(bool(self.win._base.reference_cs))
+        self.cmp_btn.setEnabled(bool(self.win._base.reference_cs) and os.path.isfile(self.win._base.reference_cs) and os.path.isfile(self.cs_path()))
 
     def _solver_changed(self, *_a):
         name = self.solver.currentData()
@@ -593,11 +606,26 @@ class RunPage(QWidget):
         self.bar.setValue(0); self.bar.setFormat("preparing …"); QApplication.processEvents()    # white while working, green when done
         try:
             res = self.win.write_all()
-            self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path,
-                                              solver=solver_from_toml(self.win.toml_path, self.solver.currentData()))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):           # the EASY-version line and the parser's warnings go to the log
+                self.json_path = prepare_scenario(res, self.win.include_dir, self.kvpd.isChecked(), self.win.toml_path,
+                                                  extra_dirs=list(spec.include_dirs), easy_version=spec.easy_version or None,
+                                                  solver=solver_from_toml(self.win.toml_path, self.solver.currentData()))
         except Exception as e:
             self.log.append(f"Prepare failed: {e}"); self.bar.setValue(0); self.bar.setFormat("prepare failed"); return ""
         out = os.path.dirname(self.json_path)
+        for line in buf.getvalue().splitlines():
+            if "[scenario_prep]" in line:
+                self.log.append(line)
+        missing = []
+        try:
+            with open(os.path.join(out, spec.name + "_juice.elog"), encoding="utf-8", errors="replace") as fh:
+                missing = sorted({m.group(1).strip() for m in re.finditer(r"^;#include (.+?) ! NOT FOUND", fh.read(), re.M)})
+        except OSError:
+            pass
+        if missing:
+            self.log.append(f"✖ {len(missing)} include file(s) not found: " + ", ".join(missing) +
+                            "\n  Add the folder that holds them under 'Include folders' on the Chemistry step.")
         self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path)))
         try:                                   # the measurements the results will be compared with, extracted once
             import experiment_plots as _ep
@@ -610,11 +638,39 @@ class RunPage(QWidget):
         for n in res.get("notes", []):
             self.log.append("note: " + n)
         self.log.append(f"Inputs ready in {out}")
-        self.bar.setValue(100); self.bar.setFormat("inputs ready"); self.run_btn.setEnabled(True)
+        self.bar.setValue(100); self.bar.setFormat("inputs ready" if not missing else f"inputs ready — {len(missing)} include(s) missing")
+        self.run_btn.setEnabled(True)
         self.view_btn.setEnabled(os.path.isfile(self.cs_path()))
         self.win.review.refresh_files()
         self.win.set_step_state(RUN_STEP, "ok")
+        self.refresh()
         return self.json_path
+
+    def compare(self):
+        """This run against the FACSIMILE results the experiment was imported with (compare_juice_facsimile)."""
+        import compare_juice_facsimile as cjf
+        ref = self.win._base.reference_cs
+        cs = self.cs_path()
+        if not (ref and os.path.isfile(ref) and cs and os.path.isfile(cs)):
+            return
+        stem = os.path.splitext(os.path.basename(cs))[0]
+        work = os.path.dirname(cs); log_path = os.path.join(work, f"{stem}_difference_JUICE_Facsimile.log")
+        self.bar.setFormat("comparing …"); QApplication.processEvents()
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                s = cjf.compare(stem, COMPARE_TOL, no_stop=True, floor=COMPARE_FLOOR, juice_dir_override=work,
+                                fac_dir_override=os.path.dirname(ref), fac_stem=os.path.splitext(os.path.basename(ref))[0])
+        except Exception as e:
+            self.log.append(f"Comparison failed: {e}"); self.bar.setFormat("comparison failed"); return
+        with open(log_path, "w", encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
+        self.log.append(f"JUICE vs FACSIMILE ({os.path.basename(ref)}), ±{COMPARE_TOL*100:g} % (concentrations measured against ≥ {COMPARE_FLOOR:g} molec/cm³):")
+        for label, g in (s.get("groups") or {}).items():
+            worst = ", ".join(f"{n} {r*100:.2g} %" for r, n in g["worst"][:3])
+            self.log.append(f"  {label}: {g['n'] - g['n_exceed']}/{g['n']} within  ·  worst {worst}")
+        self.log.append(("✔ the two runs agree" if s.get("ok") else "✖ differences above the tolerance") + f"  (full report: {os.path.basename(log_path)})")
+        self.bar.setFormat("agree with FACSIMILE" if s.get("ok") else "differences — see the log")
 
     def cs_path(self) -> str:
         return self.json_path[:-5] + ".cs" if self.json_path else ""
@@ -710,6 +766,9 @@ class RunPage(QWidget):
         self.run_btn.setEnabled(True); self.prep_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.view_btn.setEnabled(ok)
         self.win.review.refresh_files()
         self.win.set_step_state(RUN_STEP, "ok" if ok else "error")
+        self.refresh()
+        if ok and self.cmp_btn.isEnabled():
+            self.log.append("The FACSIMILE results this experiment came with are at hand: 'Compare with FACSIMILE' sets the two runs against each other.")
 
     def open_results(self):
         cs = self.cs_path()
@@ -776,6 +835,7 @@ class JuiceWindow(QMainWindow, ExperimentHost):
         m = self.menuBar().addMenu("File")
         m.addAction("New experiment (blank)", QKeySequence("Ctrl+N"), self._new)
         m.addAction("Open experiment (.experiment.json) …", QKeySequence("Ctrl+O"), self._open)
+        m.addAction("Import a FACSIMILE experiment (.easy + ENZ) …", lambda: self.import_from_facsimile(self))
         m.addAction("Save experiment", QKeySequence("Ctrl+S"), lambda: self._save())
         m.addAction("Save experiment as …", self._save_as)
         m.addAction("Open experiment folder", self._open_folder)
@@ -1017,6 +1077,9 @@ def main(argv=None):
     exp = next((a for a in argv[1:] if a.endswith(".experiment.json") and os.path.isfile(a)), "")
     if exp:                                  # from the start menu or a file dropped on the icon
         w._open(exp)
+    fac = next((a for a in argv[1:] if a.lower().endswith((".easy", ".elog")) and os.path.isfile(a)), "")
+    if fac:                                  # a FACSIMILE experiment: the import dialog opens on it
+        QTimer.singleShot(0, lambda: w.import_from_facsimile(w, fac))
     return app.exec()
 
 

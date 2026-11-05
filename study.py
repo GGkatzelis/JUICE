@@ -551,7 +551,8 @@ def materialise(st: Study, plan: RunPlan, include_dir: str, force: bool = False)
         else:
             raise
     save_spec(spec, os.path.join(plan.folder, plan.name + ".experiment.json"))
-    js = prepare_scenario(res, include_dir, st.export_kv_pd, st.toml, extra_dirs=[chem_dir], solver=st.solver or None)
+    js = prepare_scenario(res, include_dir, st.export_kv_pd, st.toml, extra_dirs=[chem_dir] + list(spec.include_dirs),
+                          solver=st.solver or None, easy_version=spec.easy_version or None)
     info = _read_info(plan); info.update({"base": base_name, "point": plan.point, "notes": notes, "materialised": time.strftime("%Y-%m-%d %H:%M:%S")})
     _write_info(plan, info)
     plan.status = "ready"; plan.message = "; ".join(notes)

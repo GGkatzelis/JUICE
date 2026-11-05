@@ -57,13 +57,13 @@ menu:
 | New experiment (from scratch) | Results of one experiment (`.cs`) |
 | Open a saved experiment (`.experiment.json`) | Results of a study (`.study.json`) |
 | New study (sweep, or several experiments with one change) | |
-| Run a FACSIMILE experiment (`.easy` / `.elog`) | |
+| Import a FACSIMILE experiment (`.easy` + ENZ) | |
 
 - **One window per choice.** The choice opens in its own window and the menu closes. Click the icon
   again for another window at any time, while others are still open.
 - **Dropping a file on the icon** opens it straight away: a `.cs` in the results viewer, a
   `.study.json` in the study window, an `.experiment.json` in the experiment window, an `.easy` or
-  `.elog` in the FACSIMILE-experiment window.
+  `.elog` in the experiment window with the FACSIMILE import open on it.
 - **Shortcuts are not in git.** They hold this PC's paths, so run the script once after cloning.
   It also removes the separate "JUICE Results" icon of earlier versions.
 - **[JUICE Results.bat](JUICE%20Results.bat)** still opens the viewer directly. Started without a
@@ -78,10 +78,10 @@ opens a saved one). Five steps down the left, a review panel on the right that
 always shows what the experiment contains:
 
 1. **Experiment**: name, folder, date and time window, chamber, conditions (SAPHIR archive, your own
-   measured file, or constants), roof or lamp schedule; or start from a template, a saved
-   experiment, or an imported SAPHIR wiki log.
-2. **Chemistry**: precursors (the MCM subset is extracted for you) or an existing include set,
-   add-on chemistry, reaction-rate adjustments.
+   measured file or an ENZ, or constants), roof or lamp schedule; or start from a template, a saved
+   experiment, an imported SAPHIR wiki log, or an imported FACSIMILE experiment.
+2. **Chemistry**: precursors (the MCM subset is extracted for you) or an existing include set (from
+   JUICE's include folder or any include folder you add), add-on chemistry, reaction-rate adjustments.
 3. **Injections**: what, how much (ppb, µl by syringe, gas syringe, mass-flow controller) and when;
    mixtures; the OH reactivity each injection adds.
 4. **Chamber**: wall deposition, wall sources, background reactivity, dilution, initial values.
@@ -92,25 +92,38 @@ are generated from it and can be opened from the review panel.
 
 ### Experiments set up for FACSIMILE
 ```powershell
-python facsimile_run.py path\to\<name>.easy      # or <name>.elog
+python juice_gui.py path\to\<name>.easy      # the experiment window, import dialog open on the file
 ```
-The window behind "Run a FACSIMILE experiment": an experiment modelled with FACSIMILE earlier runs
-in JUICE from its own input files, without an experiment description. Choose the `.easy`, or the
-`.elog` EASY wrote for that run (every include inline, exactly as used; preferred when it exists next
-to the `.easy`). JUICE finds the ENZ file the `FILES[ENZ]` line names, copies the inputs to a work
-folder under `output_root\facsimile\<name>\` (the original folder is not touched), prepares and runs
-them with the chosen solver profile, and opens the results. With an `.easy`, the `#include` files are
-looked up in the experiment folder, its `chemistry\` subfolder, the include folders you add in the
-window (remembered) and JUICE's own include folder; missing ones are listed after "Prepare".
-When the FACSIMILE results (`<name>.cs`) lie next to the inputs, **Compare with FACSIMILE** sets the
-two runs against each other (±2 %, as the benchmark) and writes the full report to the work folder.
+"Import a FACSIMILE experiment" (start menu, the Experiment step, or the File menu): an experiment
+modelled with FACSIMILE earlier becomes an ordinary JUICE experiment. The dialog takes the `.easy`
+(an `.elog` is accepted when its `.easy` lies next to it), finds the ENZ the `FILES[ENZ]` line names,
+and reads both back into the experiment description ([facsimile_import.py](facsimile_import.py)):
 
-JUICE reads the EASY version that made the run from the `.fac` / `.out` next to it, because EASY
-5.96b and 6.00 differ in one rule: a `FUNCTION` macro defined more than once (as `PHTFKT` is in a
-SAPHIR scenario: clear-sky first, jNO2-scaled later) applies from its own line on in 5.96b, while in
-6.00 the last definition applies everywhere. The J values differ by about 40 % between the two, so
-the run follows the rule of its EASY. Without a `.fac` / `.out`, JUICE uses the 6.00 rule, as for its
-own experiments.
+- the ENZ gives the date, time window and step, the roof times, and the start and duration of every
+  injection (its pulse columns); it is copied into the experiment folder as
+  `<name>.measured.enz` and serves as the measured-inputs file (T, humidity, flow, solar zenith
+  angle, J values, NO/NO2/O3 — the "from a file" source on the Experiment step accepts an ENZ);
+- the `.easy` gives the mechanism include set, the chamber effects and their strengths, the
+  J-value source, pressure, initial values, the injection channels and amounts, delayed-release
+  chains, every `k[...] = CONST(...)` as a reaction adjustment, and whatever else as expert
+  overrides (verbatim).
+
+The dialog shows what it found and checks itself: the EASY regenerated from the description is
+compared statement by statement with the original and the ENZ columns column by column; what
+could not be read back exactly is listed and kept with the experiment under "Needs attention".
+Then everything is on the steps as for any other experiment — look, change, prepare, run. The
+include files stay where they are: the experiment folder and its `chemistry\` subfolder are added to
+the experiment's **include folders** (Chemistry step; add more when the mechanism lives elsewhere),
+and "Prepare" lists any include file still not found. When the FACSIMILE results (`<name>.cs`) lie
+next to the inputs, the Run step offers **Compare with FACSIMILE** after the run (±2 %, as the
+benchmark; the full report goes to the experiment folder).
+
+JUICE reads the EASY version that made the run from the `.fac` / `.out` next to it and keeps it with
+the experiment, because EASY 5.96b and 6.00 differ in one rule: a `FUNCTION` macro defined more than
+once (as `PHTFKT` is in a SAPHIR scenario: clear-sky first, jNO2-scaled later) applies from its own
+line on in 5.96b, while in 6.00 the last definition applies everywhere. The J values differ by about
+40 % between the two, so the run follows the rule of its EASY. Without a `.fac` / `.out`, JUICE uses
+the 6.00 rule, as for its own experiments.
 
 ### Results without the window
 ```powershell
@@ -135,7 +148,7 @@ git); the last line compares one of them again and lists every column.
 ### Tests
 ```powershell
 pip install -r requirements-dev.txt
-python -m pytest                  # 54 tests, about 1.5 minutes
+python -m pytest                  # 62 tests, about 1.5 minutes
 python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
 The tests check the MCM download against its checksums, the EASY round-trip and builder for every
@@ -289,7 +302,7 @@ juice_start.py               start menu (the JUICE icon): opens one of the windo
 juice_gui.py                 experiment window; step pages in experiment_wizard.py
 results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
 study_window.py, study.py    studies; study_runner.py runs one from the command line
-facsimile_run.py             runs an experiment set up for FACSIMILE (.easy / .elog) and compares
+facsimile_import.py          reads an experiment set up for FACSIMILE (.easy + ENZ) into the experiment description
 experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
 scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
 scenario_runner.py           the solver

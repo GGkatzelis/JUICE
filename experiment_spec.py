@@ -129,7 +129,7 @@ class Conditions:
     step_s: int = 60
     source: str = "manual"                # manual | archive | file
     archive_root: str = r"Z:\IEK8-SAPHIR\data"
-    input_file: str = ""                  # source 'file': CSV/Excel with time + T, p, H2O/RH, flow, roof, J values, NO/NO2/O3 (measured_inputs.py)
+    input_file: str = ""                  # source 'file': CSV/Excel (or an ENZ) with time + T, p, H2O/RH, flow, roof, sz, J values, NO/NO2/O3 (measured_inputs.py)
     temperature_K: float = 298.0
     temperature_mode: str = "enz"         # enz: T = CONST(T_in) | const: T = CONST(<temperature_K>)
     pressure_hPa: float = 1006.5
@@ -237,6 +237,9 @@ class ExperimentSpec:
     reaction_adjustments: List[Tuple[str, str, str]] = field(default_factory=list)
     import_notes: List[str] = field(default_factory=list)       # what the wiki / mixture import could not resolve (shown under 'Needs attention')
     template: str = ""
+    include_dirs: List[str] = field(default_factory=list)       # more folders searched for #include files (an imported FACSIMILE experiment's own)
+    easy_version: str = ""                                      # EASY that made the FACSIMILE run this came from ('5.96b'); '' = JUICE's rules (elog_generator.function_scope_for)
+    reference_cs: str = ""                                      # FACSIMILE results of the same experiment: 'Compare with FACSIMILE' on the Run step
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -579,6 +582,9 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
         if hv is not None:
             cols["hv"] = (np.clip(np.asarray(hv, float), 0.0, 1.0) if light == "lamps"     # lamps may be dimmed: 0–1
                           else (np.asarray(hv) > 0.5).astype(float))
+        sz = _file_column(c, "sz", grid, np.nan)           # a tabulated solar zenith angle (e.g. an ENZ) wins over the computed one
+        if sz is not None and np.isfinite(sz).all():
+            cols["sz"] = np.asarray(sz, float)
     if light == "dark" and np.any(cols["hv"] > 0):
         notes.append("dark chamber: the light switch is forced to 0 (profile light type 'dark')")
         cols["hv"] = np.zeros(n)
@@ -998,8 +1004,14 @@ def known_species_for(spec: ExperimentSpec, include_dir: str, out_dir: str = "")
     an existing include set (mechanism_stem) or — compounds mode — the chosen compounds, the add-on
     species, and whatever a previously generated chemistry/ folder of the experiment contains."""
     names = mechanism_species(include_dir, spec.mechanism_stem) if spec.mechanism_stem else mechanism_species("", "")
+    for d in (spec.include_dirs if spec.mechanism_stem else []):       # an imported experiment's own include folders
+        if d and os.path.isdir(d):
+            names |= mechanism_species(d, spec.mechanism_stem)
     names |= {p.upper() for p in spec.precursors}
     names |= {"NO", "NO2", "O3", "CO", "CO2", "HONO", "H2O2", "HNO3", "SO2", "H2", "CH4", "HCHO"}
+    for inj in spec.injections:                        # holding species of a delayed release are defined by the chain itself
+        for lhs, rhs, _rate in inj.chain:
+            names |= {t.upper() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]*", f"{lhs}+{rhs}")}
     try:
         names |= {s.upper() for s in mreg.addon_species(list(spec.addons))}
     except Exception:

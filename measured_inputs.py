@@ -17,8 +17,14 @@ At SAPHIR they come from the archive; anywhere else the user can give one table:
     RH              rh, humidity                  %                       converted to H2O with T and p
     flow            dilute, total_flow            m3/h                    chamber dilution / replenishment flow
     roof            hv, lights, open              0 / 1                   roof open or lights on
+    sz              sza, zenith                   degrees                 solar zenith angle (else computed for the site)
     jNO2 jO1D jHONO jH2O2 jHCHO_r jHCHO_m          1/s                     photolysis frequencies
     NO NO2 O3       —                             ppb                     only needed to hold species to measurements
+
+    An ENZ file (the time table of the IDL/FACSIMILE workflow) is read the same way: its columns
+    carry these names already, so an experiment modelled with FACSIMILE earlier can take its
+    measured conditions from the ENZ of that run.  Its injection switch columns (Q…) are not
+    conditions; they are read by the FACSIMILE import (facsimile_import.py).
 
 The template written by write_template() documents this in the file header.
 """
@@ -43,6 +49,7 @@ COLUMNS: Dict[str, Tuple[List[str], str, str]] = {
     "RH":      (["rh", "humidity", "relhum", "rel_hum", "rh_%"], "%", "humidity"),
     "dilute":  (["flow", "dilute", "total_flow", "dilution", "replenishment", "flow_m3h"], "m3/h", "flow"),
     "hv":      (["roof", "hv", "lights", "open", "roof_open", "light"], "0/1", "roof"),
+    "sz":      (["sz", "sza", "solar_zenith", "zenith", "zenith_angle"], "deg", "solar zenith angle"),
     "jNO2":    (["jno2", "j_no2", "jno2_s-1"], "1/s", "photolysis"),
     "jO1D":    (["jo1d", "j_o1d", "jo(1d)"], "1/s", "photolysis"),
     "jHONO":   (["jhono", "j_hono"], "1/s", "photolysis"),
@@ -73,6 +80,7 @@ TEMPLATE = """# JUICE measured inputs — the chamber conditions of one experime
 #   roof      1 = roof open / lights on, 0 = dark   (aliases hv, lights; sunlit chamber: rounded to 0/1;
 #             lamp chamber: 0–1 = fraction of full lamp power, e.g. 0.5 with half the lamps on)
 #             — without this column the roof / lights times typed in 'Where and when' are used
+#   sz        solar zenith angle, degrees           (aliases sza, zenith) — without it JUICE computes it for the chamber's site
 # OPTIONAL — light.  Give jNO2 whenever you have it: with jNO2 in the file every photolysis frequency the
 #   file lacks is modelled from it (sunlit chamber: the mechanism's clear-sky spectrum scaled by your jNO2;
 #   lamp chamber: the lamp spectrum of the chamber profile).  Without jNO2 a sunlit chamber uses the
@@ -101,8 +109,12 @@ class InputsFile:
     def summary(self) -> str:
         s = f"{len(self.times_s)} rows, {self.hours[0]:.2f}–{self.hours[-1]:.2f} h; " if len(self.times_s) else "no rows; "
         s += "recognised: " + (", ".join(self.cols) or "nothing")
-        if self.ignored:
-            s += "; ignored: " + ", ".join(self.ignored)
+        switches = [c for c in self.ignored if c[:1].upper() == "Q"]       # ENZ injection columns: used by the injections, not here
+        other = [c for c in self.ignored if c not in switches]
+        if switches:
+            s += f"; {len(switches)} injection switch column(s)"
+        if other:
+            s += "; ignored: " + ", ".join(other)
         return s
 
     @property
@@ -119,11 +131,44 @@ def write_template(path: str) -> str:
     return path
 
 
+def read_enz(path: str) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """An ENZ file as (times in seconds since 2000-01-01, {column name: values}) with the original
+    column names (TIME left out).  The header lists 'COLUMN n=name', the data follow a '&&&' line."""
+    names: Dict[int, str] = {}
+    data_start = None
+    with open(path, encoding="latin-1") as fh:
+        for i, line in enumerate(fh):
+            if line.startswith("COLUMN"):
+                head, rest = line.split("=", 1)
+                names[int(head.split()[1]) - 1] = rest.split("/")[0].split("(")[0].strip()
+            elif "&&&" in line:
+                data_start = i + 1
+                break
+    if data_start is None or not names:
+        raise ValueError("not an ENZ file (no COLUMN header / '&&&' line)")
+    rows = []
+    with open(path, encoding="latin-1") as fh:
+        for i, line in enumerate(fh):
+            if i < data_start:
+                continue
+            s = line.replace(",", " ").split()
+            if s:
+                rows.append([float(v) for v in s])
+    arr = np.asarray(rows, dtype=float) if rows else np.zeros((0, len(names)))
+    order = sorted(names)
+    cols = {names[i]: arr[:, k] for k, i in enumerate(order) if names[i].upper() != "TIME"}
+    tcol = next((k for k, i in enumerate(order) if names[i].upper() == "TIME"), 0)
+    return arr[:, tcol], cols
+
+
 def _load_table(path: str):
     import pandas as pd
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xls", ".xlsm"):
         return pd.read_excel(path)
+    if ext == ".enz":
+        times, cols = read_enz(path)
+        return pd.DataFrame({"time": times, **cols})
     with open(path, encoding="utf-8-sig", errors="replace") as f:
         head = [l for l in (f.readline() for _ in range(5)) if l]
     sep = ";" if sum(l.count(";") for l in head) > sum(l.count(",") for l in head) else ","

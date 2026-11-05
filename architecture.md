@@ -36,15 +36,18 @@ results_viewer.py                            Overview, Timeseries, Process analy
 ```
 
 An existing IDL-written `.easy` enters at the second box and takes the same path, which is how the
-reference scenes are checked. A study (`study.py`) is the same pipeline repeated over a grid: it
-modifies the `ExperimentSpec`, never a generated file.
+reference scenes are checked. In the GUI it enters at the first box instead: `facsimile_import.py`
+reads the `.easy` and its ENZ back into an `ExperimentSpec` (the ENZ becomes the measured-inputs
+file, `measured_inputs.read_enz`), checks that the regenerated EASY and ENZ equal the originals, and
+the experiment is then edited and run like any other. A study (`study.py`) is the same pipeline
+repeated over a grid: it modifies the `ExperimentSpec`, never a generated file.
 
 ## A2. Modules
 
 | Area | Modules |
 |---|---|
 | Step window | `juice_gui.py` (5 steps: Experiment, Chemistry, Injections, Chamber, Run), `experiment_wizard.py` (the step pages), `experiment_plots.py`, `juice_theme.py`, `loading_box.py` |
-| Experiment → input files | `experiment_spec.py`, `easy_builder.py` (EASY form ↔ scene), `easy_scene.py` (lossless EASY document model and writer), `injection_calc.py` (µl / syringe / MFC → ppb, mixtures), `oh_reactivity.py` |
+| Experiment → input files | `experiment_spec.py`, `easy_builder.py` (EASY form ↔ scene), `easy_scene.py` (lossless EASY document model and writer), `facsimile_import.py` (FACSIMILE `.easy` + ENZ → `ExperimentSpec`), `injection_calc.py` (µl / syringe / MFC → ppb, mixtures), `oh_reactivity.py` |
 | Conditions | `enz_builder.py` (SAPHIR archive NetCDF → ENZ, solar zenith angle), `saphir_wiki.py` (action log import), `measured_inputs.py` (user's own conditions file), `load_saphir_environment.py` (ENZ → interpolators) |
 | Chamber and light | `chambers.py` + `chambers/<id>.chamber.json`, `lamp_photolysis.py` + `photolysis/` (σ·φ at 298 K, lamp J ratios) |
 | Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py` |
