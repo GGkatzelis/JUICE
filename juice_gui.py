@@ -48,7 +48,7 @@ from PyQt6.QtGui import QKeySequence, QColor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-from experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources, level_icon
+from experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources, level_icon, injection_label
 from experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
 from elog_generator import generate_both
 from idl_parser import parse_idl_easy
@@ -209,18 +209,18 @@ class InputsPlot(QWidget):
             self.canvas.draw(); return
         if self.mode == "all":
             axes = [self.fig.add_subplot(311), self.fig.add_subplot(312), self.fig.add_subplot(313)]
-            self._conditions(axes[0], axes[1], hours, cols); self._injections(axes[2], hours, cols)
+            self._conditions(axes[0], axes[1], hours, cols); self._injections(axes[2], hours, cols, spec)
         elif self.mode == "conditions":
             self._conditions(self.fig.add_subplot(121), self.fig.add_subplot(122), hours, cols)
         elif self.mode == "injections":
             obs = self._measured_koh(spec)
             if obs is not None and len(obs[0]):
                 gs = self.fig.add_gridspec(2, 1, height_ratios=[1, 1.6])
-                self._injections(self.fig.add_subplot(gs[0]), hours, cols)
+                self._injections(self.fig.add_subplot(gs[0]), hours, cols, spec)
                 koh_note = self._koh_panel(self.fig.add_subplot(gs[1]), spec, hours, cols, obs)
                 notes = list(notes) + [koh_note]
             else:
-                self._injections(self.fig.add_subplot(111), hours, cols)
+                self._injections(self.fig.add_subplot(111), hours, cols, spec)
                 notes = list(notes) + (["no measured kOH for this day — only the pulses are shown"] if spec.conditions.date else [])
         else:
             self._chamber(self.fig.add_subplot(111), spec, hours, cols)
@@ -284,13 +284,14 @@ class InputsPlot(QWidget):
         ax.legend(fontsize=7, loc="upper left")
         return note
 
-    def _injections(self, ax, hours, cols):
+    def _injections(self, ax, hours, cols, spec=None):
         qs = [k for k in cols if k.upper().startswith("Q")]
         for i, k in enumerate(qs):
             y = cols[k]
             if np.any(y > 0):
                 ax.fill_between(hours, i, i + 0.8 * (y > 0), step="post", color=ACCENT, alpha=0.6)
-        ax.set_yticks([i + 0.4 for i in range(len(qs))]); ax.set_yticklabels(qs, fontsize=7); ax.set_ylim(-0.2, max(1, len(qs)))
+        labels = [injection_label(k, spec) for k in qs]       # display only: the files keep the Q column names
+        ax.set_yticks([i + 0.4 for i in range(len(qs))]); ax.set_yticklabels(labels, fontsize=7); ax.set_ylim(-0.2, max(1, len(qs)))
         if "hv" in cols:
             axb = ax.twinx(); axb.fill_between(hours, 0, cols["hv"], color="#ffd966", alpha=0.25, step="post"); axb.set_ylim(0, 1.05); axb.set_yticks([])
         ax.set_xlabel("hour (UTC)", fontsize=8); ax.set_title("injection pulses (light on in yellow)", fontsize=8)

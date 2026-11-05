@@ -885,6 +885,18 @@ def mechanism_species(include_dir: str, stem: str) -> set:
     return names
 
 
+def injection_label(col: str, spec: Optional["ExperimentSpec"] = None) -> str:
+    """Plot label for an injection switch column: 'QNO' → 'NO injection', 'Q_ethanol' →
+    'ethanol injection'.  Only for display — files keep the Q column names.  With a spec, the
+    name the user gave the injection is used when it maps to this column."""
+    if spec is not None:
+        names = [inj.name for inj in spec.injections if inj.name and inj.enz_column() == col]
+        if names:
+            return " / ".join(dict.fromkeys(names)) + " injection"
+    base = col[2:] if col[:2].upper() == "Q_" else (col[1:] if col[:1].upper() == "Q" else col)
+    return (base or col) + " injection"
+
+
 LEVEL_ICON = {"error": "✖ ", "warning": "⚠ ", "info": "ℹ "}
 
 
