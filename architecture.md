@@ -162,11 +162,13 @@ pinned run.
    the folder, and its 100 MB `.cs` would dominate the run time.
 4. **Chamber profiles other than SAPHIR** come from public numbers (`docs/chamber_survey.md`) and are
    marked `verified: false`. The **guaiacol/creosol add-on** is a draft.
-5. **The RO2 sum lags FACSIMILE's by up to 1.4 % for a few minutes while it rises steeply** (after
-   the roof opens or after an injection; 20–70 of ~1 000 rows per scene, median deviation below
-   0.02 %). The peroxy radicals themselves (CH3O2, HO2, OH) agree within 0.25 % at the same times,
-   and the fast and the precise profile give the same numbers, so it is how the sum is evaluated
-   within an output step, not the integration. Within the ±2 % tolerance; cause not pinned down.
+5. **The printed RO2 sum differs from FACSIMILE's by up to 1.4 % for a few minutes while it rises
+   steeply** (after the roof opens or after an injection; 20–70 of ~1 000 rows per scene, median
+   below 0.02 %; the same in both solver profiles and in the runs of the earlier repository). It is
+   FACSIMILE's printed value, not the chemistry: in FACSIMILE's own `.cs` the RO2 column is that
+   0.8–1.4 % away from the sum of its own member radicals (scene_04, 06, 09), while JUICE prints
+   exactly the sum of its members at the output time, and the member sums of the two programs
+   agree within 0.25 %. Nothing to correct in JUICE; the RO2 column stays inside the ±2 % tolerance.
 
 ---
 
