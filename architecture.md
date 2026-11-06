@@ -162,8 +162,11 @@ pinned run.
    the folder, and its 100 MB `.cs` would dominate the run time.
 4. **Chamber profiles other than SAPHIR** come from public numbers (`docs/chamber_survey.md`) and are
    marked `verified: false`. The **guaiacol/creosol add-on** is a draft.
-5. The **`easy-start-gui` branch** of the old `MCM_SAPHIR_Tool` repository (start from an existing
-   EASY/ENZ or JSON, scenario editor, isopleth scan) was never merged into JUICE.
+5. **The RO2 sum lags FACSIMILE's by up to 1.4 % for a few minutes while it rises steeply** (after
+   the roof opens or after an injection; 20–70 of ~1 000 rows per scene, median deviation below
+   0.02 %). The peroxy radicals themselves (CH3O2, HO2, OH) agree within 0.25 % at the same times,
+   and the fast and the precise profile give the same numbers, so it is how the sum is evaluated
+   within an output step, not the integration. Within the ±2 % tolerance; cause not pinned down.
 
 ---
 
