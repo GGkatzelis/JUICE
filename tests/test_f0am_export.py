@@ -31,8 +31,11 @@ def test_written_mechanism_reads_back(tmp_path):
     assert m["rx"][0][0] == repr(1e-3) and m["rx"][0][1] == ["A"]
     assert m["rx"][1][0].startswith("JUICEk_(:,") and m["rx"][1][1] == ["B", "RO2"]
     assert m["rx"][2][1] == [] and m["rx"][2][2] == {"A": 1.0}
-    for f in ("run_toy.m", "toy_JUICE_k.mat", "toy_JUICE_inputs.mat", "toy_JUICE.csv"):
+    for f in ("run_toy.m", "toy_JUICE_J.m", "toy_JUICE_k.mat", "toy_JUICE_inputs.mat", "toy_JUICE.csv"):
         assert os.path.isfile(os.path.join(d, f))
+    run = open(os.path.join(d, "run_toy.m")).read()
+    assert "'toy_JUICE_J(Met)'" in run          # F0AM needs a J function in ChemFiles{2}
+    assert "function J = toy_JUICE_J(Met)" in open(os.path.join(d, "toy_JUICE_J.m")).read()
 
 
 def test_emulation_follows_the_rate_constants(tmp_path):
