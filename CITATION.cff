@@ -15,7 +15,7 @@ authors:
     email: f.rohrer@fz-juelich.de
     affiliation: "Forschungszentrum Jülich GmbH, ICE-3"
 repository-code: "https://github.com/GGkatzelis/JUICE"
-license: MIT
+license: GPL-3.0-or-later
 version: "4.0"
 date-released: "2026-11-04"
 keywords:

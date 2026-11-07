@@ -115,3 +115,6 @@ MCM_tested_scenarios/IDL Input/**/*.observations.csv
 
 # figure lists of the results viewer next to reference results (regenerated on demand)
 MCM_tested_scenarios/IDL Input/**/*.figures/
+
+# Paper in preparation: local only, never on GitHub (replaced by the published paper after release)
+paper/
