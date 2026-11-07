@@ -1557,6 +1557,11 @@ class ScenarioRunner:
                     _k_row_valid[0] = True
                 except Exception:
                     _k_row_valid[0] = False
+            # Optional observer (f0am_export.py): sees every settings snapshot exactly as the
+            # solver uses it.  Never set during normal runs.
+            _hook = getattr(self, 'snap_hook', None)
+            if _hook is not None:
+                _hook(t_abs, ctx_s, y_state, active_s)
 
         # Set of actual ODE species (c-values) — these update from y during ODE;
         # everything else (settings: T, HV, KMT*, J-values, …) stays frozen from snap.
