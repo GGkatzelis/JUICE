@@ -138,7 +138,8 @@ def record(json_path: str, stem: str) -> Recording:
         T = float(ctx_s["T"]); P = float(ctx_s["P"]) if "P" in ctx_s else float(ctx_s.get("PRESS", 1013.25))
         snaps[float(t_abs)] = (row, env, float(ctx_s["RO2"]) if "RO2" in ctx_s else 0.0,
                                np.array(y_state, dtype=float), T, P, float(ctx_s.get("H2O", 0.0)),
-                               float(r.get_M(t_abs)))
+                               float(r.get_M(t_abs)),
+                               [float(eval(c, sr.__dict__, ctx_s)) for c in hook.cs_codes])
 
     with contextlib.redirect_stdout(io.StringIO()):
         r._setup_environment()
@@ -146,8 +147,10 @@ def record(json_path: str, stem: str) -> Recording:
 
     cfg = r.cfg
     problems = []
-    if cfg.get("continuous_sources"):
-        problems.append("continuous_sources (GUI source terms) are not exported")
+    # continuous source terms (chamber set-up, e.g. a CO2 background source): zero-order reactions,
+    # evaluated per step with the frozen settings, exactly as the solver evaluates them
+    cs = [x for x in cfg.get("continuous_sources", []) if x.get("target") and x.get("rate")]
+    hook.cs_codes = [compile(x["rate"], "<string>", "eval") for x in cs]
     if any(b.get("ppb") and b.get("source") != "IDL" for b in cfg.get("burst_injections", [])):
         problems.append("burst injections outside the EASY/ENZ chain are not exported")
     if cfg.get("h2o_injection_impurities"):
@@ -233,15 +236,27 @@ def record(json_path: str, stem: str) -> Recording:
         rxn_reac.append(reac)
         rxn_st.append({k: v for k, v in st.items() if v != 0.0})
 
-    n_rxn = len(rxn_names)
     K = np.vstack([row[0] for row in rows])                          # (n_steps, n_rxn)
-    fac = np.ones((n_steps, n_rxn))
+    fac = np.ones(K.shape)
     for i, n, c in env_entries:
         vals = np.array([row[1].get(n, 0.0) for row in rows])
         fac[:, i] *= vals ** c
     K = K * fac
+    cs_notes = []
+    for j, x in enumerate(cs):
+        tgt = x["target"].upper()
+        used = {n.upper() for n in hook.cs_codes[j].co_names}
+        if used & (sp_set | pss):
+            raise ValueError(f"continuous source of {tgt} depends on species {sorted(used & sp_set)}")
+        if tgt not in f_set:
+            continue                                     # JUICE ignores it as well
+        K = np.column_stack([K, np.array([row[8][j] for row in rows])])
+        rxn_names.append(f"={tgt}"); rxn_reac.append([]); rxn_st.append({tgt: 1.0})
+        cs_notes.append(f"continuous source of {tgt} ({x['rate']}) as a zero-order reaction"
+                        + (" - zero in every step, as in JUICE" if not np.any(K[:, -1]) else ""))
+    n_rxn = len(rxn_names)
     ro2_snap = np.array([row[2] for row in rows])
-    notes = []
+    notes = list(cs_notes)
     if ro2_rxn:
         for i in ro2_rxn:
             rxn_reac[i] = rxn_reac[i] + ["RO2"]
@@ -471,8 +486,11 @@ def read_mech(path: str) -> dict:
     return {"species": species, "ro2": ro2, "rx": rx}
 
 
-def emulate(d: str, stem: str, rtol: float = 1e-7) -> tuple:
-    """Integrate the exported files step by step (F0AM scheme: k per step, RO2 summed at every call)."""
+def emulate(d: str, stem: str, rtol: float = 1e-7, ro2_frozen: bool = False) -> tuple:
+    """Integrate the exported files step by step (F0AM scheme: k per step, RO2 summed at every call).
+
+    ro2_frozen=True holds RO2 at its step-start value instead (the JUICE/FACSIMILE scheme): then the
+    emulation must reproduce JUICE to solver precision, which tests the export itself."""
     from scipy.io import loadmat
     from scipy.integrate import solve_ivp
     from scipy import sparse
@@ -518,21 +536,23 @@ def emulate(d: str, stem: str, rtol: float = 1e-7) -> tuple:
         sel = kcol >= 0
         k[sel] = KT[i, kcol[sel]]
 
+        ro2_0 = y[ro2_idx].sum() if len(ro2_idx) else 0.0
+
         def f(t, yy):
             yy = np.maximum(yy, 0.0)
-            ro2 = yy[ro2_idx].sum() if len(ro2_idx) else 0.0
+            ro2 = ro2_0 if ro2_frozen else (yy[ro2_idx].sum() if len(ro2_idx) else 0.0)
             v = k * conc_of(yy, g1, ro2) * conc_of(yy, g2, ro2)
             return FT @ v
 
         def jac(t, yy):
             yy = np.maximum(yy, 0.0)
-            ro2 = yy[ro2_idx].sum() if len(ro2_idx) else 0.0
+            ro2 = ro2_0 if ro2_frozen else (yy[ro2_idx].sum() if len(ro2_idx) else 0.0)
             c1, c2 = conc_of(yy, g1, ro2), conc_of(yy, g2, ro2)
             rr, cc, vv = [], [], []
             s1 = g1 >= 0; rr.append(r1[s1]); cc.append(g1[s1]); vv.append((k * c2)[s1])
             s2 = g2 >= 0; rr.append(r1[s2]); cc.append(g2[s2]); vv.append((k * c1)[s2])
             D = sparse.csr_matrix((np.concatenate(vv), (np.concatenate(rr), np.concatenate(cc))), shape=(nr, ns))
-            if is_ro2_2.any():
+            if is_ro2_2.any() and not ro2_frozen:
                 D = D + sparse.diags(np.where(is_ro2_2, k * c1, 0.0)) @ Rm
             return (FT @ D).tocsc()
 
@@ -564,14 +584,14 @@ def deviation_table(names_a, A, names_b, B, floor=COMPARE_FLOOR) -> list:
     return sorted(out, reverse=True)
 
 
-def check(d: str, stem: str) -> str:
-    sp, Y = emulate(d, stem)
+def check(d: str, stem: str, ro2_frozen: bool = False) -> str:
+    sp, Y = emulate(d, stem, ro2_frozen=ro2_frozen)
     names_j, tj, J = read_csv(os.path.join(d, f"{stem}_JUICE.csv"))
     dev = deviation_table(sp, Y, names_j, J)
     big = [x for x in dev if x[2] > COMPARE_FLOOR]
     n2 = sum(1 for x in big if x[0] <= 0.02); n01 = sum(1 for x in big if x[0] <= 1e-3)
     main = {s: v for v, s, _ in dev if s in ("O3", "NO", "NO2", "OH", "HO2")}
-    lines = [f"{stem}: F0AM-scheme emulation of the written files vs JUICE "
+    lines = [f"{stem}: {'JUICE-scheme (RO2 frozen per step)' if ro2_frozen else 'F0AM-scheme'} emulation of the written files vs JUICE "
              f"(species above {COMPARE_FLOOR:g} molec/cm3: {len(big)})",
              f"  within 2 %: {n2}/{len(big)}   within 0.1 %: {n01}/{len(big)}",
              "  O3/NO/NO2/OH/HO2: " + ", ".join(f"{s} {main[s]*100:.3g} %" for s in main),
@@ -654,6 +674,7 @@ def main(argv=None) -> int:
             print(f"{scene}: written to {d} ({len(rec.species)} species, {len(rec.rxn_names)} reactions, "
                   f"{rec.k.shape[0]} steps)")
             if a.check:
+                print(check(d, scene, ro2_frozen=True))
                 print(check(d, scene))
         except Exception as e:
             rc = 1
