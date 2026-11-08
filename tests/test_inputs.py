@@ -73,3 +73,18 @@ def test_chambers_selftest():
     with contextlib.redirect_stdout(out):
         rc = chambers._selftest()
     assert rc == 0, out.getvalue()
+
+
+def test_easy_version_from_cs_header(tmp_path):
+    """A FACSIMILE reference that comes only as a .cs result still tells which EASY wrote it;
+    a .fac next to it wins, and JUICE's own .cs header names no EASY version."""
+    import elog_generator as eg
+    (tmp_path / "ref.cs").write_text(" * Facsimile-Output / EASY Ver. 5.96b 2010-5-19\n header created at ...\n",
+                                     encoding="latin-1")
+    assert eg.easy_version(str(tmp_path), stem="ref") == "5.96b"
+    assert eg.easy_version(str(tmp_path)) == "5.96b"
+    (tmp_path / "ref.fac").write_text(" * Facsimile-Script / EASY Ver. 6.00  2026-05-06\n", encoding="latin-1")
+    assert eg.easy_version(str(tmp_path), stem="ref") == "6.00"
+    juice = tmp_path / "juice"; juice.mkdir()
+    (juice / "run.cs").write_text("# Calculated by JUICE v4.0  Backend: numba  Scenario: run\nCOLUMN 1=TIME\n")
+    assert eg.easy_version(str(juice), stem="run") == ""

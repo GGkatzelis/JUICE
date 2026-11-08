@@ -198,14 +198,16 @@ FUNCTION_SCOPE_USE = "use"
 def easy_version(*folders, stem: str = "") -> str:
     """The EASY version that wrote a FACSIMILE run ('6.00', '5.96b', …) read from the
     '* Facsimile-Script / EASY Ver. X' header of a .fac / .out in the given folders
-    (<stem>.fac / <stem>.out first), or '' when there is none."""
+    (<stem>.fac / <stem>.out first), else from the '* Facsimile-Output / EASY Ver. X' header
+    of a .cs result (a reference that comes without its script), or '' when there is none."""
     rx = re.compile(r'EASY\s+Ver\.\s*([0-9][0-9.]*[a-z]?)', re.I)
     for d in folders:
         if not d or not os.path.isdir(d):
             continue
         names = sorted(os.listdir(d))
-        cands = ([f"{stem}.fac", f"{stem}.out"] if stem else []) + \
-                [n for n in names if n.lower().endswith(('.fac', '.out'))]
+        cands = ([f"{stem}.fac", f"{stem}.out", f"{stem}.cs"] if stem else []) + \
+                [n for n in names if n.lower().endswith(('.fac', '.out'))] + \
+                [n for n in names if n.lower().endswith('.cs')]
         for n in cands:
             p = os.path.join(d, n)
             if not os.path.isfile(p):
