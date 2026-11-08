@@ -49,8 +49,8 @@ table, the mechanism include sets) is in the repository; no other download is ne
 python make_shortcut.py              # the JUICE icon on the Desktop
 python make_shortcut.py --startmenu  # also in the Start menu
 ```
-The **JUICE** icon ([JUICE.bat](JUICE.bat) → [juice_start.py](juice_start.py)) opens a start
-menu:
+The **JUICE** icon ([JUICE.bat](JUICE.bat) → [juice_start.py](juice_start.py)) first asks
+whether you model a chamber experiment or field observations. The chamber path opens this menu:
 
 | Model an experiment | Look at results |
 |---|---|
@@ -89,6 +89,40 @@ always shows what the experiment contains:
 
 You only edit the experiment description (`<name>.experiment.json`); the ENZ, EASY and scenario JSON
 are generated from it and can be opened from the review panel.
+
+### Field observations
+```powershell
+python field_window.py                     # or: JUICE icon → Field observations → New field case
+python field_scenario.py case.field.json --run   # the same without the window
+```
+The field path has the same five steps as the chamber window, with one input table in place of the
+chamber's archive: one row per time with the conditions (T, p, H2O or RH, lat/lon, boundary-layer
+height h, kdil), photolysis columns (jNO2 …) and species columns `E_<species>` (emission),
+`B_<species>` (background the air is diluted towards) and `C_<species>` (held to the measurement),
+each with an optional unit in brackets. Three kinds of run share the table:
+
+| kind | what is held / added | typical question |
+|---|---|---|
+| Constrained site | measured species held; everything else runs free with a generic lifetime; spin-up days | radical budget, ozone production rate, closure of HCHO or PAN |
+| Plume or transect | dilution towards background (kdil from the table, a constant, or the decay of a tracer) | ageing of a plume |
+| Lagrangian air parcel | emissions E/(h·A), boundary-layer growth as dilution, background, deposition | does the inventory reproduce the site? NOx/VOC sensitivity |
+
+1. **Field case**: kind of run, name, folder, site, input table (a template is written on request); the
+   conditions the model will see.
+2. **Chemistry**: the chamber window's chemistry step (MCM subset or an existing mechanism include set).
+3. **Emissions and constraints**: what the table emits or holds, against time.
+4. **Mixing and deposition**: dilution source, background, deposition velocities or lifetimes, initial values.
+5. **Run**: input files, solver, results viewer.
+
+Everything the field adds is written as ordinary EASY statements, so the generated files run in
+FACSIMILE as well: `QE_X = INPUT(QE_X)` with `QE_X --> X`, dilution through the mechanism's
+`X + DIL -->` reactions with `DILUTE = CONST(KDIL + …)`, background as `B_X --> X` with
+`k = CONST(KDIL*1e-9*M)`, a held species as `X = CONST(C_X*1e-9*M)`, deposition as `X -->`.
+The ENZ has one row per output step (60 s by default); emissions are held from one table row to the
+next, everything else is interpolated. A species held to a measurement takes the value read at the
+start of each row (FACSIMILE's convention); pressure may vary along the path (`P = INPUT(P)`).
+`tests/test_field_scenario.py` checks the generated files and, on a dark night, the solver against
+the analytic solutions for emission, dilution towards a background, a held ramp and deposition.
 
 ### Experiments set up for FACSIMILE
 ```powershell
@@ -300,6 +334,8 @@ limitations, and the development history.
 ```
 juice_start.py               start menu (the JUICE icon): opens one of the windows below
 juice_gui.py                 experiment window; step pages in experiment_wizard.py
+field_window.py              field observations window: five steps like the chamber window (field_spec.py: the case and its table;
+                             field_scenario.py: case → ENZ + EASY → scenario, emissions / dilution / held species / deposition)
 results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
 study_window.py, study.py    studies; study_runner.py runs one from the command line
 facsimile_import.py          reads an experiment set up for FACSIMILE (.easy + ENZ) into the experiment description

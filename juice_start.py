@@ -4,7 +4,10 @@ juice_start.py — the JUICE start menu: choose what you need, then the matching
     python juice_start.py                    # the menu (what the JUICE desktop icon opens)
     python juice_start.py <file> [-t toml]   # a file dropped on the icon opens straight away:
                                              #   .cs → results viewer, .study.json → study window,
-                                             #   .experiment.json → experiment window
+                                             #   .experiment.json → experiment window, .field.json → field window
+
+First question: chamber experiment or field observations.  The chamber menu is below; the field menu
+offers a new or a saved field case and the same two results windows.
 
 Model an experiment:  new experiment · open a saved experiment · new study (sweep or several experiments)
 Look at results:      one experiment's results (.cs) · a study's results (.study.json)
@@ -25,7 +28,8 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QGroupB
                              QPushButton, QVBoxLayout, QWidget)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py"}
+SCRIPTS = {"experiment": "juice_gui.py", "study": "study_window.py", "results": "results_viewer.py",
+           "field": "field_window.py"}
 
 
 def _toml_args(toml: str) -> list:
@@ -42,6 +46,8 @@ def open_file(path: str, toml: str = "") -> bool:
     """The window that belongs to a file: .cs → viewer, .study.json → study, .experiment.json → experiment,
     .easy / .elog → the experiment window with its FACSIMILE import open on the file."""
     p = path.lower()
+    if p.endswith(".field.json"):
+        return launch("field", [path], toml)
     if p.endswith(".study.json"):
         return launch("study", [path], toml)
     if p.endswith(".experiment.json") or p.endswith((".easy", ".elog")):
@@ -73,6 +79,11 @@ def pick_study(parent, toml: str) -> str:
 
 def pick_experiment(parent, toml: str) -> str:
     p, _ = QFileDialog.getOpenFileName(parent, "Open a saved experiment", _start_dir(toml), "Experiment (*.experiment.json)")
+    return p
+
+
+def pick_field(parent=None, toml: str = "") -> str:
+    p, _ = QFileDialog.getOpenFileName(parent, "Open a saved field case", _start_dir(toml), "Field case (*.field.json)")
     return p
 
 
@@ -143,7 +154,10 @@ def choose_results(parent=None, toml: str = "") -> Optional[Tuple[str, str]]:
 
 
 class StartWindow(QWidget):
-    def __init__(self, toml: str = ""):
+    MODEL_GROUP = "Model an experiment"
+    SUBTITLE = "Jülich Utility for Integrating Chemical Equations — what do you want to do?"
+
+    def __init__(self, toml: str = "", on_back=None):
         super().__init__()
         import juice_theme as theme
         self.toml = toml
@@ -156,22 +170,12 @@ class StartWindow(QWidget):
             head.addWidget(logo)
         tl = QVBoxLayout()
         t = QLabel("JUICE"); t.setObjectName("title"); tl.addWidget(t)
-        s = QLabel("Jülich Utility for Integrating Chemical Equations — what do you want to do?"); s.setObjectName("subtitle")
+        s = QLabel(self.SUBTITLE); s.setObjectName("subtitle")
         tl.addWidget(s); head.addLayout(tl); head.addStretch(); v.addLayout(head)
 
         cols = QHBoxLayout(); cols.setSpacing(14)
-        g = QGroupBox("Model an experiment"); gl = QVBoxLayout(g); gl.setSpacing(8)
-        self._add(gl, "New experiment", "Start from scratch: chamber, conditions, chemistry, injections, then run the "
-                  "solver. Templates, the SAPHIR archive and wiki logs are offered on the first step.",
-                  lambda: launch("experiment", [], self.toml), primary=True)
-        self._add(gl, "Open a saved experiment", "Change or rerun an experiment described earlier (.experiment.json).",
-                  self._open_experiment)
-        self._add(gl, "New study", "Many runs at once: sweep one experiment's injections or conditions over a grid "
-                  "(isopleths, sensitivities), or run several experiments with one change.",
-                  lambda: launch("study", [], self.toml))
-        self._add(gl, "Import a FACSIMILE experiment", "An experiment modelled with FACSIMILE earlier (its .easy and ENZ, "
-                  "e.g. a campaign day) becomes a JUICE experiment: look at it, change it, run it, compare with the FACSIMILE results.",
-                  self._import_facsimile)
+        g = QGroupBox(self.MODEL_GROUP); gl = QVBoxLayout(g); gl.setSpacing(8)
+        self._fill_model(gl)
         gl.addStretch(); cols.addWidget(g, 1)
 
         g = QGroupBox("Look at results"); gl = QVBoxLayout(g); gl.setSpacing(8)
@@ -183,10 +187,25 @@ class StartWindow(QWidget):
         v.addLayout(cols)
 
         foot = QHBoxLayout()
+        if on_back is not None:
+            b = QPushButton("Back"); b.clicked.connect(on_back); foot.addWidget(b)
         n = QLabel("Each choice opens its own window. Click the JUICE icon again for another one at any time.")
         n.setObjectName("subtitle"); foot.addWidget(n); foot.addStretch()
         q = QPushButton("Close"); q.clicked.connect(self.close); foot.addWidget(q)
         v.addLayout(foot)
+
+    def _fill_model(self, gl):
+        self._add(gl, "New experiment", "Start from scratch: chamber, conditions, chemistry, injections, then run the "
+                  "solver. Templates, the SAPHIR archive and wiki logs are offered on the first step.",
+                  lambda: launch("experiment", [], self.toml), primary=True)
+        self._add(gl, "Open a saved experiment", "Change or rerun an experiment described earlier (.experiment.json).",
+                  self._open_experiment)
+        self._add(gl, "New study", "Many runs at once: sweep one experiment's injections or conditions over a grid "
+                  "(isopleths, sensitivities), or run several experiments with one change.",
+                  lambda: launch("study", [], self.toml))
+        self._add(gl, "Import a FACSIMILE experiment", "An experiment modelled with FACSIMILE earlier (its .easy and ENZ, "
+                  "e.g. a campaign day) becomes a JUICE experiment: look at it, change it, run it, compare with the FACSIMILE results.",
+                  self._import_facsimile)
 
     def _add(self, layout, title, text, slot, primary=False):
         b = _Choice(title, text, primary); b.clicked.connect(lambda: self._go(slot)); layout.addWidget(b)
@@ -217,6 +236,74 @@ class StartWindow(QWidget):
         return launch("study", [p], self.toml) if p else None
 
 
+class FieldMenu(StartWindow):
+    """The start menu of the field path."""
+    MODEL_GROUP = "Model field observations"
+    SUBTITLE = "Field observations — what do you want to do?"
+
+    def _fill_model(self, gl):
+        self._add(gl, "New field case", "Describe a site, a plume or an air parcel along a trajectory, and give it one "
+                  "table of measurements or emissions. A template for the table is offered.",
+                  lambda: launch("field", [], self.toml), primary=True)
+        self._add(gl, "Open a saved field case", "Change or check a field case described earlier (.field.json).",
+                  self._open_field)
+
+    def _open_field(self):
+        p = pick_field(self, self.toml)
+        return launch("field", [p], self.toml) if p else None
+
+
+_current = None                 # the menu on screen (a window without a reference would be collected)
+
+
+def _show(window, previous=None):
+    """Put a menu on screen; the new one first, so that the application does not end in between."""
+    import juice_theme as theme
+    global _current
+    _current = window
+    window.show(); theme.force_taskbar_icon(window)
+    if previous is not None:
+        previous.close()
+    return window
+
+
+class FirstChoice(QWidget):
+    """The first question: a chamber experiment, or field observations?"""
+
+    def __init__(self, toml: str = ""):
+        super().__init__()
+        import juice_theme as theme
+        self.toml = toml
+        self.setWindowTitle("JUICE"); self.setWindowIcon(theme.app_icon()); self.setMinimumWidth(720)
+        v = QVBoxLayout(self); v.setContentsMargins(22, 18, 22, 16); v.setSpacing(12)
+        head = QHBoxLayout()
+        if os.path.isfile(theme.LOGO):
+            logo = QLabel(); logo.setPixmap(QPixmap(theme.LOGO).scaledToHeight(64, Qt.TransformationMode.SmoothTransformation))
+            head.addWidget(logo)
+        tl = QVBoxLayout()
+        t = QLabel("JUICE"); t.setObjectName("title"); tl.addWidget(t)
+        s = QLabel("Jülich Utility for Integrating Chemical Equations — what do you want to model?"); s.setObjectName("subtitle")
+        tl.addWidget(s); head.addLayout(tl); head.addStretch(); v.addLayout(head)
+        cols = QHBoxLayout(); cols.setSpacing(14)
+        a = _Choice("Chamber experiment", "A simulation chamber: injections, conditions and walls. New and saved experiments, "
+                    "studies, FACSIMILE imports and results.", primary=True)
+        b = _Choice("Field observations", "Air outside: a measurement site, a plume, or an air parcel along a trajectory.",
+                    primary=True)
+        a.clicked.connect(lambda: self.open_menu(StartWindow)); b.clicked.connect(lambda: self.open_menu(FieldMenu))
+        cols.addWidget(a, 1); cols.addWidget(b, 1); v.addLayout(cols)
+        foot = QHBoxLayout(); foot.addStretch()
+        q = QPushButton("Close"); q.clicked.connect(self.close); foot.addWidget(q)
+        v.addLayout(foot)
+
+    def open_menu(self, cls):
+        toml = self.toml
+
+        def back():
+            _show(FirstChoice(toml), menu)
+        menu = cls(toml, on_back=back)
+        return _show(menu, self)
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     sys.path.insert(0, HERE)
@@ -231,9 +318,9 @@ def main(argv=None) -> int:
         if open_file(files[0], toml):
             return 0
         QMessageBox.warning(None, "JUICE", f"JUICE does not know what to open {os.path.basename(files[0])} with.\n"
-                                           "It opens .cs results, .study.json studies, .experiment.json experiments "
-                                           "and imports .easy / .elog FACSIMILE experiments.")
-    w = StartWindow(toml); w.show(); theme.force_taskbar_icon(w)
+                                           "It opens .cs results, .study.json studies, .experiment.json experiments, "
+                                           ".field.json field cases and imports .easy / .elog FACSIMILE experiments.")
+    _show(FirstChoice(toml))
     return app.exec()
 
 
