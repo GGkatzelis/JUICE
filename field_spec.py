@@ -48,6 +48,7 @@ import measured_inputs as mi
 
 SPEC_VERSION = 1
 SPEC_SUFFIX = ".field.json"
+EXAMPLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "field_examples")
 
 RUN_TYPES = {
     "constrained": "Constrained site",
@@ -223,6 +224,44 @@ def load_spec(path: str) -> FieldSpec:
     if spec.table and not os.path.isabs(spec.table):
         spec.table = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), spec.table))
     return spec
+
+
+def list_examples() -> Dict[str, Tuple[str, str]]:
+    """{name: (path of the .field.json, one-line description)} of the synthetic examples in field_examples/."""
+    out: Dict[str, Tuple[str, str]] = {}
+    if not os.path.isdir(EXAMPLES_DIR):
+        return out
+    for d in sorted(os.listdir(EXAMPLES_DIR)):
+        p = os.path.join(EXAMPLES_DIR, d, d + SPEC_SUFFIX)
+        if os.path.isfile(p):
+            try:
+                spec = load_spec(p)
+                out[d] = (p, f"{RUN_TYPES.get(spec.run_type, spec.run_type)}: {spec.description}")
+            except (OSError, ValueError):
+                continue
+    return out
+
+
+def is_example(path: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.abspath(path), EXAMPLES_DIR]) == EXAMPLES_DIR
+    except ValueError:
+        return False
+
+
+def copy_case(path: str, folder: str) -> str:
+    """Copy a case and its table into <folder>/<name>/ and return the path of the copied .field.json.
+    The copy refers to its own table, so the original (an example, say) is never touched."""
+    import shutil
+    spec = load_spec(path)
+    dest = os.path.join(folder, spec.name)
+    os.makedirs(dest, exist_ok=True)
+    if spec.table and os.path.isfile(spec.table):
+        target = os.path.join(dest, os.path.basename(spec.table))
+        if os.path.abspath(target) != os.path.abspath(spec.table):
+            shutil.copy2(spec.table, target)
+        spec.table = target
+    return save_spec(spec, os.path.join(dest, spec.name))
 
 
 def parse_initials(text: str) -> Dict[str, float]:

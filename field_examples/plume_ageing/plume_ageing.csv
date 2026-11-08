@@ -1,0 +1,47 @@
+# Plume or transect: 3 h of ageing downwind of a source
+# A SYNTHETIC JUICE field case: every number is invented (plausible for Los Angeles in August), nothing
+# was measured.  Written by field_examples/make_examples.py; copy it and replace the numbers with yours.
+#
+# One row per time, UTC.  Lines starting with # are ignored.  Comma, semicolon or tab separated; a
+# decimal comma is understood in semicolon tables.  Column names are matched ignoring case.
+#   time      'YYYY-MM-DD HH:MM' (UTC); also 'HH:MM' or hours of day together with the date of the
+#             case, unix seconds, or seconds since 2000-01-01
+#   lat, lon  position in degrees, per row (a trajectory) or constant (a site); may also be typed
+#             once in the case instead of a column
+#   T         air temperature, K (degC is recognised when below 150)
+#   p         pressure, hPa (Pa is recognised when above 5000)
+#   RH        relative humidity, %  (or H2O in vol-% instead)
+#   h         boundary-layer height, m
+#   jNO2      measured NO2 photolysis frequency, 1/s: the clear-sky frequencies of the mechanism are
+#             scaled by it; without the column the clear-sky values for time and position are used.
+#             jO1D, jHONO, jH2O2, jHCHO_r, jHCHO_m are read the same way.
+#   E_<species> [unit]   emission (units: ppb/s, molec/cm3/s, molec/cm2/s, mol/km2/s, mol/km2/h,
+#                        mol/s, molec/s; the last two need the footprint area of the case)
+#   B_<species> [unit]   background mixing ratio the air is diluted towards (ppb, ppt, ppm, molec/cm3)
+#   C_<species> [unit]   measured mixing ratio the species is held to (same units)
+#   Species names are those of the mechanism (MCM: C5H8 isoprene, TOLUENE, C2H5OH ethanol, ...).
+#
+# The DILUTION RATE comes from the decay of the measured tracer CO above its background (case: dilution =
+# 'tracer', tracer = 'CO'); kdil could also be a column (dilution = 'table') or one constant.  B_ columns
+# are the air the plume mixes with; the fresh plume's composition is given as initial values in the case.
+#
+time,lat,lon,T,p,RH,jNO2,C_CO [ppb],B_CO [ppb],B_O3 [ppb],B_NO [ppb],B_NO2 [ppb],B_HCHO [ppb]
+2021-08-15 20:00,34.0500,-118.2500,303.0,1000,32.0,8.644e-03,600,120,45,0.1,0.6,1
+2021-08-15 20:10,34.0567,-118.2333,302.9,1000,32.3,8.638e-03,572,120,45,0.1,0.6,1
+2021-08-15 20:20,34.0633,-118.2167,302.8,1000,32.7,8.625e-03,545.7,120,45,0.1,0.6,1
+2021-08-15 20:30,34.0700,-118.2000,302.7,1000,33.0,8.604e-03,520.9,120,45,0.1,0.6,1
+2021-08-15 20:40,34.0767,-118.1833,302.6,1000,33.3,8.576e-03,497.6,120,45,0.1,0.6,1
+2021-08-15 20:50,34.0833,-118.1667,302.4,1000,33.7,8.540e-03,475.6,120,45,0.1,0.6,1
+2021-08-15 21:00,34.0900,-118.1500,302.3,1000,34.0,8.496e-03,454.9,120,45,0.1,0.6,1
+2021-08-15 21:10,34.0967,-118.1333,302.2,1000,34.3,8.445e-03,435.4,120,45,0.1,0.6,1
+2021-08-15 21:20,34.1033,-118.1167,302.1,1000,34.7,8.385e-03,417,120,45,0.1,0.6,1
+2021-08-15 21:30,34.1100,-118.1000,302.0,1000,35.0,8.317e-03,399.7,120,45,0.1,0.6,1
+2021-08-15 21:40,34.1167,-118.0833,301.9,1000,35.3,8.240e-03,383.4,120,45,0.1,0.6,1
+2021-08-15 21:50,34.1233,-118.0667,301.8,1000,35.7,8.154e-03,368.1,120,45,0.1,0.6,1
+2021-08-15 22:00,34.1300,-118.0500,301.7,1000,36.0,8.059e-03,353.6,120,45,0.1,0.6,1
+2021-08-15 22:10,34.1367,-118.0333,301.6,1000,36.3,7.955e-03,340,120,45,0.1,0.6,1
+2021-08-15 22:20,34.1433,-118.0167,301.4,1000,36.7,7.841e-03,327.2,120,45,0.1,0.6,1
+2021-08-15 22:30,34.1500,-118.0000,301.3,1000,37.0,7.717e-03,315.2,120,45,0.1,0.6,1
+2021-08-15 22:40,34.1567,-117.9833,301.2,1000,37.3,7.581e-03,303.8,120,45,0.1,0.6,1
+2021-08-15 22:50,34.1633,-117.9667,301.1,1000,37.7,7.434e-03,293.1,120,45,0.1,0.6,1
+2021-08-15 23:00,34.1700,-117.9500,301.0,1000,38.0,7.275e-03,283,120,45,0.1,0.6,1

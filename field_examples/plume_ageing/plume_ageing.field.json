@@ -1,0 +1,46 @@
+{
+  "name": "plume_ageing",
+  "description": "Synthetic plume: NOx and VOC rich air diluted towards background at the rate the CO decay gives.",
+  "run_type": "plume",
+  "table": "plume_ageing.csv",
+  "date": "",
+  "site": "Los Angeles basin (synthetic)",
+  "lat": null,
+  "lon": null,
+  "chemistry": {
+    "base_mechanism": "MCM_v3.3.1",
+    "addons": [],
+    "precursors": [
+      "C2H4",
+      "C3H6",
+      "TOLUENE"
+    ],
+    "mechanism_stem": "",
+    "inorganic_only": false,
+    "include_dirs": [],
+    "reaction_adjustments": []
+  },
+  "step_s": 60,
+  "default_emission_unit": "molec/cm2/s",
+  "area_km2": 0.0,
+  "dilution": "tracer",
+  "k_dil_per_h": 0.0,
+  "k_collapse_per_h": 0.3,
+  "tracer": "CO",
+  "spin_up_days": 0.0,
+  "generic_lifetime_h": 24.0,
+  "initials": {
+    "NO": 20.0,
+    "NO2": 30.0,
+    "O3": 20.0,
+    "CO": 600.0,
+    "HCHO": 5.0,
+    "C2H4": 10.0,
+    "C3H6": 5.0,
+    "TOLUENE": 5.0,
+    "HONO": 0.5
+  },
+  "deposition_velocity_cm_s": {},
+  "deposition_lifetime_h": {},
+  "version": 1
+}

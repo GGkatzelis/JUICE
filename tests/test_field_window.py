@@ -210,3 +210,16 @@ def test_broken_case_file_is_reported(app, tmp_path, monkeypatch):
     p.write_text("not json", encoding="utf-8")
     w = fw.FieldWindow()
     assert not w.open_path(str(p)) and shown and w.path == ""
+
+
+def test_loading_an_example_copies_it_into_the_project_folder(app, tmp_path):
+    w = fw.FieldWindow()
+    w.folder.setText(str(tmp_path))
+    key = "la_parcel"
+    w.examples.setCurrentIndex(w.examples.findData(key))
+    w.dirty = False                      # otherwise the window would ask whether to save (a modal dialog)
+    w._load_example()
+    assert w.path == str(tmp_path / key / (key + fs.SPEC_SUFFIX)) and not w.dirty
+    assert w.table.text() == str(tmp_path / key / (key + ".csv"))
+    assert w.run_type() == "lagrangian" and w.case[2].ok, w.case[2].text()
+    assert w.page_chem.chosen.count() == 3

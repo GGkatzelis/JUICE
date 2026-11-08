@@ -1,0 +1,49 @@
+{
+  "name": "la_parcel",
+  "description": "Synthetic sea-breeze trajectory with inventory-style emissions, boundary-layer growth, background and deposition.",
+  "run_type": "lagrangian",
+  "table": "la_parcel.csv",
+  "date": "",
+  "site": "Santa Monica Bay to Pasadena (synthetic)",
+  "lat": null,
+  "lon": null,
+  "chemistry": {
+    "base_mechanism": "MCM_v3.3.1",
+    "addons": [],
+    "precursors": [
+      "C5H8",
+      "TOLUENE",
+      "C2H5OH"
+    ],
+    "mechanism_stem": "",
+    "inorganic_only": false,
+    "include_dirs": [],
+    "reaction_adjustments": []
+  },
+  "step_s": 60,
+  "default_emission_unit": "mol/s",
+  "area_km2": 64.0,
+  "dilution": "pbl",
+  "k_dil_per_h": 0.0,
+  "k_collapse_per_h": 0.3,
+  "tracer": "",
+  "spin_up_days": 0.0,
+  "generic_lifetime_h": 24.0,
+  "initials": {
+    "O3": 25.0,
+    "NO": 0.5,
+    "NO2": 2.0,
+    "CO": 160.0,
+    "HONO": 0.015,
+    "HCHO": 1.0,
+    "C5H8": 0.1,
+    "TOLUENE": 0.2,
+    "C2H5OH": 2.0
+  },
+  "deposition_velocity_cm_s": {
+    "O3": 0.4,
+    "HNO3": 2.0
+  },
+  "deposition_lifetime_h": {},
+  "version": 1
+}

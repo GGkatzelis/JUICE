@@ -106,10 +106,10 @@ def test_written_files_and_parsed_scenario(tmp_path):
                  "k[QE_CO --> CO] = CONST(1.)", "B_CO --> CO", "k[B_CO --> CO] = CONST(KDIL*1e-9*M)", "C_NO = INPUT(C_NO)",
                  "NO = CONST(C_NO*1e-9*M)", "k[HNO3 -->] = CONST(1./7200)", "k[O3 -->] = CONST(0.4/(HPBL*100.))", "P = INPUT(P)",
                  "INITIAL[CO] = CONST(M*1e-9*200)", "FILES[ENZ]   = night.enz", "jno2 = INPUT(jNO2)",
-                 "k[NO2 + HV --> O3 + NO] = CONST(jno2)"):
+                 "J4 = CONST(jno2)"):
         assert line in easy, line
     assert "PHTFKT_CS(1.165D-02" not in easy                      # measured jNO2 scales the clear-sky frequencies
-    for absent in ("SHONO", "WALLDEP", "qY", "XNOy"):
+    for absent in ("SHONO", "WALLDEP", "qY", "XNOy", "saphir.jmeasured_02.incl"):
         assert absent not in easy, absent
     assert os.path.isfile(res["spec_path"]) and os.path.isfile(os.path.join(tmp_path, "out", "night.enz"))
     cfg = json.load(open(path, encoding="utf-8"))

@@ -38,6 +38,7 @@ import mechanism_registry as mreg
 from easy_builder import J_INPUTS, MeasuredRow, default_form, render_form
 from enz_builder import compute_solar_zenith, write_enz
 from experiment_spec import CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME
+from lamp_photolysis import MEASURED_J
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # table photolysis name (field_spec strips the leading j) → EASY variable of the chamber block
@@ -211,13 +212,21 @@ def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, co
     k_generic = 1.0 / (spec.generic_lifetime_h * 3600.0) if spec.run_type == "constrained" else 0.0
     f.dilution, f.dilute_expr, f.dil_value = True, f"CONST({COL_KDIL}+{k_generic:.6e})", "CONST(1.)"
     # photolysis: measured jNO2 scales the clear-sky frequencies; otherwise clear sky
+    # No saphir.jmeasured_02.incl: that chamber include re-parametrises a few photolysis reactions for the
+    # roof-open hours and its NO3CH2CHO fit (exp(1.39/cos)) runs away at twilight, when the sun passes the
+    # horizon during a field run.  The mechanism's own J<n> = PHTFKT(...) are used instead: j_clear_sky.incl
+    # scales them with the measured jNO2 (ratio capped at 1), and a measured frequency replaces its J<n>.
+    f.jmeasured_include = ""
+    f.j_overrides = {}
+    j_lines: List[str] = []
     measured = [(j, J_ENZ_NAME[j]) for j, _col, _r in J_INPUTS if J_ENZ_NAME[j] in cols]
     if any(j == "jno2" for j, _c in measured):
         f.j_rows = [MeasuredRow(j, "enz", col) for j, col in measured]
-        f.j_overrides = {j: rxn for j, _c, rxn in J_INPUTS if j in dict(measured)}
+        j_lines = ["; measured photolysis frequencies replace the mechanism's J<n>; every other J<n> is the clear-sky value "
+                   "scaled by jNO2 / jNO2(clear sky), at most 1"] + [f"J{MEASURED_J[j]} = CONST({j})   ; {col}" for j, col in measured]
     else:
         f.j_rows = [MeasuredRow("jno2", "const", "", CLEAR_SKY_JNO2)]
-        f.j_overrides = {"jno2": J_INPUTS[0][2]}
+        j_lines = ["; no measured jNO2: clear-sky photolysis for time and position (jno2 = J4 clear sky, so the scaling is 1)"]
     f.setting_rows = [
         MeasuredRow("T", "enz", "t", comment="temperature in K"),
         MeasuredRow("P", "input", "P", comment="pressure in hPa"),
@@ -236,6 +245,7 @@ def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, co
         f.extra_statements += mreg.provenance_lines(chem.base_mechanism, list(chem.addons))
     except Exception as e:
         f.extra_statements.append(f"; CHEMISTRY: provenance unavailable ({e})")
+    f.extra_statements += j_lines
     f.extra_statements += field_statements(spec, table, cols)
     for rxn, rate, cmt in chem.reaction_adjustments:
         if str(rxn).strip():

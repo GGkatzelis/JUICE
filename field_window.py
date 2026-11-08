@@ -475,6 +475,18 @@ class FieldWindow(QMainWindow):
         b = QPushButton("Choose…"); b.clicked.connect(self._choose_table); h.addWidget(b); gv.addLayout(h)
         h = QHBoxLayout(); b = QPushButton("Write a template for this kind of run…"); b.clicked.connect(self._write_template); h.addWidget(b); h.addStretch()
         gv.addLayout(h)
+        gv.addWidget(_info("The template's header explains every column. The synthetic examples below are complete cases of "
+                           "each kind: load one to see how the table and the case fit together, then replace the numbers with yours."))
+        h = QHBoxLayout(); h.addWidget(QLabel("Examples")); self.examples = QComboBox()
+        self.examples.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.examples.setMinimumContentsLength(24)              # long descriptions must not push the buttons off the page
+        self._examples = fs.list_examples()
+        for key, (_p, text) in self._examples.items():
+            self.examples.addItem(f"{key} — {text}", key)
+        h.addWidget(self.examples, 1)
+        b = QPushButton("Load an example"); b.clicked.connect(self._load_example); h.addWidget(b)
+        b = QPushButton("Open its table"); b.clicked.connect(self._open_example_table); h.addWidget(b)
+        gv.addLayout(h)
         self.kind_box = QGroupBox(""); self.kind_form = QFormLayout(self.kind_box)
         self.kind_needs = QLabel(""); self.kind_needs.setWordWrap(True); self.kind_form.addRow(self.kind_needs)
         self.spin_up = self._spin(0.0, 60.0, 1, " days")
@@ -778,13 +790,38 @@ class FieldWindow(QMainWindow):
         if p:
             self.open_path(p)
 
+    def _load_example(self):
+        key = self.examples.currentData()
+        if key and self._confirm_discard():
+            self.open_path(self._examples[key][0])
+
+    def _open_example_table(self):
+        key = self.examples.currentData()
+        if key:
+            try:
+                _open_path(fs.load_spec(self._examples[key][0]).table)
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(self, "JUICE", f"The table could not be opened:\n{e}")
+
     def open_path(self, path: str) -> bool:
+        """Open a case.  One of the shipped examples is copied into the project folder first (its own
+        table alongside), so the user works on a copy and the example stays as shipped."""
+        copied = ""
+        if fs.is_example(path):
+            try:
+                path = fs.copy_case(path, self.folder.text().strip() or self.easy_root)
+                copied = path
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(self, "JUICE", f"The example could not be copied into the project folder:\n{e}")
+                return False
         try:
             spec = fs.load_spec(path)
         except (OSError, ValueError) as e:
             QMessageBox.warning(self, "JUICE", f"This field case could not be opened:\n{e}")
             return False
         self.path = os.path.abspath(path)
+        if copied:
+            self.statusBar().showMessage(f"example copied to {os.path.dirname(copied)} — this copy is yours to change", 15000)
         self._loading = True
         self.folder.setText(os.path.dirname(os.path.dirname(self.path)))
         self._loading = False

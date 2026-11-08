@@ -1,0 +1,35 @@
+{
+  "name": "site_day",
+  "description": "Synthetic diurnal cycle; NO, NO2, O3, CO, isoprene and toluene held; HCHO free for comparison.",
+  "run_type": "constrained",
+  "table": "site_day.csv",
+  "date": "",
+  "site": "Pasadena-like site (synthetic)",
+  "lat": null,
+  "lon": null,
+  "chemistry": {
+    "base_mechanism": "MCM_v3.3.1",
+    "addons": [],
+    "precursors": [
+      "C5H8",
+      "TOLUENE"
+    ],
+    "mechanism_stem": "",
+    "inorganic_only": false,
+    "include_dirs": [],
+    "reaction_adjustments": []
+  },
+  "step_s": 60,
+  "default_emission_unit": "molec/cm2/s",
+  "area_km2": 0.0,
+  "dilution": "none",
+  "k_dil_per_h": 0.0,
+  "k_collapse_per_h": 0.3,
+  "tracer": "",
+  "spin_up_days": 1.0,
+  "generic_lifetime_h": 24.0,
+  "initials": {},
+  "deposition_velocity_cm_s": {},
+  "deposition_lifetime_h": {},
+  "version": 1
+}

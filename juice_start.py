@@ -247,6 +247,14 @@ class FieldMenu(StartWindow):
                   lambda: launch("field", [], self.toml), primary=True)
         self._add(gl, "Open a saved field case", "Change or check a field case described earlier (.field.json).",
                   self._open_field)
+        self._add(gl, "Load an example", "One of the three synthetic cases (a site, a plume, a Lagrangian parcel), "
+                  "copied into your project folder: see how the input table is built, then put your own numbers in.",
+                  self._open_example)
+
+    def _open_example(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Load an example field case", os.path.join(HERE, "field_examples"),
+                                           "Field case (*.field.json)")
+        return launch("field", [p], self.toml) if p else None
 
     def _open_field(self):
         p = pick_field(self, self.toml)

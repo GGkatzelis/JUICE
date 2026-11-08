@@ -114,6 +114,9 @@ each with an optional unit in brackets. Three kinds of run share the table:
 4. **Mixing and deposition**: dilution source, background, deposition velocities or lifetimes, initial values.
 5. **Run**: input files, solver, results viewer.
 
+Three synthetic examples, one per kind of run, are in [field_examples/](field_examples/) with a commented
+table each ("Load an example" copies one into your project folder; the README there explains the columns).
+
 Everything the field adds is written as ordinary EASY statements, so the generated files run in
 FACSIMILE as well: `QE_X = INPUT(QE_X)` with `QE_X --> X`, dilution through the mechanism's
 `X + DIL -->` reactions with `DILUTE = CONST(KDIL + …)`, background as `B_X --> X` with
@@ -334,6 +337,7 @@ limitations, and the development history.
 ```
 juice_start.py               start menu (the JUICE icon): opens one of the windows below
 juice_gui.py                 experiment window; step pages in experiment_wizard.py
+field_examples/              three synthetic field cases (site, plume, Lagrangian parcel) with commented tables; make_examples.py writes them
 field_window.py              field observations window: five steps like the chamber window (field_spec.py: the case and its table;
                              field_scenario.py: case → ENZ + EASY → scenario, emissions / dilution / held species / deposition)
 results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
