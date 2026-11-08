@@ -55,6 +55,10 @@ ENZ_COL_TO_ENV = {
     "jhcho_r":  ("JHCHO_r", "jHCHO_r"),
 }
 
+# Settings a chamber EASY file defines from an INPUT that are never species held to a measurement
+_NEVER_HELD = {"T", "TEMP", "P", "PRESS", "H2O", "RH", "M", "O2", "N2", "HV", "SZ", "SZA", "FLOW", "DIL", "DILUTE",
+               "SHONO", "SHCHO", "QSHCHO", "SNO2", "Y", "QY", "QCO2", "WALLDEP", "COSX", "JSCALE"}
+
 # QH2O reactions are handled separately in the H2O impurities block (as injection_reactions
 # gated by QH2O). QCO2 is always-on and goes to continuous_sources. Neither goes through
 # the generic injection_source_rxns loop.
@@ -362,6 +366,8 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     all_k_assignments   = {}   # normalised_key -> rate_expr
     all_reactions       = []   # (lhs_upper, rhs_str) active only
     injection_switches  = {}   # var_upper -> ENZ_col (original case) or None
+    input_names         = set()  # every name an INPUT() statement defines or reads (uppercase)
+    held_species        = {}   # species = CONST(<expression of an INPUT>): held to the ENZ, not integrated
     source_consts       = {}   # var_upper -> py_expr  (SHONO/SHCHO/WALLDEP etc.)
 
     y_active    = False;  y_eqn     = ""
@@ -465,6 +471,11 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
             enz_col = inp.group(2).strip()
             mapping = (ENZ_COL_TO_ENV.get(enz_col.lower()) or
                        ENZ_COL_TO_ENV.get(var_up.lower()))
+            input_names.update({var_up, enz_col.upper()})
+            if var_up in ("P", "PRESS") and not mapping:
+                # P = INPUT(col): pressure from the ENZ (a field case along a trajectory).  Registered
+                # like T so that get_M reads the column and the solver does not restart at every row.
+                env_map["PRESS"] = {"type": "SAPHIR File", "value": enz_col}
             if mapping:
                 env_key, canonical = mapping
                 env_map[env_key] = {"type": "SAPHIR File", "value": canonical}
@@ -541,6 +552,13 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 # idl_parameters so they're available in the ODE context.
                 source_consts[var_up] = py_expr
                 idl_parameters[var_up] = py_expr
+                # A species set from a measurement, FACSIMILE style:  C_NO = INPUT(C_NO);
+                # NO = CONST(C_NO*1e-9*M).  Recorded as a candidate; the runner holds it only
+                # when the name is one of its ODE species (SHONO, H2O, DILUTE, … never are).
+                if (var_up not in _NEVER_HELD and
+                        any(re.search(r'(?<![A-Za-z0-9_])' + re.escape(n) + r'(?![A-Za-z0-9_])', expr, re.I)
+                            for n in input_names)):
+                    held_species[var_up] = py_expr
             continue
 
         # X = PHTFKT_CS(a,b,c)  or  X = PHTFKT(a,b,c)
@@ -1195,6 +1213,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         "burst_injections":          burst_injections,
         "injection_reactions":       injection_reactions,
         "idl_dilution_reactions":    idl_dilution_reactions,
+        "held_species":              held_species,
         "idl_parameters":            idl_parameters,
         "analytical_dilution":       analytical_dilution,
         "chamber_source_reactions":  chamber_source_reactions,

@@ -1113,6 +1113,19 @@ class ScenarioRunner:
     def _solve(self):
         self.solver = MechanismSolver(self.mechanism, self.cfg['env_map'])
         y0 = np.zeros(self.solver.num_species)
+        # Species held to a measurement (idl_parser 'held_species': X = CONST(<expression of an
+        # INPUT>)).  Only ODE species count; the value is set from the settings snapshot at the
+        # start of every ENZ row and kept constant within the row, as FACSIMILE does for a
+        # species that is also a parameter.  {species index: (name, compiled expression)}
+        self._held = {}
+        _upper_idx = {s.upper(): i for s, i in self.solver.species_to_idx.items()}
+        for _hn, _hx in (self.cfg.get('held_species') or {}).items():
+            if _hn.upper() in _upper_idx:
+                self._held[_upper_idx[_hn.upper()]] = (self.solver.species[_upper_idx[_hn.upper()]],
+                                                       compile(str(_hx), '<held>', 'eval'))
+        if self._held:
+            print(f"  [HELD] {len(self._held)} species held to the ENZ: "
+                  + ", ".join(n for n, _c in self._held.values()))
 
         saphir_base_date = pd.Timestamp("2000-01-01 00:00:00")
 
@@ -1514,6 +1527,14 @@ class ScenarioRunner:
             # Load current ODE state (c-values feed into settings like KMT06=f(H2O))
             for i, sp in enumerate(_species_names):
                 ctx_s[sp] = float(y_state[i])
+            # Held species: their value for this row, from the ENZ (ctx_s holds every column) and M
+            for _hi, (_hname, _hcode) in self._held.items():
+                try:
+                    _hv = max(float(eval(_hcode, globals(), ctx_s)), 0.0)
+                except Exception:
+                    continue
+                y_state[_hi] = _hv
+                ctx_s[_hname] = _hv
             # Re-apply constrained species
             for k in active_s:
                 try:
@@ -1822,6 +1843,9 @@ class ScenarioRunner:
                 if imp['start_s'] <= t_abs <= imp['start_s'] + imp['dur']:
                     dydt[imp['idx']] += imp['rate']
 
+            if _held_idx.size:
+                dydt[_held_idx] = 0.0
+
             _prof['other'] += time.perf_counter() - _t1
 
             self.eval_count += 1
@@ -1962,6 +1986,10 @@ class ScenarioRunner:
               f"atol_floor={_atol_floor:.0e}  (species-specific: max(floor, rtol·y))  "
               f"({'FACS[HMAX]' if _hmax_easy else 'TOML default'})")
         N = self.solver.num_species
+        _held_idx = np.array(sorted(self._held), dtype=np.int64)
+        if _held_idx.size and not _perstep_snap:
+            print("  [HELD] WARNING: held species need the per-row settings snapshot (perstep_snap); "
+                  "they are only frozen at segment starts in this mode")
 
         # --- PRE-COMPUTE ANALYTICAL JACOBIAN STRUCTURE ---
         # For each reaction i with ODE reactants r1..rN and affected species a1..aM:
@@ -1985,6 +2013,12 @@ class ScenarioRunner:
         _jac_cols     = np.array(_jac_cols_l,      dtype=np.int32)
         _jac_factors  = np.array(_jac_factors_l,   dtype=np.float64)
         _jac_rxn_idxs = np.array(_jac_rxn_idxs_l, dtype=np.int32)
+        if _held_idx.size:                     # d(held)/dt = 0: no Jacobian row for a held species
+            _keep = ~np.isin(_jac_rows, _held_idx)
+            _jac_rows, _jac_cols = _jac_rows[_keep], _jac_cols[_keep]
+            _jac_factors, _jac_rxn_idxs = _jac_factors[_keep], _jac_rxn_idxs[_keep]
+        _dil_idx_all = (np.setdiff1d(np.arange(N, dtype=np.int32), _held_idx.astype(np.int32))
+                        if _held_idx.size else np.arange(N, dtype=np.int32))
         print(f">>> [JAC] Analytical Jacobian: {N}×{N}, {len(_jac_rows)} terms "
               f"({'passed to solver' if _jac_mode == 'analytic' else 'built but not used — FD active'})")
 
@@ -2069,8 +2103,8 @@ class ScenarioRunner:
                 _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
                 diag_rate -= (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
             if diag_rate != 0.0:
-                dil_idx  = np.arange(N, dtype=np.int32)
-                dil_data = np.full(N, diag_rate)
+                dil_idx  = _dil_idx_all
+                dil_data = np.full(len(dil_idx), diag_rate)
                 rows = np.concatenate([_jac_rows, dil_idx])
                 cols = np.concatenate([_jac_cols, dil_idx])
                 d    = np.concatenate([jac_data, dil_data])
@@ -2228,6 +2262,10 @@ class ScenarioRunner:
                 t0 = self.t_span[step_idx]
                 t1 = self.t_span[step_idx + 1]
                 _make_snap(y_seg, t0)
+                if _held_idx.size and _wsolver is not None:
+                    _wsolver.y[_held_idx] = y_seg[_held_idx]
+                    _wsolver.D[0, _held_idx] = y_seg[_held_idx]
+                    _wsolver.D[1:, _held_idx] = 0.0
                 _atol_vec = np.maximum(_atol_floor, _rtol * np.maximum(y_seg, 0.0))
                 if _wsolver is not None and _is_discontinuity(t0):
                     # Soft (in-place) cold restart: same state as a fresh BDF().
