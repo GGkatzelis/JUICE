@@ -2306,7 +2306,13 @@ class ScenarioRunner:
                         max_step=step_limit, rtol=_rtol, atol=_atol_vec,
                         jac=analytical_jac if _jac_mode == 'analytic' else None,
                         **_fs_kw)
-                    y_seg = _fb.y[:, -1] if _fb.y.shape[1] > 0 else _wsolver.y.copy()
+                    _fby = _fb.y                      # a failed solve_ivp may hand back a list
+                    if isinstance(_fby, list):
+                        _fby = np.column_stack(_fby) if _fby else np.empty((len(y_seg), 0))
+                    if not _fb.success:
+                        print(f"[WARNING] cold fallback failed too: {_fb.message} — the row's end state is "
+                              f"{'the last point reached' if _fby.shape[1] > 0 else 'the row start'}")
+                    y_seg = _fby[:, -1] if _fby.shape[1] > 0 else _wsolver.y.copy()
                     _wsolver = None
                 else:
                     y_seg = _wsolver.y.copy()
