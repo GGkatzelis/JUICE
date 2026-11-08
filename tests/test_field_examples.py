@@ -1,5 +1,4 @@
 """The shipped synthetic field examples: complete, reproducible, and loaded as a copy."""
-import filecmp
 import os
 
 import pytest
@@ -36,7 +35,9 @@ def test_examples_are_what_the_script_writes(tmp_path):
     for key, make in mod.EXAMPLES.items():
         made = make(str(tmp_path / key))
         for name in (key + ".csv", key + fs.SPEC_SUFFIX):
-            assert filecmp.cmp(os.path.join(fs.EXAMPLES_DIR, key, name), os.path.join(tmp_path, key, name), shallow=False), name
+            shipped = open(os.path.join(fs.EXAMPLES_DIR, key, name), encoding="utf-8", newline=None).read()
+            written = open(os.path.join(tmp_path, key, name), encoding="utf-8", newline=None).read()
+            assert shipped == written, name                 # universal newlines: a CRLF checkout is the same content
 
 
 def test_copy_case_leaves_the_example_alone(tmp_path):
