@@ -23,6 +23,11 @@ extended.  Runtime: the first run is measured alone ("pilot") and the estimate f
 n × t_pilot / workers, refined from the median of finished runs.
 
     python study_runner.py my.study.json --workers 4        # CLI; --dry writes inputs only
+
+A *field study* uses the same machinery for field cases (field_spec / field_scenario): one case
+(`field_case`, a .field.json) × many input tables (`tables`, e.g. one per trajectory) × axes of the
+kinds `emission_scale` (× factor on the emissions of NOX, VOC, ALL or one species) and `initial`.
+The chemistry subset is extracted once into <study>/chemistry/ and shared by every run.
 """
 from __future__ import annotations
 
@@ -69,6 +74,7 @@ MOD_KINDS: Dict[str, Tuple[str, str, str]] = {   # kind → (label, what 'target
 CHEMISTRY_KINDS = ("addon", "base_mechanism")      # these rebuild the subset once per experiment
 AXIS_KINDS: Dict[str, str] = {
     "initial":         "initial value of a species at t0 [ppb]",
+    "emission_scale":  "× factor on the emissions of a species or class (NOX, VOC, ALL) — field cases",
     "injection_scale": "× factor on the injected amount of an injection / action / 'all'",
     "injection_set":   "injected amount of an injection [ppb]",
     "injection_new":   "amount of an injection added to the experiment [ppb]; target species|HH:MM|minutes",
@@ -102,12 +108,12 @@ class Axis:
         if self.label:
             return self.label
         if self.also:
-            return _safe("+".join(t for _k, t in self.members())) + ("_x" if self.kind in ("injection_scale", "rate_factor", "chamber_scale") else "")
+            return _safe("+".join(t for _k, t in self.members())) + ("_x" if self.kind in ("injection_scale", "rate_factor", "chamber_scale", "emission_scale") else "")
         if self.kind == "initial":
             return f"{self.target}_t0_ppb"
         if self.kind == "injection_set":
             return f"{self.target}_ppb"
-        if self.kind in ("injection_scale", "rate_factor"):
+        if self.kind in ("injection_scale", "rate_factor", "emission_scale"):
             return f"{self.target}_x"
         if self.kind == "injection_new":
             sp, start, _dur = parse_new_injection(self.target)
@@ -131,6 +137,8 @@ class Study:
     created: str = ""
     mode: str = ""                                      # "sweep" (one experiment, its own knobs) | "batch" (several experiments)
     focus: str = "ozone"                                # key of FOCUS: which results are ticked by default
+    field_case: str = ""                                # field study: the .field.json every table is run with
+    tables: List[str] = field(default_factory=list)     # field study: the input tables (one run each per grid point)
 
 
 def save_study(st: Study, path: str) -> str:
@@ -148,6 +156,19 @@ def load_study(path: str) -> Study:
     if not st.folder:
         st.folder = os.path.dirname(os.path.abspath(path))
     return st
+
+
+FIELD_AXIS_KINDS = ("emission_scale", "initial")
+
+
+def bases(st: Study) -> List[str]:
+    """What the runs are made from: the input tables of a field study, else the experiments."""
+    return list(st.tables) if st.field_case else list(st.experiments)
+
+
+def base_name(path: str) -> str:
+    b = os.path.basename(path)
+    return b[:-len(".experiment.json")] if b.endswith(".experiment.json") else os.path.splitext(b)[0]
 
 
 def new_study(name: str, folder: str, toml: str) -> Study:
@@ -394,8 +415,8 @@ class RunPlan:
 
 def plan_runs(st: Study) -> List[RunPlan]:
     plans = []
-    for exp in st.experiments:
-        base = os.path.basename(exp)[:-len(".experiment.json")] if exp.endswith(".experiment.json") else os.path.splitext(os.path.basename(exp))[0]
+    for exp in bases(st):
+        base = base_name(exp)
         for pt in grid_points(st.axes):
             name = run_name(base, pt)
             plans.append(RunPlan(exp, base, pt, name, os.path.join(st.folder, "runs", name)))
@@ -427,7 +448,53 @@ def _subset_reactions(exp_path: str, stem: str) -> set:
     return out
 
 
+def validate_field_study(st: Study) -> List[Tuple[str, str]]:
+    import field_spec as fs
+    msgs: List[Tuple[str, str]] = []
+    if not st.folder:
+        msgs.append(("error", "No study folder."))
+    try:
+        spec = fs.load_spec(st.field_case)
+    except (OSError, ValueError) as e:
+        return msgs + [("error", f"field case {os.path.basename(st.field_case)}: cannot read ({e})")]
+    if not st.tables:
+        msgs.append(("error", "No input tables chosen."))
+    if st.modifications:
+        msgs.append(("error", "A field study takes no change table; use the axes (emission scale, initial value)."))
+    for ax in st.axes:
+        if ax.kind not in FIELD_AXIS_KINDS:
+            msgs.append(("error", f"axis '{ax.name()}': kind '{ax.kind}' is not for a field case (use {', '.join(FIELD_AXIS_KINDS)})"))
+        if not ax.values:
+            msgs.append(("error", f"axis '{ax.name()}' has no values"))
+    missing = [t for t in st.tables if not os.path.isfile(t)]
+    for t in missing[:5]:
+        msgs.append(("error", f"table not found: {t}"))
+    checked = 0
+    for t in st.tables:
+        if t in missing or checked >= 5:
+            continue
+        checked += 1
+        probe = copy.deepcopy(spec); probe.table = t; probe.name = base_name(t)
+        for ax in st.axes:
+            for kind, target in ax.members():
+                if kind == "emission_scale":
+                    probe.emission_scale[target.upper()] = float(ax.values[0]) if ax.values else 1.0
+        table, rep = fs.check(probe)
+        for e in rep.errors:
+            msgs.append(("error", f"{base_name(t)}: {e}"))
+        if table is not None and any(ax.kind == "emission_scale" for ax in st.axes) and not table.emissions:
+            msgs.append(("warning", f"{base_name(t)}: an emission-scale axis, but the table emits nothing"))
+    if len(st.tables) > checked:
+        msgs.append(("info", f"{checked} of {len(st.tables)} tables checked here; the rest are checked when their inputs are written"))
+    lvl, txt = check_guards(len(st.tables) * max(1, len(grid_points(st.axes))))
+    if lvl != "ok":
+        msgs.append(("warning", txt))
+    return msgs
+
+
 def validate_study(st: Study) -> List[Tuple[str, str]]:
+    if st.field_case:
+        return validate_field_study(st)
     msgs: List[Tuple[str, str]] = []
     if not st.experiments:
         msgs.append(("error", "No base experiment chosen."))
@@ -510,8 +577,72 @@ def _chemistry_for(st: Study, exp_path: str, spec_base: ExperimentSpec) -> Tuple
     return os.path.join(out, "chemistry"), fields
 
 
+def _field_chemistry(st: Study, spec) -> dict:
+    """The chemistry every run of a field study shares, extracted once into <study>/chemistry/ (a marker
+    file keeps the fields the runs need).  Returns the `chemistry` dict of a FieldSpec pointing at it."""
+    import field_scenario as fsc
+    out = os.path.join(st.folder, "chemistry")
+    marker = os.path.join(out, "chemistry.json")
+    if os.path.isfile(marker):
+        return json.load(open(marker, encoding="utf-8"))
+    chem = fsc.chemistry_spec(spec)
+    chem.conditions.j_source = "measured"                 # the subset is the same either way; measured keeps every J of the sun
+    ensure_mechanism(chem, out)
+    fields = {"base_mechanism": chem.base_mechanism, "addons": list(chem.addons), "precursors": [], "inorganic_only": False,
+              "mechanism_stem": chem.mechanism_stem, "mech_incl_suffix": chem.mech_incl_suffix, "use_anorg": chem.use_anorg,
+              "extra_includes": list(chem.extra_includes), "reaction_adjustments": [list(a) for a in chem.reaction_adjustments],
+              "include_dirs": [os.path.join(out, "chemistry")] + list(chem.include_dirs or []),
+              "_source": f"{fs_label(spec)}"}
+    os.makedirs(out, exist_ok=True)
+    json.dump(fields, open(marker, "w", encoding="utf-8"), indent=1)
+    return fields
+
+
+def fs_label(spec) -> str:
+    import field_spec as fs
+    return fs.chemistry_label(spec)
+
+
+def materialise_field(st: Study, plan: RunPlan, include_dir: str, force: bool = False) -> str:
+    """A field study run: the case with this table and this grid point → ENZ, EASY, scenario JSON."""
+    import field_spec as fs
+    import field_scenario as fsc
+    if not force and os.path.isfile(plan.json_path) and os.path.isfile(plan.json_path[:-5] + ".easy"):
+        plan.status = "ready"; return plan.json_path
+    spec = fs.load_spec(st.field_case)
+    case_name = spec.name
+    spec.table, spec.name = plan.base_path, plan.name
+    notes: List[str] = []
+    for ax in st.axes:
+        v = plan.point[ax.name()]
+        for kind, target in ax.members():
+            if kind == "emission_scale":
+                spec.emission_scale[target.upper()] = float(v); notes.append(f"emissions {target} × {v:g}")
+            elif kind == "initial":
+                spec.initials[target.upper()] = float(v); notes.append(f"initial {target} = {v:g} ppb")
+            else:
+                raise ValueError(f"axis kind '{kind}' is not for a field case")
+    spec.description = (spec.description + " | " if spec.description else "") + f"STUDY {st.name}: case {case_name}, table " \
+        f"{os.path.basename(plan.base_path)}, point " + (", ".join(f"{k} = {v:g}" for k, v in plan.point.items()) or "base")
+    if spec.chemistry.get("precursors") or spec.chemistry.get("inorganic_only"):
+        spec.chemistry = _field_chemistry(st, spec)
+    table, rep = fs.check(spec)
+    if not rep.ok or table is None:
+        raise ValueError("; ".join(rep.errors))
+    os.makedirs(plan.folder, exist_ok=True)
+    js, res = fsc.prepare(spec, table, plan.folder, include_dir, st.toml, solver=st.solver or None, export_kv_pd=st.export_kv_pd)
+    notes += res.get("notes", [])
+    info = _read_info(plan); info.update({"base": case_name, "table": plan.base_path, "point": plan.point, "notes": notes,
+                                           "materialised": time.strftime("%Y-%m-%d %H:%M:%S")})
+    _write_info(plan, info)
+    plan.status = "ready"; plan.message = "; ".join(notes)
+    return js
+
+
 def materialise(st: Study, plan: RunPlan, include_dir: str, force: bool = False) -> str:
     """Write the run's spec, EASY, ENZ and scenario JSON.  Returns the JSON path."""
+    if st.field_case:
+        return materialise_field(st, plan, include_dir, force)
     if not force and os.path.isfile(plan.json_path) and os.path.isfile(plan.json_path[:-5] + ".easy"):
         plan.status = "ready"; return plan.json_path
     spec = load_spec(plan.base_path)
@@ -1071,7 +1202,7 @@ def nox_axis(axes: List[Axis]) -> int:
     for i, ax in enumerate(axes):
         for kind, target in ax.members():
             names = [x.strip().upper() for x in re.split(r"[,|]", target)]
-            if kind in ("initial", "injection_set", "injection_scale", "injection_new") and names and \
+            if kind in ("initial", "injection_set", "injection_scale", "injection_new", "emission_scale") and names and \
                (names[0] in NOX_SPECIES or names[0].startswith(("NO_", "NO2_")) or all(n in NOX_SPECIES or n.startswith(("NO_", "NO2_")) for n in names if n)):
                 return i
         if ax.name().upper().startswith(("NOX_", "NO_", "NO2_", "NO+")):
@@ -1145,6 +1276,8 @@ def axis_description(st: Study, ax: Axis) -> Tuple[str, float, str]:
         lab = f"{t} injected [ppb]"; short = lab
     elif k == "initial":
         lab = f"{t} at the start [ppb]"; short = lab
+    elif k == "emission_scale":
+        lab = f"emissions of {t} × factor (1 = as in the input table)"; short = "× factor"
     elif k == "rate_factor":
         lab = f"k({t}) × factor (1 = MCM)"; short = "× factor"
     elif k == "chamber_scale":

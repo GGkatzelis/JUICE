@@ -523,11 +523,13 @@ class StudyWindow(QMainWindow):
         mods, axes, metrics, workers, kvpd = list(st.modifications), list(st.axes), list(st.metrics), st.workers, st.export_kv_pd
         mode = mode or st.mode
         sweep = mode == "sweep" if mode else (len(exps) == 1 and not mods)
+        if st.field_case:
+            sweep = False
         self._loading = True
         try:
             (self.mode_sweep if sweep else self.mode_batch).setChecked(True)
             self.name.setText(name); self.folder.setText(folder); self.notes.setText(notes)
-            self.exps.clear(); self.exps.addItems(exps)
+            self.exps.clear(); self.exps.addItems(st.tables if st.field_case else exps)
             self.mods.setRowCount(0)
             for m in mods:
                 self._add_mod(m)
@@ -577,12 +579,20 @@ class StudyWindow(QMainWindow):
             self.solver.setCurrentIndex(max(0, self.solver.findData(self._study_profile(st))))
         finally:
             self._loading = False
-        self.setWindowTitle(f"JUICE — Study · {name}")
+        self.setWindowTitle(f"JUICE — {'Field study' if st.field_case else 'Study'} · {name}")
         self._mode_changed(); self._count(); self._fill_runs()
 
     def _to_study(self) -> S.Study:
         st = self.study
         st.name = self.name.text().strip() or "study"; st.folder = self.folder.text().strip(); st.notes = self.notes.text()
+        if st.field_case:                      # a field study keeps its case, tables and axes as written; only the run settings are edited here
+            st.workers = self.workers.value(); st.export_kv_pd = self.kvpd.isChecked()
+            if not st.toml:
+                st.toml = self.toml_path
+            ticked = [k for k, cb in self.metric_boxes.items() if cb.isChecked()]
+            if ticked:
+                st.metrics = ticked
+            return st
         st.modifications = []
         if self._mods_active():
             for r in range(self.mods.rowCount()):
@@ -668,6 +678,12 @@ class StudyWindow(QMainWindow):
         theme.mark_missing(self.name, not self.name.text().strip())
         if not self.name.text().strip():
             missing.append("a study name")
+        if self.study.field_case:
+            st = self.study
+            self.ready.setText(f"Field study: {len(st.tables)} input table(s) run with the case {os.path.basename(st.field_case)}"
+                               + (", axes " + ", ".join(ax.name() for ax in st.axes) if st.axes else ", no axes")
+                               + ". Next: Check, then 'Run pilot, then estimate'.")
+            return
         sweep = self.mode_sweep.isChecked()
         n_axes = n_mods = 0
         if sweep:
@@ -743,8 +759,8 @@ class StudyWindow(QMainWindow):
             return
         self._readiness()
         try:
-            st = self._to_study(); n_pts = len(S.grid_points(st.axes)); n = len(st.experiments) * n_pts
-            txt = f"{len(st.experiments)} experiment(s) × {n_pts} grid point(s) = {n} runs"
+            st = self._to_study(); n_pts = len(S.grid_points(st.axes)); n = len(S.bases(st)) * n_pts
+            txt = f"{len(S.bases(st))} {'table(s)' if st.field_case else 'experiment(s)'} × {n_pts} grid point(s) = {n} runs"
             done = sum(1 for p in S.plan_runs(st) if S.is_done(p)) if st.folder and os.path.isdir(os.path.join(st.folder, "runs")) else 0
             todo = n - done
             if done:

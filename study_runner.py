@@ -31,8 +31,9 @@ def main(argv=None) -> int:
     workers = int(argv[argv.index("--workers") + 1]) if "--workers" in argv else 0
     dry, yes, force = "--dry" in argv, "--yes" in argv, "--force" in argv
     st = S.load_study(path)
-    print(f"study '{st.name}' in {st.folder}: {len(st.experiments)} experiment(s), {len(st.modifications)} modification(s), "
-          f"{len(st.axes)} axis/axes → {len(S.plan_runs(st))} runs")
+    what = f"{len(st.tables)} input table(s) with the field case {os.path.basename(st.field_case)}" if st.field_case else \
+        f"{len(st.experiments)} experiment(s), {len(st.modifications)} modification(s)"
+    print(f"study '{st.name}' in {st.folder}: {what}, {len(st.axes)} axis/axes → {len(S.plan_runs(st))} runs")
     msgs = S.validate_study(st)
     for lvl, m in msgs:
         print(f"  [{lvl}] {m}")
