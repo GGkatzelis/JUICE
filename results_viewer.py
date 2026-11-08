@@ -2242,12 +2242,13 @@ class ResultsViewer(QMainWindow):
             root = spec.conditions.archive_root if spec else r"Z:\IEK8-SAPHIR\data"
             date = (spec.conditions.date if spec and spec.conditions.date
                     else _dt.datetime.fromtimestamp(self._midnight_unix, _dt.timezone.utc).strftime("%Y-%m-%d"))
-            obs = _ep.load_observations(root, date, None, self._midnight_unix,
-                                        cache_dir=os.path.dirname(os.path.abspath(self.csv_path)) if getattr(self, "csv_path", "") else "")
+            folder = os.path.dirname(os.path.abspath(self.csv_path)) if getattr(self, "csv_path", "") else ""
+            obs = _ep.load_observations(root, date, None, self._midnight_unix, cache_dir=folder)
+            sources = _ep.observation_sources(_ep.observation_file(folder, date)) if folder else {}   # a field case names its table
             rows = []
             for key, (h, v, label, kind) in obs.items():
                 suffix = _ep.OBS_MAP[key][0] if key in _ep.OBS_MAP else "observations"
-                rows.append(({'nc_file': f"{date}.{suffix}", 'nc_var': key, 't': np.asarray(h, float), 'v': np.asarray(v, float)},
+                rows.append(({'nc_file': sources.get(key) or f"{date}.{suffix}", 'nc_var': key, 't': np.asarray(h, float), 'v': np.asarray(v, float)},
                              key if key in self.df.columns else ''))
             if rows:
                 self._add_confirmed_rows(rows)

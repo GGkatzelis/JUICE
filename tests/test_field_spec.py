@@ -300,3 +300,26 @@ def test_no_chemistry_is_an_error(tmp_path):
     for chem in ({"precursors": ["C5H8"]}, {"mechanism_stem": "RACM2"}, {"inorganic_only": True}):
         _t, r = fs.check(fs.FieldSpec(table=p, chemistry=chem))
         assert r.ok, r.text()
+
+
+def test_observation_columns_are_read_and_not_held(tmp_path):
+    p = _table(tmp_path, "time,T,p,RH,C_NO,O_HCHO [ppt],O_O3\n2021-08-15 12:00,298,1000,50,1,2500,30\n2021-08-15 13:00,298,1000,50,1,,40\n")
+    t = fs.read_table(p)
+    assert t.observations["HCHO"][0] == pytest.approx(2.5) and np.isnan(t.observations["HCHO"][1])
+    assert t.observations["O3"].tolist() == [30.0, 40.0] and "O3" not in t.constraints
+    _t, r = fs.check(_spec(p, lat=34.0, lon=-118.0))
+    assert r.ok and any("2 observed for comparison" in i for i in r.info), r.text()
+    p = _table(tmp_path, "time,T,p,RH,C_NO,O_NO\n2021-08-15 12:00,298,1000,50,1,1\n2021-08-15 13:00,298,1000,50,1,1\n", "u.csv")
+    _t, r = fs.check(_spec(p, lat=34.0, lon=-118.0))
+    assert any("both held" in w for w in r.warnings)
+
+
+def test_emission_scale_is_applied_and_reported(tmp_path):
+    p = _table(tmp_path, BASE.format(extra_h="E_NO [molec/cm2/s],E_C5H8 [molec/cm2/s]", v="1e12,1e12"))
+    spec = _spec(p, run_type="lagrangian", dilution="pbl", emission_scale={"NOX": 0.5})
+    t, r = fs.check(spec)
+    assert r.ok and any("NO × 0.5" in i for i in r.info), r.text()
+    rates = fs.emission_rates(t, spec)
+    assert rates["NO"] == pytest.approx(0.5 * rates["C5H8"])
+    _t, r = fs.check(_spec(p, run_type="lagrangian", dilution="pbl", emission_scale={"VOC": -1}))
+    assert any("emission scale" in e for e in r.errors)

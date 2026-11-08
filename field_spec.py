@@ -17,6 +17,8 @@ The table
     E_<species>  emission     unit in brackets, e.g. "E_NO [mol/s]"; else the case's default unit
     B_<species>  background   mixing ratio the air is diluted towards ("B_O3 [ppb]"; ppb by default)
     C_<species>  constraint   mixing ratio the species is held to     ("C_NO [ppt]"; ppb by default)
+    O_<species>  observation  measured, not held: written next to the run for the viewer and the
+                              skill table (bias, R²), so the model can be compared with it
 
 Species names are not checked against a mechanism here and carry no MCM assumption: the mechanism
 is whatever the case's `chemistry` holds (the choices of the Chemistry step: an MCM subset, or an
@@ -94,7 +96,10 @@ _CONDITIONS = {
 }
 _FROM_MEASURED = ("t", "p", "H2O", "RH", "sz")
 _J_STANDARD = {a: k[1:] for k, (al, _u, kind) in mi.COLUMNS.items() if kind == "photolysis" for a in al}
-_PREFIXED = re.compile(r"^([EeBbCc])_([^\[\]\s]+)\s*(?:\[\s*([^\]]+?)\s*\])?$")
+_PREFIXED = re.compile(r"^([EeBbCcOo])_([^\[\]\s]+)\s*(?:\[\s*([^\]]+?)\s*\])?$")
+# emission classes for scale factors: NOX, VOC (every emitted species that is none of these), ALL
+NOX_SPECIES = ("NO", "NO2", "HONO")
+NOT_VOC = NOX_SPECIES + ("CO", "SO2", "NH3", "CH4", "CO2", "H2", "O3", "H2O2")
 _J_NAME = re.compile(r"^[jJ]_?([A-Z0-9][A-Za-z0-9_()]*)$")
 
 
@@ -122,6 +127,7 @@ class FieldSpec:
     initials: Dict[str, float] = field(default_factory=dict)    # ppb
     deposition_velocity_cm_s: Dict[str, float] = field(default_factory=dict)   # loss = v / h
     deposition_lifetime_h: Dict[str, float] = field(default_factory=dict)      # loss = 1 / lifetime
+    emission_scale: Dict[str, float] = field(default_factory=dict)  # species, NOX, VOC or ALL → factor on the E_ columns
     version: int = SPEC_VERSION
 
 
@@ -135,6 +141,7 @@ class FieldTable:
     emission_units: Dict[str, str] = field(default_factory=dict)      # species → unit
     background: Dict[str, np.ndarray] = field(default_factory=dict)   # species → ppb
     constraints: Dict[str, np.ndarray] = field(default_factory=dict)  # species → ppb
+    observations: Dict[str, np.ndarray] = field(default_factory=dict) # species → ppb, measured but not held
     ignored: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     problems: List[Tuple[int, str]] = field(default_factory=list)     # (step, reading error found column by column)
@@ -213,7 +220,7 @@ def load_spec(path: str) -> FieldSpec:
                 clean[k] = float(clean[k])
         if "step_s" in clean:
             clean["step_s"] = int(clean["step_s"])
-        for k in ("initials", "deposition_velocity_cm_s", "deposition_lifetime_h"):
+        for k in ("initials", "deposition_velocity_cm_s", "deposition_lifetime_h", "emission_scale"):
             if k in clean:
                 clean[k] = {str(a).upper(): float(b) for a, b in dict(clean[k]).items()}
         if "chemistry" in clean:
@@ -286,6 +293,21 @@ def parse_initials(text: str) -> Dict[str, float]:
 
 def format_initials(values: Dict[str, float]) -> str:
     return ", ".join(f"{k}={v:g}" for k, v in values.items())
+
+
+def emission_class(species: str) -> str:
+    s = species.upper()
+    return "NOX" if s in NOX_SPECIES else ("OTHER" if s in NOT_VOC else "VOC")
+
+
+def emission_factor(spec: FieldSpec, species: str) -> float:
+    """The scale factor on an emitted species: its own entry, else its class (NOX / VOC), else ALL, else 1."""
+    sc = {k.upper(): float(v) for k, v in (spec.emission_scale or {}).items()}
+    s = species.upper()
+    for key in (s, emission_class(s), "ALL"):
+        if key in sc:
+            return sc[key]
+    return 1.0
 
 
 def chemistry_chosen(spec: FieldSpec) -> bool:
@@ -412,6 +434,7 @@ def read_table(path: str, date: str = "") -> FieldTable:
             used.add(col)
             kind, species, unit = m.group(1).upper(), m.group(2).upper(), m.group(3)
             step = STEP_MIXING if kind == "B" else STEP_SOURCES
+            target = {"B": t.background, "C": t.constraints, "O": t.observations}
             if (kind, species) in seen:
                 t.problems.append((step, f"{species} is given twice: columns '{seen[(kind, species)]}' and '{col}'"))
                 continue
@@ -432,7 +455,7 @@ def read_table(path: str, date: str = "") -> FieldTable:
                 if u == "molec/cm3" and M is None:
                     t.problems.append((step, f"column '{col}': molec/cm3 needs the T and p columns"))
                     continue
-                (t.background if kind == "B" else t.constraints)[species] = _to_ppb(v, u, M)
+                target[kind][species] = _to_ppb(v, u, M)
             continue
         low = str(col).lower()
         j = _J_STANDARD.get(low)
@@ -460,7 +483,7 @@ def emission_rates(table: FieldTable, spec: FieldSpec) -> Dict[str, np.ndarray]:
     for sp, v in table.emissions.items():
         unit = resolve_emission_unit(table, spec, sp)
         need_h, need_a, factor = EMISSION_UNITS[unit]
-        r = v * factor
+        r = v * factor * emission_factor(spec, sp)
         if unit == "ppb/s":
             r = r * M * 1e-9
         if need_h:
@@ -541,6 +564,9 @@ def _check_spec(spec: FieldSpec, r: Report) -> None:
         r.err("the lifetime of unconstrained species must be positive", STEP_MIXING)
     if spec.dilution == "constant" and spec.k_dil_per_h <= 0:
         r.err("dilution 'constant' needs a rate above zero", STEP_MIXING)
+    for key, v in (spec.emission_scale or {}).items():
+        if not np.isfinite(v) or v < 0:
+            r.err(f"emission scale {key}: the factor must be zero or positive", STEP_SOURCES)
     if not chemistry_chosen(spec):
         r.err("no chemistry chosen yet", STEP_CHEMISTRY)
     r.at(STEP_MIXING)
@@ -641,6 +667,15 @@ def _check_table(t: FieldTable, spec: FieldSpec, r: Report) -> None:
         n = int((v[np.isfinite(v)] < 0).sum())
         if n:
             r.warn(f"C_{sp}: {n} negative value(s)")
+    for sp, v in t.observations.items():
+        if sp in t.constraints:
+            r.warn(f"{sp} is both held (C_) and observed (O_): the comparison would show the input itself")
+        if not np.isfinite(v).any():
+            r.warn(f"O_{sp}: no values")
+    if spec.emission_scale:
+        hit = {sp: emission_factor(spec, sp) for sp in t.emissions}
+        r.info.append("emission scale: " + ", ".join(f"{sp} × {f:g}" for sp, f in hit.items() if f != 1.0) if any(f != 1.0 for f in hit.values())
+                      else "emission scale: no emitted species matches " + ", ".join(spec.emission_scale))
 
     r.at(STEP_MIXING)
     if spec.deposition_velocity_cm_s and "h" not in c:
@@ -683,7 +718,7 @@ def _check_table(t: FieldTable, spec: FieldSpec, r: Report) -> None:
         r.warn("columns not used: " + ", ".join(t.ignored)
                + ".  Species need a prefix: E_ emission, B_ background, C_ held to the data", STEP_CASE)
     r.info.append(f"{len(t.constraints)} species held, {len(t.emissions)} emitted, {len(t.background)} with a background, "
-                  f"photolysis frequencies: {len(t.photolysis)}")
+                  f"{len(t.observations)} observed for comparison, photolysis frequencies: {len(t.photolysis)}")
 
 
 def check(spec: FieldSpec) -> Tuple[Optional[FieldTable], Report]:
@@ -725,6 +760,7 @@ _TEMPLATE_HEAD = """# JUICE field case: {title}.  One row per time, UTC.  Comma,
 #                        mol/s and molec/s by h and the footprint area of the case.
 #   B_<species> [unit]   background the air is diluted towards.  Units: ppb (default), ppt, ppm, molec/cm3
 #   C_<species> [unit]   measured value the species is held to.  Same units
+#   O_<species> [unit]   measured value only compared with the model (viewer, skill table).  Same units
 {extra}#
 """
 _TEMPLATES = {

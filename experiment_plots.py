@@ -254,6 +254,24 @@ def write_observation_file(path: str, obs: ObsDict, keys_checked: List[str], dat
     return path
 
 
+def observation_sources(path: str) -> Dict[str, str]:
+    """{key: source} from the '# series:' lines of an observation file (the instrument file of a SAPHIR day,
+    the input table of a field case)."""
+    out: Dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("# series:"):
+                    parts = line.split(":", 1)[1].strip().split("|")
+                    if len(parts) >= 4:
+                        out[parts[0]] = parts[3]
+                elif not line.startswith("#"):
+                    break
+    except OSError:
+        pass
+    return out
+
+
 def read_observation_file(path: str) -> Tuple[ObsDict, List[str], str]:
     """Inverse of write_observation_file → (obs, keys checked, header line)."""
     import csv
@@ -294,6 +312,7 @@ def load_observations(archive_root: str, date: str, keys: Optional[List[str]] = 
     With `cache_dir`, the day's observation file there is used when it exists and covers the keys asked
     for; otherwise the archive is read and the file written (the archive is only needed once per day,
     and the plots work without the Z: drive afterwards).  `status` collects a one-line description."""
+    all_of_file = keys is None                      # no list given: every series the observation file holds
     keys = list(keys or OBS_MAP)
     obs: ObsDict = {}
     note = ""
@@ -302,7 +321,7 @@ def load_observations(archive_root: str, date: str, keys: Optional[List[str]] = 
         try:
             cached, checked, header = read_observation_file(cache)
             if all(k in checked for k in keys):
-                obs = {k: v for k, v in cached.items() if k in keys}
+                obs = dict(cached) if all_of_file else {k: v for k, v in cached.items() if k in keys}
                 note = f"from {os.path.basename(cache)} ({header.split(', extracted')[0].replace('JUICE observations for ', '')})"
             else:
                 note = "observation file lacks " + ", ".join(k for k in keys if k not in checked) + " — re-extracted"

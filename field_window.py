@@ -31,7 +31,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
 from PyQt6.QtGui import QKeySequence, QPixmap
-from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
                              QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                              QMainWindow, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QSplitter,
                              QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget)
@@ -79,6 +79,7 @@ def preview_rows(t: fs.FieldTable, spec: fs.FieldSpec) -> List[Tuple[str, str, s
     rows += [("emission", k, fs.resolve_emission_unit(t, spec, k), *_span(v)) for k, v in t.emissions.items()]
     rows += [("background", k, "ppb", *_span(v)) for k, v in t.background.items()]
     rows += [("held to data", k, "ppb", *_span(v)) for k, v in t.constraints.items()]
+    rows += [("observed", k, "ppb", *_span(v)) for k, v in t.observations.items()]
     return rows
 
 
@@ -241,6 +242,103 @@ class FieldReview(QWidget):
         return out
 
 
+class FieldStudyDialog(QDialog):
+    """Many input tables (one per trajectory or day) run with the open case, optionally over a grid of
+    emission scale factors (NOx, VOC): writes <project>/<name>_study/<name>.study.json and opens the study window."""
+
+    def __init__(self, win: "FieldWindow"):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Many tables as a study"); self.setMinimumWidth(640)
+        v = QVBoxLayout(self)
+        v.addWidget(_info("Every table in the list is run with this case as it is now (chemistry, mixing, deposition, solver). "
+                          "The tables may be one trajectory each, or one day each. Emission factors multiply the E_ columns: "
+                          "NOx = NO, NO2, HONO; VOC = every other emitted species except CO; 1 = as in the table."))
+        h = QHBoxLayout(); h.addWidget(QLabel("Tables"))
+        b = QPushButton("Add files…"); b.clicked.connect(self._add_files); h.addWidget(b)
+        b = QPushButton("Add a folder…"); b.clicked.connect(self._add_folder); h.addWidget(b)
+        b = QPushButton("Remove"); b.clicked.connect(self._remove); h.addWidget(b); h.addStretch(); v.addLayout(h)
+        self.tables = QListWidget(); self.tables.setMinimumHeight(140); self.tables.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        v.addWidget(self.tables)
+        f = QFormLayout()
+        self.name = QLineEdit((self.win.name.text().strip() or "field") + "_study"); f.addRow("Study name", self.name)
+        self.nox = QLineEdit(""); self.nox.setPlaceholderText("e.g. 0.5, 1, 2   or   log 0.1 3 7   (empty: not varied)"); f.addRow("NOx emission × factors", self.nox)
+        self.voc = QLineEdit(""); self.voc.setPlaceholderText("e.g. 0.5, 1, 2   (empty: not varied)"); f.addRow("VOC emission × factors", self.voc)
+        self.workers = QSpinBox(); self.workers.setRange(1, max(1, os.cpu_count() or 2)); self.workers.setValue(max(1, (os.cpu_count() or 2) - 1))
+        f.addRow("Solver processes in parallel", self.workers)
+        v.addLayout(f)
+        self.count = QLabel(""); self.count.setStyleSheet("color: #555555;"); v.addWidget(self.count)
+        for w in (self.nox, self.voc):
+            w.textChanged.connect(self._count)
+        self.tables.model().rowsInserted.connect(self._count); self.tables.model().rowsRemoved.connect(self._count)
+        bb = QHBoxLayout(); bb.addStretch()
+        self.ok = QPushButton("Write the study and open it"); self.ok.setObjectName("primary"); self.ok.clicked.connect(self._go); bb.addWidget(self.ok)
+        c = QPushButton("Cancel"); c.clicked.connect(self.reject); bb.addWidget(c); v.addLayout(bb)
+        if self.win.table.text().strip():
+            self.tables.addItem(self.win.table.text().strip())
+        self._count()
+
+    def _paths(self) -> List[str]:
+        return [self.tables.item(i).text() for i in range(self.tables.count())]
+
+    def _add_files(self):
+        ps, _ = QFileDialog.getOpenFileNames(self, "Input tables", self.win._dialog_dir(), TABLE_FILTER)
+        for p in ps:
+            if p not in self._paths():
+                self.tables.addItem(p)
+
+    def _add_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Folder with input tables", self.win._dialog_dir())
+        if d:
+            for f in sorted(os.listdir(d)):
+                p = os.path.join(d, f)
+                if f.lower().endswith((".csv", ".txt", ".tsv", ".xlsx", ".xls")) and p not in self._paths():
+                    self.tables.addItem(p)
+
+    def _remove(self):
+        for it in self.tables.selectedItems():
+            self.tables.takeItem(self.tables.row(it))
+
+    def axes(self) -> List:
+        import study as S
+        out = []
+        for text, target in ((self.nox.text(), "NOX"), (self.voc.text(), "VOC")):
+            if text.strip():
+                out.append(S.Axis("emission_scale", target, S.parse_values(text)))
+        return out
+
+    def _count(self, *_a):
+        try:
+            import study as S
+            n_pts = len(S.grid_points(self.axes()))
+            n = self.tables.count() * n_pts
+            self.count.setText(f"{self.tables.count()} table(s) × {n_pts} grid point(s) = {n} runs" + ("" if n <= 50 else "   — above 50: check the estimate before starting"))
+            self.ok.setEnabled(n > 0)
+        except ValueError as e:
+            self.count.setText(f"factors not understood: {e}"); self.ok.setEnabled(False)
+
+    def _go(self):
+        import study as S
+        if not self.win.save():
+            return
+        name = re.sub(r"[^A-Za-z0-9_.\-]+", "_", self.name.text().strip()) or "field_study"
+        folder = os.path.join(self.win.folder.text().strip() or self.win.easy_root, name)
+        st = S.new_study(name, folder, self.win.toml)
+        st.field_case, st.tables, st.axes, st.mode = self.win.path, self._paths(), self.axes(), "batch"
+        st.workers = self.workers.value(); st.export_kv_pd = self.win.page_run.kvpd.isChecked()
+        st.solver = solver_from_toml(self.win.toml, self.win.page_run.solver.currentData())
+        st.notes = f"field case {os.path.basename(self.win.path)}: {fs.RUN_TYPES[self.win.run_type()]}"
+        msgs = S.validate_study(st)
+        errors = [m for lvl, m in msgs if lvl == "error"]
+        if errors:
+            QMessageBox.warning(self, "JUICE", "The study cannot be written:\n" + "\n".join(errors[:8])); return
+        os.makedirs(folder, exist_ok=True)
+        self.path = S.save_study(st, os.path.join(folder, name + ".study.json"))
+        p = QProcess(self.win); p.start(sys.executable, [os.path.join(fsc.HERE, "study_window.py"), self.path] + (["-t", self.win.toml] if self.win.toml else []))
+        self.win._studies = getattr(self.win, "_studies", []) + [p]
+        self.accept()
+
+
 class FieldRunPage(QWidget):
     """Last step: write the input files (field_scenario) → run scenario_runner → open the results."""
 
@@ -275,7 +373,10 @@ class FieldRunPage(QWidget):
         hb.addWidget(self.run_btn)
         self.stop_btn = QPushButton("Stop"); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self.stop); hb.addWidget(self.stop_btn)
         self.view_btn = QPushButton("Open results"); self.view_btn.setEnabled(False); self.view_btn.clicked.connect(self.open_results); hb.addWidget(self.view_btn)
-        hb.addStretch(); lay.addLayout(hb)
+        hb.addStretch()
+        self.study_btn = QPushButton("Many tables as a study…"); self.study_btn.clicked.connect(lambda: FieldStudyDialog(self.win).exec())
+        self.study_btn.setToolTip("Run this case with many input tables (one per trajectory or day), optionally over NOx and VOC emission factors.")
+        hb.addWidget(self.study_btn); lay.addLayout(hb)
         self.bar = QProgressBar(); self.bar.setRange(0, 100); self.bar.setValue(0); self.bar.setFormat(""); lay.addWidget(self.bar)
         self.files = QLabel(""); self.files.setWordWrap(True); self.files.setStyleSheet("color: #555555;"); lay.addWidget(self.files)
         self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMinimumHeight(260)
@@ -369,6 +470,14 @@ class FieldRunPage(QWidget):
         except Exception:
             pass
         self._proc = None
+        if ok:
+            try:
+                table = self.win.case[1]
+                if table is not None and table.observations:
+                    rows = fsc.skill_table(self.cs_path(), table)
+                    self.log.append(fsc.skill_text(rows)); fsc.write_skill(self.cs_path(), table)
+            except Exception as e:
+                self.log.append(f"note: skill table not written ({e})")
         self.bar.setValue(100 if ok else 0)
         self.bar.setFormat(f"done   {mm}m {ss:02d}s" if ok else f"failed (exit {code})   {mm}m {ss:02d}s")
         for b, on in ((self.run_btn, True), (self.prep_btn, True), (self.stop_btn, False), (self.view_btn, ok)):
@@ -513,7 +622,11 @@ class FieldWindow(QMainWindow):
         self.held_table = _readonly_table(["Species", "Min [ppb]", "Max [ppb]", "Empty rows"]); v.addWidget(self.held_table)
         v.addWidget(_info("Species held come from the C_<species> columns of the input table. "
                           "Leave out a measured product to compare the model with it afterwards."))
-        return [self.emit_box, self.held_box]
+        self.obs_box = QGroupBox("Observed for comparison"); v = QVBoxLayout(self.obs_box)
+        self.obs_table = _readonly_table(["Species", "Min [ppb]", "Max [ppb]", "Values"]); v.addWidget(self.obs_table)
+        v.addWidget(_info("O_<species> columns are not used by the model. They are written next to the run for the results viewer, "
+                          "and the Run step reports bias, NMB, RMSE and R² against them."))
+        return [self.emit_box, self.held_box, self.obs_box]
 
     def _mixing_page(self) -> List[QWidget]:
         g = QGroupBox("Dilution and background"); v = QVBoxLayout(g); self.mix_form = f = QFormLayout()
@@ -713,14 +826,15 @@ class FieldWindow(QMainWindow):
 
     def _fill_step_tables(self, spec: fs.FieldSpec, t: Optional[fs.FieldTable]):
         if t is None:
-            for w in (self.emit_table, self.held_table, self.back_table):
+            for w in (self.emit_table, self.held_table, self.back_table, self.obs_table):
                 w.setRowCount(0)
-            self.held_box.setVisible(spec.run_type == "constrained")
+            self.held_box.setVisible(spec.run_type == "constrained"); self.obs_box.setVisible(False)
             return
         _fill(self.emit_table, [(k, fs.resolve_emission_unit(t, spec, k), *_span(v)) for k, v in t.emissions.items()])
         _fill(self.held_table, [(k, *_span(v), str(int((~np.isfinite(v)).sum()))) for k, v in t.constraints.items()])
         _fill(self.back_table, [(k, *_span(v)) for k, v in t.background.items()])
-        self.held_box.setVisible(spec.run_type == "constrained" or bool(t.constraints))
+        _fill(self.obs_table, [(k, *_span(v), str(int(np.isfinite(v).sum()))) for k, v in t.observations.items()])
+        self.held_box.setVisible(spec.run_type == "constrained" or bool(t.constraints)); self.obs_box.setVisible(bool(t.observations))
 
     def set_run_state(self, state: str):
         self._state[RUN_STEP] = state

@@ -42,5 +42,6 @@
   },
   "deposition_velocity_cm_s": {},
   "deposition_lifetime_h": {},
+  "emission_scale": {},
   "version": 1
 }

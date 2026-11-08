@@ -20,10 +20,12 @@ INORGANIC = {"inorganic_only": True, "base_mechanism": "MCM_v3.3.1"}
 def night_table(path, rows=13, h="500"):
     """15-min rows, 2021-08-15 06:00 UTC onwards (night in Los Angeles): T, p, RH, h, jNO2 = 0, an emitted and
     diluted CO with a background, NO held to a ramp."""
-    lines = ["time,lat,lon,T,p,RH,h,jNO2,E_CO [molec/cm3/s],B_CO [ppb],C_NO [ppb]"]
+    lines = ["time,lat,lon,T,p,RH,h,jNO2,E_CO [molec/cm3/s],B_CO [ppb],C_NO [ppb],O_CO [ppb]"]
+    M = 1000.0 / (298.0 * fs.DENSITY_CONST); E, k, B, C0 = 1e7, 0.36 / 3600.0, 100.0, 200.0
     for i in range(rows):
         hh, mm = divmod(6 * 60 + 15 * i, 60)
-        lines.append(f"2021-08-15 {hh:02d}:{mm:02d},34.14,-118.13,298,1000,50,{h},0,1e7,100,{1 + 4 * i / (rows - 1):.4f}")
+        co_obs = B + E / k / M * 1e9 + (C0 - B - E / k / M * 1e9) * np.exp(-k * 900 * i)     # the analytic CO as an "observation"
+        lines.append(f"2021-08-15 {hh:02d}:{mm:02d},34.14,-118.13,298,1000,50,{h},0,1e7,100,{1 + 4 * i / (rows - 1):.4f},{co_obs:.6f}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return str(path)
@@ -159,6 +161,10 @@ def test_night_matches_the_analytic_solutions(tmp_path, profile):
     held = np.interp(df["TIME"].to_numpy() - 60.0, table.times_s, table.constraints["NO"]) * 1e-9 * M
     assert np.max(np.abs(df["NO"].to_numpy()[1:] / held[1:] - 1)) < 1e-5
     assert df["KDIL"].iloc[5] == pytest.approx(1e-4) and df["P"].iloc[5] == pytest.approx(1000.0)
+    rows = fsc.skill_table(str(tmp_path / profile / "night.cs"), table)
+    assert len(rows) == 1 and rows[0]["species"] == "CO" and rows[0]["n"] == 13
+    assert abs(rows[0]["nmb"]) < 2e-3 and rows[0]["r2"] > 0.999, rows
+    assert os.path.isfile(fsc.write_skill(str(tmp_path / profile / "night.cs"), table))
 
 
 def test_without_jno2_the_clear_sky_frequencies_are_used(tmp_path):
@@ -171,3 +177,48 @@ def test_without_jno2_the_clear_sky_frequencies_are_used(tmp_path):
     easy = open(res["easy"], encoding="latin-1").read()
     assert "jno2 = PHTFKT_CS(1.165D-02,0.244,-0.267)" in easy and "INPUT(jNO2)" not in easy
     assert "jNO2" not in res["cols"] and 15 < res["cols"]["sz"][30] < 45          # 20:30 UTC: early afternoon in Los Angeles
+
+
+def test_observation_file_is_written_for_the_viewer(tmp_path):
+    import experiment_plots as ep
+    spec = night_spec(night_table(tmp_path / "n.csv"))
+    table = _checked(spec)
+    res = fsc.write_case(spec, table, str(tmp_path / "out"))
+    path = res["observations"]
+    assert os.path.basename(path) == "2021-08-15.observations.csv"
+    obs, checked, header = ep.read_observation_file(path)
+    assert set(obs) == {"CO", "NO"} and all(k in checked for k in ep.OBS_MAP)
+    h, v, label, kind = obs["CO"]
+    assert kind == "ppb" and "measured" in label and h[0] == pytest.approx(6.0) and len(v) == 13
+    assert "held to data" in obs["NO"][2]
+    # the viewer's own loader finds the file next to the result (no archive needed), also for a species no
+    # SAPHIR instrument measures, and knows the series came from the table
+    loaded = ep.load_observations(r"Z:\\nowhere", "2021-08-15", None, ep._midnight_of("2021-08-15"), cache_dir=str(tmp_path / "out"))
+    assert set(loaded) == {"CO", "NO"}
+    table.observations["C5H8"] = np.full(table.n, 0.3)
+    path = fsc.write_observations(str(tmp_path / "out"), spec, table, res["grid"])
+    loaded = ep.load_observations(r"Z:\\nowhere", "2021-08-15", None, ep._midnight_of("2021-08-15"), cache_dir=str(tmp_path / "out"))
+    assert set(loaded) == {"CO", "NO", "C5H8"}
+    assert ep.observation_sources(path) == {"CO": "n.csv", "NO": "n.csv", "C5H8": "n.csv"}
+    # SAPHIR observation files are unchanged by this: only the asked-for keys come back from them
+    assert set(ep.load_observations(r"Z:\\nowhere", "2021-08-15", ["CO"], ep._midnight_of("2021-08-15"), cache_dir=str(tmp_path / "out"))) == {"CO"}
+
+
+def test_skill_table_on_synthetic_output(tmp_path):
+    """A result file in which CO is exactly the observation and HNO3 half of it."""
+    spec = night_spec(night_table(tmp_path / "n.csv"))
+    table = _checked(spec)
+    M = 1000.0 / (298.0 * fs.DENSITY_CONST)
+    t = table.times_s
+    names = ["CO", "M", "HNO3", "T", "P", "NO"]                 # the parser wants at least six space-separated columns
+    lines = ["COLUMN 1=TIME / SEC SINCE 1.1.2000 00:00:00"] + [f"COLUMN {i + 2}={n}" for i, n in enumerate(names)] + \
+            [f"NUMBER OF COLUMNS={len(names) + 1}", "&&&&&&&&&&"]
+    for ti, co in zip(t, table.observations["CO"]):
+        lines.append(f" {ti:.8f} {co * 1e-9 * M:.8E} {M:.8E} {0.5 * co * 1e-9 * M:.8E} 298.0 1000.0 1.0")
+    cs = tmp_path / "fake.cs"; cs.write_text("\n".join(lines) + "\n", encoding="latin-1")
+    table.observations["HNO3"] = table.observations["CO"].copy(); table.observations["X"] = table.observations["CO"].copy()
+    rows = {r["species"]: r for r in fsc.skill_table(str(cs), table)}
+    assert rows["CO"]["bias"] == pytest.approx(0.0, abs=1e-6) and rows["CO"]["r2"] == pytest.approx(1.0)
+    assert rows["HNO3"]["nmb"] == pytest.approx(-0.5) and rows["X"]["note"] == "not in the model output"
+    text = fsc.skill_text(list(rows.values()))
+    assert "CO" in text and "-50.0%" in text

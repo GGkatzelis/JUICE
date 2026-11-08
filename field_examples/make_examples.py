@@ -10,8 +10,8 @@ with their own and keep the structure.  The field window loads them with "Load a
 copies land in the user's project folder, these originals stay as they are.
 
     site_day      constrained site: a 24-h diurnal cycle at a Pasadena-like site, NO, NO2, O3, CO,
-                  isoprene and toluene held to the "measurements"; HCHO deliberately not held, to
-                  compare the model with it afterwards
+                  isoprene and toluene held to the "measurements"; HCHO not held but observed (O_HCHO),
+                  so the run reports the model's skill against it
     plume_ageing  plume or transect: 3 h downwind of a source, the dilution rate from the decay of
                   CO, background air mixed in, initial values of the fresh plume
     la_parcel     Lagrangian air parcel: 4 h from Santa Monica Bay to Pasadena on the sea breeze,
@@ -116,23 +116,24 @@ def site_day(folder: str) -> str:
     co = 170 + 120 * bell(local_h, 7.5, 1.5) + 40 * bell(local_h, 18, 2)
     iso = 0.1 + 2.2 * bell(local_h, 14, 3)
     tol = 0.6 + 1.2 * bell(local_h, 7.5, 1.5) + 0.5 * bell(local_h, 18, 2)
+    hcho_obs = 3.0 + 4.0 * bell(local_h, 15.5, 4.0)                # an invented measurement, compared with the model, not held
     header = COMMON.format(title="Constrained site: one diurnal cycle at a Pasadena-like site") + """
 # The measured species are HELD: at every output step the model takes the value of the table (interpolated);
 # radicals and everything not listed run free with the lifetime set in the case (24 h) and the first day
-# is repeated once as spin-up (case: spin_up_days = 1).  HCHO is deliberately NOT held: compare the modelled
-# HCHO with your measurement afterwards.  Columns h is informative here (no emissions, no dilution).
+# is repeated once as spin-up (case: spin_up_days = 1, lifetime of species not held 6 h).  HCHO is NOT held: its O_HCHO column is
+# only compared with the model (results viewer, skill table of the Run step).  Column h is informative here.
 #"""
     cols = {"time": [stamp(s) for s in sec], "lat": np.full(49, lat), "lon": np.full(49, lon), "T": T, "p": np.full(49, 985.0),
             "RH": RH, "h": h, "jNO2": j, "C_NO [ppb]": no, "C_NO2 [ppb]": no2, "C_O3 [ppb]": o3, "C_CO [ppb]": co,
-            "C_C5H8 [ppb]": iso, "C_TOLUENE [ppb]": tol}
+            "C_C5H8 [ppb]": iso, "C_TOLUENE [ppb]": tol, "O_HCHO [ppb]": hcho_obs}
     os.makedirs(folder, exist_ok=True)
     table = os.path.join(folder, "site_day.csv")
     write_table(table, header, cols, {"jNO2": ".3e", "T": ".1f", "RH": ".1f", "h": ".0f"})
     spec = fs.FieldSpec(name="site_day", run_type="constrained", table=table, site="Pasadena-like site (synthetic)",
-                        description="Synthetic diurnal cycle; NO, NO2, O3, CO, isoprene and toluene held; HCHO free for comparison.",
+                        description="Synthetic diurnal cycle; NO, NO2, O3, CO, isoprene and toluene held; HCHO observed for comparison.",
                         chemistry={"base_mechanism": "MCM_v3.3.1", "addons": [], "precursors": ["C5H8", "TOLUENE"], "mechanism_stem": "",
                                    "inorganic_only": False, "include_dirs": [], "reaction_adjustments": []},
-                        step_s=60, dilution="none", spin_up_days=1.0, generic_lifetime_h=24.0)
+                        step_s=60, dilution="none", spin_up_days=1.0, generic_lifetime_h=6.0)
     return fs.save_spec(spec, os.path.join(folder, "site_day"))
 
 

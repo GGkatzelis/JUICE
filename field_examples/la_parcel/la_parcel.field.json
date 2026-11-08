@@ -45,5 +45,6 @@
     "HNO3": 2.0
   },
   "deposition_lifetime_h": {},
+  "emission_scale": {},
   "version": 1
 }

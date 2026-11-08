@@ -8,7 +8,7 @@ the case and its table are copied into your project folder, and the copy is your
 
 | folder | kind | what it shows |
 |---|---|---|
-| `site_day/` | Constrained site | A 24-h diurnal cycle: NO, NO2, O3, CO, isoprene and toluene held to the table (`C_` columns), one spin-up day, a 24-h lifetime for everything not held. HCHO is not held, so the modelled HCHO can be compared with a measurement. |
+| `site_day/` | Constrained site | A 24-h diurnal cycle: NO, NO2, O3, CO, isoprene and toluene held to the table (`C_` columns), one spin-up day, a 24-h lifetime for everything not held. HCHO is not held but observed (`O_HCHO`), so the Run step reports the model's skill against it and the viewer shows both. |
 | `plume_ageing/` | Plume or transect | 3 h downwind of a source. The dilution rate comes from the decay of the tracer CO above its background (`dilution = tracer`), and CO itself is held to its column; `B_` columns give the air mixed in; the fresh plume is the case's initial values. |
 | `la_parcel/` | Lagrangian air parcel | 4 h from Santa Monica Bay to Pasadena: lat/lon per row, boundary-layer height `h`, emissions in mol/s over an 8 × 8 km footprint (`E_` columns, `area_km2 = 64`), growth of the layer as dilution towards the `B_` background, deposition velocities for O3 and HNO3. |
 
@@ -33,6 +33,7 @@ explain every column; in short
 | `E_<species> [unit]` | emission |
 | `B_<species> [unit]` | background the air is diluted towards |
 | `C_<species> [unit]` | measured value the species is held to |
+| `O_<species> [unit]` | measured value only compared with the model (results viewer, skill table) |
 
 Species names are those of the mechanism (MCM: `C5H8` isoprene, `TOLUENE`, `C2H5OH` ethanol, …).
 Emissions are held from one row to the next; everything else is interpolated to the output step.

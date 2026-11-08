@@ -98,8 +98,8 @@ python field_scenario.py case.field.json --run   # the same without the window
 The field path has the same five steps as the chamber window, with one input table in place of the
 chamber's archive: one row per time with the conditions (T, p, H2O or RH, lat/lon, boundary-layer
 height h, kdil), photolysis columns (jNO2 …) and species columns `E_<species>` (emission),
-`B_<species>` (background the air is diluted towards) and `C_<species>` (held to the measurement),
-each with an optional unit in brackets. Three kinds of run share the table:
+`B_<species>` (background the air is diluted towards), `C_<species>` (held to the measurement) and
+`O_<species>` (measured only for comparison), each with an optional unit in brackets. Three kinds of run share the table:
 
 | kind | what is held / added | typical question |
 |---|---|---|
@@ -112,7 +112,11 @@ each with an optional unit in brackets. Three kinds of run share the table:
 2. **Chemistry**: the chamber window's chemistry step (MCM subset or an existing mechanism include set).
 3. **Emissions and constraints**: what the table emits or holds, against time.
 4. **Mixing and deposition**: dilution source, background, deposition velocities or lifetimes, initial values.
-5. **Run**: input files, solver, results viewer.
+5. **Run**: input files, solver, results viewer. The `O_` columns are written next to the run in the viewer's
+   observation format and the log reports bias, NMB, RMSE and R² against them (`<name>_skill.csv`).
+   "Many tables as a study…" runs the case with a folder of input tables (one per trajectory or day),
+   optionally over NOx and VOC emission factors, in the study window: a field study (`field_case` and
+   `tables` in the `.study.json`; `python study_runner.py` runs it from the command line as well).
 
 Three synthetic examples, one per kind of run, are in [field_examples/](field_examples/) with a commented
 table each ("Load an example" copies one into your project folder; the README there explains the columns).

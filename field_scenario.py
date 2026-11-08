@@ -17,6 +17,8 @@ EASY statements, so FACSIMILE can run the same files:
                    (idl_parser / scenario_runner hold such a species per ENZ row, as FACSIMILE does)
     deposition     X -->   k = CONST(v/(HPBL*100.))  or  CONST(1/tau)
     spin-up        constrained site: the table is repeated before the start, period = whole days
+    observations   O_ and C_ columns go to <day>.observations.csv next to the run (the results viewer
+                   shows them with the model); skill_table() gives bias, NMB, RMSE and R² per species
 
     res = write_case(spec, table, out_dir)        # <name>.enz, <name>.easy, chemistry/, <name>.field.json
     path = prepare(spec, table, out_dir, include_dir, toml_path, solver)   # + scenario JSON
@@ -35,6 +37,7 @@ import numpy as np
 
 import field_spec as fs
 import mechanism_registry as mreg
+import experiment_plots as _ep
 from easy_builder import J_INPUTS, MeasuredRow, default_form, render_form
 from enz_builder import compute_solar_zenith, write_enz
 from experiment_spec import CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME
@@ -155,6 +158,86 @@ def enz_columns(spec: fs.FieldSpec, table: fs.FieldTable) -> Tuple[np.ndarray, D
     return grid, cols, notes
 
 
+# ── observations for the viewer, skill of a run ──────────────────────────────────────────────────
+def observation_day(grid: np.ndarray) -> str:
+    import datetime as dt
+    return dt.datetime.fromtimestamp(float(grid[0]) + 946684800.0, dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def write_observations(folder: str, spec: fs.FieldSpec, table: fs.FieldTable, grid: np.ndarray) -> str:
+    """<day>.observations.csv in the run folder, the viewer's own format (experiment_plots): the O_ and C_
+    columns in ppb, hours since 00:00 UTC of the run's first day.  Returns '' when there is nothing to write."""
+    series = [(sp, v, "measured") for sp, v in table.observations.items()] + [(sp, v, "held to data") for sp, v in table.constraints.items()]
+    if not series:
+        return ""
+    day = observation_day(grid)
+    midnight = _ep._midnight_of(day)
+    hours = (table.times_s + 946684800.0 - midnight) / 3600.0
+    lines = [f"# JUICE observations for {day}, written by field_scenario.py from {os.path.basename(spec.table)} (field case {spec.name})",
+             "# hour_utc = hours since 00:00 UTC of that day; value in ppb (model: number density / M * 1e9)",
+             "# checked: " + ",".join(sorted(set(_ep.OBS_MAP) | {sp for sp, _v, _k in series}))]
+    for sp, v, kind in series:
+        ok = np.isfinite(v)
+        lines.append(f"# series: {sp}|{sp} ({kind}, {os.path.basename(spec.table)})|ppb|{os.path.basename(spec.table)}|{sp}|ppb|1|{int(ok.sum())}")
+    lines.append("hour_utc,key,value")
+    for sp, v, _kind in series:
+        ok = np.isfinite(v)
+        lines.extend(f"{h:.6f},{sp},{x:.8g}" for h, x in zip(hours[ok], v[ok]))
+    path = _ep.observation_file(folder, day)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
+def skill_table(cs_path: str, table: fs.FieldTable) -> List[Dict[str, float]]:
+    """Model against the O_ columns: n, means, bias, normalised mean bias (Stockwell et al.: mean model / mean
+    observation - 1), RMSE and R² per species, the model interpolated to the observation times.  ppb."""
+    from run_benchmark import parse_cs_file
+    d = parse_cs_file(cs_path)
+    t = d["TIME"].to_numpy(float); M = d["M"].to_numpy(float) if "M" in d.columns else None
+    out: List[Dict[str, float]] = []
+    for sp, obs in table.observations.items():
+        if sp not in d.columns or M is None:
+            out.append({"species": sp, "n": 0, "note": "not in the model output"}); continue
+        model = np.interp(table.times_s, t, d[sp].to_numpy(float) / M * 1e9, left=np.nan, right=np.nan)
+        ok = np.isfinite(obs) & np.isfinite(model)
+        n = int(ok.sum())
+        if n < 2:
+            out.append({"species": sp, "n": n, "note": "fewer than two overlapping values"}); continue
+        o, m = obs[ok], model[ok]
+        row = {"species": sp, "n": n, "obs_mean": float(o.mean()), "model_mean": float(m.mean()), "bias": float((m - o).mean()),
+               "nmb": float(m.mean() / o.mean() - 1.0) if o.mean() else float("nan"), "rmse": float(np.sqrt(((m - o) ** 2).mean())),
+               "r2": float(np.corrcoef(o, m)[0, 1] ** 2) if o.std() > 0 and m.std() > 0 else float("nan")}
+        out.append(row)
+    return out
+
+
+def write_skill(cs_path: str, table: fs.FieldTable) -> str:
+    """<name>_skill.csv next to the result; '' when the table has no O_ columns."""
+    rows = skill_table(cs_path, table)
+    if not rows:
+        return ""
+    import csv
+    path = cs_path[:-3] + "_skill.csv"
+    keys = ["species", "n", "obs_mean", "model_mean", "bias", "nmb", "rmse", "r2", "note"]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=keys); w.writeheader()
+        for r in rows:
+            w.writerow({k: (f"{v:.4g}" if isinstance(v, float) else v) for k, v in r.items()})
+    return path
+
+
+def skill_text(rows: List[Dict[str, float]]) -> str:
+    lines = ["model vs observations (ppb): species  n  obs mean  model mean  bias  NMB  RMSE  R²"]
+    for r in rows:
+        if r.get("note"):
+            lines.append(f"  {r['species']:10s} {r['n']:4d}  {r['note']}")
+        else:
+            lines.append(f"  {r['species']:10s} {r['n']:4d}  {r['obs_mean']:9.3g} {r['model_mean']:10.3g} {r['bias']:7.3g} {r['nmb']:+6.1%} "
+                         f"{r['rmse']:7.3g} {r['r2']:5.2f}")
+    return "\n".join(lines)
+
+
 # ── EASY ─────────────────────────────────────────────────────────────────────────────────────────
 def chemistry_spec(spec: fs.FieldSpec) -> ExperimentSpec:
     """The chamber generator's description of the chemistry (its mechanism subset code is reused)."""
@@ -189,6 +272,9 @@ def field_statements(spec: fs.FieldSpec, table: fs.FieldTable, cols: Dict[str, n
         out.append("; species held to the measurement (ppb), set at every ENZ row")
         for sp in held:
             out += [f"C_{sp} = INPUT(C_{sp})", f"{sp} = CONST(C_{sp}*1e-9*M)"]
+    if spec.emission_scale:
+        out.append("; emission scale factors of this run: " + ", ".join(f"{k} × {v:g}" for k, v in spec.emission_scale.items())
+                   + " (applied to the QE_ columns)")
     if spec.deposition_velocity_cm_s or spec.deposition_lifetime_h:
         out.append("; deposition as a first-order loss")
         for sp, v in spec.deposition_velocity_cm_s.items():
@@ -268,7 +354,8 @@ def write_case(spec: fs.FieldSpec, table: fs.FieldTable, out_dir: str) -> dict:
     with open(easy, "w", encoding="latin-1", errors="replace", newline="\n") as fh:
         fh.write(easy_text(spec, table, chem, cols))
     res.update({"enz": enz, "easy": easy, "notes": notes, "grid": grid, "cols": cols,
-                "spec_path": fs.save_spec(spec, os.path.join(out_dir, spec.name + fs.SPEC_SUFFIX))})
+                "spec_path": fs.save_spec(spec, os.path.join(out_dir, spec.name + fs.SPEC_SUFFIX)),
+                "observations": write_observations(out_dir, spec, table, grid)})
     return res
 
 
@@ -315,7 +402,13 @@ def main(argv=None) -> int:
     for n in res["notes"]:
         print("note:", n)
     print("prepared", path)
-    return run(path, toml) if a.run else 0
+    if not a.run:
+        return 0
+    rc = run(path, toml)
+    cs = os.path.join(out, spec.name + ".cs")
+    if rc == 0 and table.observations and os.path.isfile(cs):
+        print(skill_text(skill_table(cs, table))); print("written", write_skill(cs, table))
+    return rc
 
 
 if __name__ == "__main__":
