@@ -180,6 +180,7 @@ python study_runner.py path\to\<name>.study.json --workers 4 --yes        # a st
 python scenario_runner.py path\to\<name>.json --solver precise            # the same run, precise profile
 python run_benchmark.py --workers 4                                       # JUICE vs FACSIMILE, scene_01..09
 python run_benchmark.py --workers 4 --solver precise                      # ... with the precise profile
+python run_benchmark.py --workers 4 --solver twostep                      # ... with Verwer's TWOSTEP (no Jacobian)
 python compare_juice_facsimile.py scene_04 --tol 0.02 --no-stop --juice-dir "MCM_tested_scenarios\JUICE archive\JUICE\benchmark\fast\scene_04"
 ```
 `<name>.json` is the scenario the Run step writes next to the experiment's EASY and ENZ files. The
@@ -304,11 +305,13 @@ known limitation in [architecture.md](architecture.md), section A6.
 
 The table is the **fast** solver profile, the default.
 
-### Solver profiles: fast or precise
+### Solver profiles: fast, precise or twostep
 
-JUICE has two validated ways to solve the same chemistry. Choose one in the Run step of the
-experiment window, in the study window (one profile per study), or with `--solver fast|precise` on
-`scenario_runner.py` and `run_benchmark.py`. The default is `profile` in `FR_GUI.toml [solver]`.
+JUICE has three validated ways to solve the same chemistry. Choose one in the Run step of the
+experiment or field window, in the study window (one profile per study), or with
+`--solver fast|precise|twostep` on `scenario_runner.py` and `run_benchmark.py`. The default is
+`profile` in `FR_GUI.toml [solver]`. Fast and precise are scipy's BDF with the exact sparse Jacobian;
+twostep is Verwer's TWOSTEP, which needs no Jacobian (see below).
 
 | | **fast** (default) | **precise** |
 |---|---|---|
@@ -325,6 +328,32 @@ detection limit). In the small mechanisms (scene_04/05) fast is even slightly ti
 `run_benchmark.py` reports scene_04 as FAIL: sulfuric acid (SA), peaking far below 1 ppt, is 96 % off.
 Compare runs only within one profile: the difference between the profiles (up to 0.5 %) is larger
 than the difference between two runs with the same profile.
+
+**twostep** is the solver of the GECKO-A box model: Verwer's TWOSTEP (SIAM J. Sci. Comput. 15, 1243,
+1994; Verwer and Simpson 1995), a variable-step BDF2 whose implicit stage is solved by a fixed number
+of fixed-point sweeps y ← (w + gP)/(1 + gL) on the production/loss form instead of Newton iterations
+with an LU factorisation. No Jacobian is built, so the cost per step is three rate evaluations and the
+run time grows with the number of reactions rather than with the fill-in of the Jacobian factorisation
+— the term that stops BDF in GECKO-A mechanisms (toluene GECKO-A, 79 000 species: 73 min against
+15 h; 118 000 species / 469 000 reactions: 2.5 h, where BDF did not finish in 20 h). It restarts at
+every ENZ row (implicit Euler), rtol 1e-3 with Verwer's max-norm error test, atol floor 100. Written
+by Franz Rohrer ([twostep_solver.py](twostep_solver.py), an independent Python implementation of the
+published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026): every species above
+1 ppt in scenes 04–09 within 0.72 % (fast: 0.56 %), and in scenes 06, 07 and 09 *more* species within
+0.1 % than fast; the median deviation from fast over all species above 1e7 molecules/cm³ is 0.05–0.07 %.
+Below ~1e5 molecules/cm³ (0.004 ppt) it shares the cold-restart artefact of precise, in a milder form:
+a transient at an injection row can leave a species that should hold 3 molecules/cm³ at a few thousand
+(SA in scene_08, DHPMPAL in scene_07), so `run_benchmark.py` at its 100-molecule floor reports FAILs
+there, exactly as it does for precise. Its run time depends on the chemistry of the day, not on the
+mechanism size: on an idle machine scene_06 (limonene, 747 species) takes 9 s against 81 s with fast,
+scene_08 (isoprene, 612 species) 33 s against 24 s and scene_09 (isoprene, 3228 species) 6.2 min
+against 2.7 min. On the isoprene days two peroxy radicals at ~1e6 molecules/cm³ (CISOPAO2, ISOPBO2)
+change by ~1 % per second and, under the max-norm error test, hold the step below a second for most of
+the day — 200 steps per 60-s row against 28 in scene_06, with ~4000 marginal rejections — where BDF at
+order 5 strides through. Its purpose is the mechanism BDF cannot run. Per-ENZ-row mode only;
+`JUICE_TS_CHECK=1` verifies at every row start
+that P − L·y equals the BDF right-hand side, `JUICE_TS_ROWS=430,431` additionally integrates those rows
+with BDF at rtol 1e-8 and prints the largest deviations.
 
 Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
 experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
@@ -349,6 +378,7 @@ study_window.py, study.py    studies; study_runner.py runs one from the command 
 facsimile_import.py          reads an experiment set up for FACSIMILE (.easy + ENZ) into the experiment description
 experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
 scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
+twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BDF2 with fixed-point sweeps, no Jacobian
 scenario_runner.py           the solver
 chambers.py, chambers/       chamber profiles
 lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)

@@ -50,9 +50,11 @@ def pick_toml(argv) -> str:
 
 
 # ── Solver profiles ──────────────────────────────────────────────────────────
-# Two validated ways to run the same chemistry.  Both agree with FACSIMILE far inside the 2 % benchmark
-# tolerance for every species that reaches 1 ppt (benchmark 2026-11-04, scenes 04-09); they differ in
-# run time and in how tightly they track FACSIMILE.  The TOML may override the numbers in
+# Three validated ways to run the same chemistry.  All agree with FACSIMILE far inside the 2 % benchmark
+# tolerance for every species that reaches 1 ppt (benchmark 2026-11-04 / 2026-11-09, scenes 04-09); they
+# differ in run time and in how tightly they track FACSIMILE.  'fast' and 'precise' are scipy BDF with
+# the exact Jacobian; 'twostep' is Verwer's TWOSTEP (twostep_solver.py, F. Rohrer), which needs no Jacobian
+# and therefore scales to GECKO-A mechanisms with 1e5 species.  The TOML may override the numbers in
 # [solver.profiles.<name>]; the names and these defaults are the reference.
 SOLVER_PROFILES: Dict[str, dict] = {
     "fast": {
@@ -70,8 +72,22 @@ SOLVER_PROFILES: Dict[str, dict] = {
                    "Rare large relative excursions (up to 5x) in species below 0.01 ppt. "
                    "For validation against FACSIMILE and reference runs.",
     },
+    "twostep": {
+        "rtol": 1e-3, "perstep_warm": False,
+        "solver_method": "TWOSTEP", "twostep_numit": 3, "twostep_dtmin": 1e-4,
+        "label": "TWOSTEP (Verwer 1994, rtol 1e-3, no Jacobian)",
+        "summary": "For large mechanisms (GECKO-A, above ~10 000 species): no Jacobian and no LU factorisation, "
+                   "so the run time grows with the number of reactions, not with the fill-in of the Jacobian "
+                   "(toluene GECKO-A with 79 000 species: 73 min instead of 15 h). BDF2 with three fixed-point "
+                   "sweeps per step, cold restart at every ENZ row. Against FACSIMILE every species above 1 ppt "
+                   "within 0.72 % (scenes 04-09); species below 0.004 ppt can carry a restart transient of a few "
+                   "thousand molecules/cm3, as under 'precise'. In MCM-sized mechanisms between 9x faster "
+                   "(scene_06) and 2.3x slower (isoprene days, whose fast-changing RO2 force sub-second steps) "
+                   "than 'fast'; the profile for mechanisms BDF cannot run.",
+    },
 }
 DEFAULT_PROFILE = "fast"
+PROFILE_KEYS = ("solver_method", "twostep_numit", "twostep_dtmin")      # profile keys beyond rtol / perstep_warm
 
 
 def _tobool(v) -> bool:
@@ -106,7 +122,14 @@ def resolve_profile(sol: dict, profile: str | None = None) -> dict:
         raise ValueError(f"unknown solver profile '{name}' (choose {', '.join(SOLVER_PROFILES)})")
     p = dict(SOLVER_PROFILES[name])
     p.update((sol.get("profiles", {}) or {}).get(name, {}))
-    return {"solver_profile": name, "rtol": float(p["rtol"]), "perstep_warm": _tobool(p["perstep_warm"])}
+    out = {"solver_profile": name, "rtol": float(p["rtol"]), "perstep_warm": _tobool(p["perstep_warm"])}
+    if "solver_method" in p:
+        out["solver_method"] = str(p["solver_method"]).strip().upper()
+    if "twostep_numit" in p:
+        out["twostep_numit"] = int(float(p["twostep_numit"]))
+    if "twostep_dtmin" in p:
+        out["twostep_dtmin"] = float(p["twostep_dtmin"])
+    return out
 
 
 def solver_profiles(toml_path: str = "") -> Dict[str, dict]:
@@ -126,7 +149,7 @@ def default_profile(toml_path: str = "") -> str:
 def solver_from_toml(toml_path: str, profile: str | None = None) -> dict:
     """The solver keys scenario_runner reads from the scenario JSON (not from the TOML),
     taken from the TOML's [solver] section so every run uses a validated set.
-    `profile` ('fast' | 'precise') overrides the TOML's [solver] profile.
+    `profile` ('fast' | 'precise' | 'twostep') overrides the TOML's [solver] profile.
     Fallbacks are the validated values, never the runner's own (python / linear / 1e-2)."""
     sol = _read_solver_section(toml_path)
 
@@ -135,12 +158,12 @@ def solver_from_toml(toml_path: str, profile: str | None = None) -> dict:
             return float(sol.get(key, default))
         except (TypeError, ValueError):
             return default
-    return {**resolve_profile(sol, profile),
-            "ode_backend": str(sol.get("ode_backend", "numba")),
+    return {"ode_backend": str(sol.get("ode_backend", "numba")),
             "solver_method": str(sol.get("solver_method", "BDF")),
             "jac_mode": str(sol.get("jac_mode", "analytic")),
             "interpolation": str(sol.get("interpolation", "piecewise")),
-            "first_step": _f("first_step", 1e-6)}
+            "first_step": _f("first_step", 1e-6),
+            **resolve_profile(sol, profile)}                 # a profile may bring its own solver_method (twostep)
 
 
 def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, toml_path: str = "",

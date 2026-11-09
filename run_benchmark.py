@@ -214,7 +214,7 @@ def main(argv=None) -> int:
     ap.add_argument("--kv-pd", action="store_true", help="export and compare k/v values too (slower)")
     ap.add_argument("--toml", default="", help="settings file for the solver (default FR_GUI.toml), "
                                                "e.g. to compare two solver sets")
-    ap.add_argument("--solver", choices=["fast", "precise"], default=None,
+    ap.add_argument("--solver", choices=["fast", "precise", "twostep"], default=None,
                     help="solver profile (default: the TOML's [solver] profile). fast = rtol 1e-4, warm; "
                          "precise = rtol 1e-6, cold restart per ENZ row, ~2x slower, tightest agreement")
     a = ap.parse_args(argv)
@@ -226,7 +226,7 @@ def main(argv=None) -> int:
     sys.path.insert(0, HERE)
     import scenario_prep as sp
     profile = sp.solver_from_toml(TOML, PROFILE)
-    PROFILE_DESC = (f"{profile['solver_profile']} (rtol {profile['rtol']:g}, "
+    PROFILE_DESC = (f"{profile['solver_profile']} ({profile['solver_method']}, rtol {profile['rtol']:g}, "
                     f"{'warm continuation' if profile['perstep_warm'] else 'cold restart per ENZ row'})")
     print(f"solver profile: {PROFILE_DESC}")
     available = reference_scenes()

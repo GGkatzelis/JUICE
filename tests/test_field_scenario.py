@@ -140,7 +140,7 @@ def test_held_species_are_not_misread_in_a_chamber_scenario(tmp_path):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("profile", ["fast", "precise"])
+@pytest.mark.parametrize("profile", ["fast", "precise", "twostep"])
 def test_night_matches_the_analytic_solutions(tmp_path, profile):
     """Dark inorganic chemistry: CO = B + E/k + (C0 - B - E/k) e^-kt, HNO3 decays with 1/tau + k, NO follows the
     held ramp with FACSIMILE's row convention (the value of a row is the one read at its start)."""

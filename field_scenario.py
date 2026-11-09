@@ -386,7 +386,7 @@ def main(argv=None) -> int:
     ap.add_argument("case", help="<name>.field.json")
     ap.add_argument("--out", default="", help="output folder (default: <output_root>/<name>)")
     ap.add_argument("--run", action="store_true", help="also run the solver")
-    ap.add_argument("--solver", choices=["fast", "precise"], default=None)
+    ap.add_argument("--solver", choices=["fast", "precise", "twostep"], default=None)
     ap.add_argument("--no-kv-pd", action="store_true", help="skip the reaction-rate export")
     ap.add_argument("-t", "--toml", default="")
     a = ap.parse_args(argv)

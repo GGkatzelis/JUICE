@@ -1666,6 +1666,43 @@ class ScenarioRunner:
                             result[_name] = float(_ys[_idx])
             return result
 
+        # ── Terms outside the reaction list, shared by system_ode (BDF) and TWOSTEP ──────
+        def _dilution_rate(t_abs, ctx):
+            """Analytical first-order dilution (s-1) when no explicit +DIL reactions handle it; 0 otherwise.
+            TWOSTEP's loss term; system_ode applies the same numbers in its own (bit-stable) order."""
+            if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
+                _dil_switch = float(ctx.get('DIL', 1.0))   # DIL=0 disables dilution
+                if _dil_switch != 0.0:
+                    _flow = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
+                    return (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600) * _dil_switch
+            return 0.0
+
+        def _extra_sources(t_abs, ctx, out):
+            """Continuous sources, burst injections and H2O impurities (molec cm-3 s-1) added to `out`
+            (dydt for the BDF path, the production vector P for TWOSTEP)."""
+            for s in cont_sources:
+                out[s['idx']] += eval(s['code'], globals(), ctx)
+            for b in burst_eval:
+                if b['profile'] == 'tworeaction':
+                    if b['start_s'] <= t_abs <= b['start_s'] + b['dur']:
+                        out[b['idx1']] += b['rate1']
+                        out[b['idx2']] += b['rate2']
+                elif b['profile'] == 'saturating':
+                    dt = t_abs - b['start_s']
+                    if 0.0 <= dt <= b['dur']:
+                        rate = b['coeff'] * np.exp(-b['lam'] * dt)
+                        out[b['idx']] += rate
+                        if b['byp_idx'] is not None:
+                            out[b['byp_idx']] += rate * b['byp_frac']
+                else:  # gaussian
+                    rate = b['coeff'] * np.exp(-0.5 * ((t_abs - b['mu']) / b['sigma'])**2)
+                    out[b['idx']] += rate
+                    if b['byp_idx'] is not None:
+                        out[b['byp_idx']] += rate * b['byp_frac']
+            for imp in h2o_imps:
+                if imp['start_s'] <= t_abs <= imp['start_s'] + imp['dur']:
+                    out[imp['idx']] += imp['rate']
+
         def system_ode(t, y):
             _t0 = time.perf_counter()
             y = np.maximum(y, 0.0)
@@ -1818,30 +1855,7 @@ class ScenarioRunner:
             # and a delta function at the boundary — a continuous correction
             # cannot capture this correctly.
 
-            for s in cont_sources:
-                dydt[s['idx']] += eval(s['code'], globals(), ctx)
-
-            for b in burst_eval:
-                if b['profile'] == 'tworeaction':
-                    if b['start_s'] <= t_abs <= b['start_s'] + b['dur']:
-                        dydt[b['idx1']] += b['rate1']
-                        dydt[b['idx2']] += b['rate2']
-                elif b['profile'] == 'saturating':
-                    dt = t_abs - b['start_s']
-                    if 0.0 <= dt <= b['dur']:
-                        rate = b['coeff'] * np.exp(-b['lam'] * dt)
-                        dydt[b['idx']] += rate
-                        if b['byp_idx'] is not None:
-                            dydt[b['byp_idx']] += rate * b['byp_frac']
-                else:  # gaussian
-                    rate = b['coeff'] * np.exp(-0.5 * ((t_abs - b['mu']) / b['sigma'])**2)
-                    dydt[b['idx']] += rate
-                    if b['byp_idx'] is not None:
-                        dydt[b['byp_idx']] += rate * b['byp_frac']
-
-            for imp in h2o_imps:
-                if imp['start_s'] <= t_abs <= imp['start_s'] + imp['dur']:
-                    dydt[imp['idx']] += imp['rate']
+            _extra_sources(t_abs, ctx, dydt)
 
             if _held_idx.size:
                 dydt[_held_idx] = 0.0
@@ -1940,6 +1954,21 @@ class ScenarioRunner:
                      else 'per-ENZ-row' if _perstep_snap else 'continuous')
         print(f"  [SOLVER] mode={_mode_lbl}  "
               f"solver={solver_method}  jac={_jac_mode}")
+
+        # ── TWOSTEP (Verwer 1994, the GECKO-A box-model solver) as alternative backend ──
+        # dy/dt = P - L*y, BDF2 whose implicit stage is approximated by a fixed number of
+        # Jacobi iterations: no Jacobian, no LU.  Works per ENZ row only (settings and k
+        # frozen by the snapshot, implicit-Euler restart at every row start).  Module
+        # twostep_solver.py (F. Rohrer); profile 'twostep' in scenario_prep.
+        _use_twostep = str(solver_method).strip().upper() == 'TWOSTEP'
+        if _use_twostep:
+            if not _perstep_snap:
+                print("  [SOLVER] TWOSTEP needs the per-ENZ-row mode -> perstep_snap forced ON")
+                _perstep_snap = True
+            _ts_numit = int(float(self.cfg.get('twostep_numit', _solver_toml.get('twostep_numit', 3))))
+            _ts_dtmin = float(self.cfg.get('twostep_dtmin', _solver_toml.get('twostep_dtmin', 1e-4)))
+            print(f"  [SOLVER] TWOSTEP: numit={_ts_numit}  dtmin={_ts_dtmin:g}s  dtmax=hmax  "
+                  f"(no Jacobian; jac_mode/perstep_warm/first_step ignored)")
 
         # ── Per-row rate-constant cache (per-ENZ-row modes only) ─────────────────
         # Inside a row every setting is frozen by the snapshot, so k depends on y
@@ -2232,7 +2261,123 @@ class ScenarioRunner:
             else:
                 print(f"  [SOLVER] first_step={_fs_val:.2e}s (from TOML, ignored in continuous mode)")
 
-        if _perstep_snap and _perstep_warm:
+        if _perstep_snap and _use_twostep:
+            # ── Per-ENZ-row mode, TWOSTEP (Verwer 1994 / GECKO-A box model) ──────
+            # Every ENZ row is integrated with twostep_solver.twostep on the P/L form of
+            # the same stoichiometry arrays the numba kernel uses.  Per row: settings
+            # snapshot (_make_snap, which also sets the held species), k from the per-row
+            # cache (or frozen at the row start when a rate expression references a
+            # species), env reactants (HV, DIL, Q*, O1D ...) from the snapshot,
+            # implicit-Euler restart at the row start (cheap: no Jacobian), output at
+            # t1, thermal expansion as in the BDF branches.  Continuous sources, bursts
+            # and the analytical dilution enter through _extra_sources / _dilution_rate;
+            # held species get P = L = 0, which keeps them at the row-start value exactly.
+            from twostep_solver import PLSystem as _PLSystem, twostep as _twostep
+            _ts_ctx = SafeDict()            # row context: frozen settings + row-start species
+            _ts_kd  = [0.0]                 # analytical dilution rate of the row
+
+            def _ts_extra_P(t_abs, y, P):
+                _extra_sources(t_abs, _ts_ctx, P)
+                if _held_idx.size:
+                    P[_held_idx] = 0.0
+
+            def _ts_extra_L(t_abs, y, L):
+                if _ts_kd[0] != 0.0:
+                    L += _ts_kd[0]
+                if _held_idx.size:
+                    L[_held_idx] = 0.0
+
+            _ts_pl = _PLSystem(self.solver.num_species, _k_buf, _env_vals_buf,
+                               (_ode_r_rxn, _ode_r_sp, _ode_r_coeff,
+                                _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                                _stoich_rxn, _stoich_sp, _stoich_sc),
+                               extra_P=_ts_extra_P, extra_L=_ts_extra_L)
+            n_out_steps = len(self.t_span) - 1
+            _ts_stats = dict(nfcn=0, naccpt=0, nrejec=0, nstart=0)
+            _ts_warned = False
+            _ts_check = _tobool(self.cfg.get('twostep_check', os.environ.get('JUICE_TS_CHECK', '')))
+            _ts_check_rows = {int(r) for r in str(os.environ.get('JUICE_TS_ROWS', '')).split(',') if r.strip().isdigit()}
+            if _ts_check:
+                print("  [SOLVER] TWOSTEP: P/L vs system_ode consistency check ON (every row start)"
+                      + (f", row-level BDF comparison for rows {sorted(_ts_check_rows)}" if _ts_check_rows else ""))
+            for step_idx in range(n_out_steps):
+                t0 = self.t_span[step_idx]
+                t1 = self.t_span[step_idx + 1]
+                _make_snap(y_seg, t0)
+                _ts_ctx.clear()
+                _ts_ctx.update(_s_snap)
+                _ts_ctx.update(zip(_species_names, y_seg.tolist()))
+                if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
+                    _ts_ctx['H2O'] = float(_ts_ctx['H2O']) * float(_s_snap.get('M', self.get_M(t0)))
+                if 'O1D' in _pss_species_set:
+                    _ts_ctx['O1D'] = float(_pss_o1d(_ts_ctx))      # PSS at the row-start state
+                if _k_row_cacheable and _k_row_valid[0]:
+                    np.copyto(_k_buf, _k_row_buf)
+                else:
+                    if not _ts_warned:
+                        print("\n  [SOLVER] TWOSTEP: rate expressions reference species -> k frozen at the row-start state")
+                        _ts_warned = True
+                    try:
+                        _compute_rates(_ts_ctx, _k_buf)
+                    except Exception:
+                        for i, rxn in enumerate(self.mechanism.reactions):
+                            try: _k_buf[i] = eval(rxn.safe_expr, globals(), _ts_ctx)
+                            except: _k_buf[i] = 0.0
+                    np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                for _ni, _nn in enumerate(_env_r_unique_names):
+                    _env_vals_buf[_ni] = float(_ts_ctx.get(_nn, 0.0))
+                _ts_kd[0] = _dilution_rate(t0, _ts_ctx)
+                if _ts_check:
+                    # consistency check: the P/L split must reproduce system_ode's dydt at the row start
+                    _yc = np.maximum(y_seg, 1e-30)
+                    _Pc, _Lc = _ts_pl(t0, _yc)
+                    _f_pl = _Pc - _Lc * _yc
+                    _f_ode = system_ode(t0 - _t_offset, _yc)
+                    _sc = np.maximum(np.abs(_f_ode), 1e-12 * np.max(np.abs(_f_ode)) + 1e-30)
+                    _bad = np.abs(_f_pl - _f_ode) / _sc
+                    if np.max(_bad) > 1e-6:
+                        _ib = int(np.argmax(_bad))
+                        print(f"\n  [TS-CHECK] row {step_idx} t0={t0:.0f}: max |dP/L - dODE|/|dODE| = {np.max(_bad):.3e} "
+                              f"at {_species_names[_ib]} (P-L*y {_f_pl[_ib]:.4e} vs ode {_f_ode[_ib]:.4e}); "
+                              f"{int(np.sum(_bad > 1e-6))} species differ")
+                _st = {}
+                _y_row0 = y_seg.copy() if _ts_check else None
+                _y_held = y_seg[_held_idx] if _held_idx.size else None
+                y_seg = _twostep(_ts_pl, y_seg, t0, t1, dtmin=_ts_dtmin, dtmax=min(step_limit, t1 - t0),
+                                 atol=_atol_floor, rtol=_rtol, numit=_ts_numit, stats=_st)
+                if _held_idx.size:
+                    y_seg[_held_idx] = _y_held        # P = L = 0 keeps them to rounding; make it exact
+                for _k_ in _ts_stats:
+                    _ts_stats[_k_] += _st.get(_k_, 0)
+                if _ts_check and step_idx in _ts_check_rows:
+                    # row-level comparison with scipy BDF on system_ode from the same start state
+                    _ref = solve_ivp(system_ode, [t0 - _t_offset, t1 - _t_offset], _y_row0, method='BDF',
+                                     rtol=1e-8, atol=np.maximum(1.0, 1e-8 * _y_row0), max_step=step_limit,
+                                     jac=analytical_jac if _jac_mode == 'analytic' else None)
+                    _yr = np.maximum(_ref.y[:, -1], 0.0)
+                    _m = _yr > 1e7
+                    _dev = np.abs(y_seg[_m] / _yr[_m] - 1.0) * 100.0
+                    _order = np.argsort(_dev)[::-1][:6]
+                    _names = np.array(_species_names)[_m][_order]
+                    print(f"\n  [TS-CHECK] row {step_idx} ({t0:.0f}-{t1:.0f}s): TWOSTEP {_st['naccpt']} steps, {_st['nrejec']} rej; "
+                          f"vs scipy BDF rtol 1e-8: worst " + ", ".join(f"{n} {d:.3f}%" for n, d in zip(_names, _dev[_order])))
+                if not np.all(np.isfinite(y_seg)):
+                    y_seg = np.where(np.isfinite(y_seg), y_seg, 0.0)
+                seg_t_list.append(np.array([t1]))
+                seg_y_list.append(y_seg[:, np.newaxis])
+                M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
+                M_end = self.get_M(t1)
+                if M_snap_step > 0 and abs(M_end / M_snap_step - 1.0) > 1e-10:
+                    y_seg = y_seg * (M_end / M_snap_step)
+                if step_idx % 200 == 0 or step_idx == n_out_steps - 1:
+                    pct = (step_idx + 1) / n_out_steps * 100
+                    elapsed = time.time() - self.real_start_time
+                    print(f"  ... {pct:.0f}% ({step_idx+1}/{n_out_steps} steps, "
+                          f"{elapsed:.1f}s elapsed)", end='\r')
+            print(f"\n  [SOLVER] TWOSTEP: {_ts_stats['naccpt']} steps, {_ts_stats['nrejec']} rejected, "
+                  f"{_ts_stats['nstart']} restarts, {_ts_stats['nfcn']} P/L evaluations, numit={_ts_numit}")
+            self._ode_backend = f"{self._ode_backend}  Solver: TWOSTEP numit={_ts_numit}"
+        elif _perstep_snap and _perstep_warm:
             # ── Per-ENZ-row mode, warm continuation (GEAR-like) ─────────────────
             # One BDF instance for the whole run.  At every ENZ row boundary:
             #   1. output y(t1)                     (pre-expansion, FACSIMILE convention)
@@ -3008,10 +3153,11 @@ if __name__ == "__main__":
                          help="Show the results viewer after the simulation")
     _parser.add_argument("--toml", default="",
                          help="Path to active TOML config (threads to viewer and solver)")
-    _parser.add_argument("--solver", choices=["fast", "precise"], default=None,
+    _parser.add_argument("--solver", choices=["fast", "precise", "twostep"], default=None,
                          help="solver profile, overriding the one written into the JSON: fast = rtol 1e-4 with "
                               "warm continuation (~2x faster); precise = rtol 1e-6 with a cold restart per ENZ row "
-                              "(tightest agreement with FACSIMILE). See FR_GUI.toml [solver]")
+                              "(tightest agreement with FACSIMILE); twostep = Verwer's TWOSTEP without a Jacobian "
+                              "(large mechanisms). See FR_GUI.toml [solver]")
     _args = _parser.parse_args()
 
     runner = ScenarioRunner(_args.config)
@@ -3024,7 +3170,10 @@ if __name__ == "__main__":
                 _sec = _tl.load(_fh).get("solver", {})
         except Exception:
             pass
-        runner.cfg.update(resolve_profile(_sec, _args.solver))
+        _prof = resolve_profile(_sec, _args.solver)
+        if 'solver_method' not in _prof:          # a BDF profile asked for on a TWOSTEP JSON: back to the TOML's method
+            _prof['solver_method'] = str(_sec.get('solver_method', 'BDF'))
+        runner.cfg.update(_prof)
     runner._show_viewer = _args.gui
     runner._toml_path   = _args.toml
     runner.run()

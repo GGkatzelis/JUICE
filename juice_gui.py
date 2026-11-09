@@ -537,7 +537,7 @@ class RunPage(QWidget):
         self.kvpd = QCheckBox("Also write the reaction rates and production/loss budgets "
                               "(large files; needed for the process analysis and reactivity views in the viewer)")
         self.kvpd.setChecked(True); g.addWidget(self.kvpd, r, 0, 1, 4); r += 1
-        # Solver profile: the two validated ways to run (FR_GUI.toml [solver]); the TOML's profile is preselected.
+        # Solver profile: the validated ways to run (FR_GUI.toml [solver]); the TOML's profile is preselected.
         g.addWidget(QLabel("Solver"), r, 0); self.solver = QComboBox()
         self._profiles = solver_profiles(self.win.toml_path)
         for name, p in self._profiles.items():
@@ -556,8 +556,9 @@ class RunPage(QWidget):
         self.solver_note.setStyleSheet("color: #555555;"); g.addWidget(self.solver_note, r, 1, 1, 3); r += 1
         self.solver.currentIndexChanged.connect(self._solver_changed); self._solver_changed()
         lay.addLayout(g)
-        lay.addWidget(_info(f"Both solver profiles are validated against FACSIMILE (settings in {os.path.basename(self.win.toml_path) or 'the TOML'}). "
-                            "Fast is the everyday choice; Precise tracks FACSIMILE 5-10x more tightly for validation runs. "
+        lay.addWidget(_info(f"The solver profiles are validated against FACSIMILE (settings in {os.path.basename(self.win.toml_path) or 'the TOML'}). "
+                            "Fast is the everyday choice; Precise tracks FACSIMILE 5-10x more tightly for validation runs; "
+                            "TWOSTEP needs no Jacobian and is for mechanisms far larger than the MCM (GECKO-A). "
                             "Compare runs only within one profile. Benchmark and tolerance experiments belong in the expert tool, not here."))
         hb = QHBoxLayout()
         self.prep_btn = QPushButton("1. Prepare input files"); self.prep_btn.setObjectName("primary"); self.prep_btn.clicked.connect(self.prepare); hb.addWidget(self.prep_btn)

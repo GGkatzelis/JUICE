@@ -678,7 +678,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Write JUICE scenarios as F0AM runs with identical inputs.")
     ap.add_argument("scenes", nargs="+")
     ap.add_argument("--out", default=os.path.join(HERE, "paper", "F0AM_scenarios"))
-    ap.add_argument("--profile", default="precise", choices=("fast", "precise"))
+    ap.add_argument("--profile", default="precise", choices=("fast", "precise", "twostep"))
     ap.add_argument("--check", action="store_true", help="integrate the written files in Python and compare")
     ap.add_argument("--compare", action="store_true",
                     help="only compare existing F0AM results (<stem>_F0AM.csv) with JUICE and FACSIMILE")
