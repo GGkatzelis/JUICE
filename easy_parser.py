@@ -23,6 +23,9 @@ def _split_top_level_args(s: str) -> list:
     return [a for a in args if a]
 
 
+_INCLUDE_NAME_RE = re.compile(r'[ \t]+["\']?([^"\';\r\n]+?)["\']?[ \t]*(?=;|\r?$)')   # the file name after '#include'
+
+
 def expand_macros(expr: str, functions: dict, max_depth: int = 10) -> str:
     """Expand user-defined FUNCTION macros inline.
 
@@ -147,11 +150,24 @@ class EasyParser:
             print(f"[WARNING] Include file '{filename}' not found. Skipping.")
             return ""
         # content = re.sub(r';.*', '', content) # DEACTIVATED: Keep comments for line-by-line parsing
-        def include_replacer(match):
-            return self.preprocess(match.group(1).strip())
-        # Only match #include that is NOT preceded by a semicolon (i.e. not commented out).
-        # The name runs to the end of the line or a ';' comment and may contain spaces.
-        content = re.sub(r'(?m)^[^;]*#include[ \t]+["\']?([^"\';\r\n]+?)["\']?[ \t]*(?=;|\r?$)', include_replacer, content)
+        # Expand #include directives that are NOT commented out (no ';' before them on the line).  The name
+        # runs to the end of the line or a ';' comment and may contain spaces.  Line-based instead of a
+        # whole-file regex with a greedy ^[^;]* prefix: that prefix backtracked over every character of
+        # every line, quadratic in the line length - the chunked COA/PERO sums of the GECKO-A includes are
+        # 10-kB lines and the full toluene mechanism took minutes here (F. Rohrer, 85057db).  Semantics
+        # unchanged: the text from the line start up to the include name is replaced by the included file,
+        # a trailing comment is kept.
+        if '#include' in content:
+            out = []
+            for line in content.split('\n'):
+                idx = line.find('#include')
+                if idx >= 0 and ';' not in line[:idx]:
+                    m = _INCLUDE_NAME_RE.match(line, idx + len('#include'))
+                    if m:
+                        out.append(self.preprocess(m.group(1).strip()) + line[m.end():])
+                        continue
+                out.append(line)
+            content = '\n'.join(out)
         content = re.sub(r'\$\s*\n', '', content) 
         return content
 
@@ -163,6 +179,7 @@ class EasyParser:
         # treated as overrides, not additions).
         self._rxn_map = {}       # normalised_key -> (reacs, prods, rate_expr)
         self._k_raw_defs = {}    # normalised_key -> original definition string (Phase 1)
+        _species_seen = set(self.mech.species)   # membership set mirroring the ordered species list (process_side)
         full_content = self.preprocess(filename)
         lines = full_content.split('\n')
 
@@ -623,8 +640,9 @@ class EasyParser:
                     norm_p = (coeff_part + '*' + name) if coeff_part else name
                     normalised.append(norm_p)
                     if name not in RESERVED and name not in self.mech.parameters and len(name) > 0:
-                        if name not in self.mech.species:
-                            self.mech.species.append(name)
+                        if name not in _species_seen:          # set lookup; `name in self.mech.species` was a
+                            _species_seen.add(name)            # linear list scan -> O(species x terms), the
+                            self.mech.species.append(name)     # dominant setup cost for 1e5-species mechanisms
                 return normalised
 
             if '-->' in line_for_rxn and '=' not in line_for_rxn:

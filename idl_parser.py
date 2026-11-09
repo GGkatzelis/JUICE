@@ -669,12 +669,31 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     # Used later to detect "k[] only" entries = MCM rate overrides.
     _rxn_keys_with_bare_line = {_rxn_key(lhs, rhs) for lhs, rhs in all_reactions}
 
+    # Pre-compiled whole-word, case-insensitive patterns for every CONST name (built once, not per reaction).
+    _const_patterns = {cname: re.compile(r'(?i)\b' + re.escape(cname) + r'\b') for cname in source_consts}
+    _ident_re = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+
     def _substitute_consts(rate_py: str, consts: dict) -> str:
         """Replace FACSIMILE CONST names (e.g. gamma_dodecane, SOA_decay) with
-        their numeric/expression values so the rate is self-contained."""
+        their numeric/expression values so the rate is self-contained.
+
+        Same result as substituting every const in dict order one after the other, but only the
+        consts whose name actually occurs in the expression are touched: the old loop ran one regex
+        per const per reaction (77 x 54 000 = 4 million re.sub calls, 37 min for the full GECKO-A
+        toluene mechanism; F. Rohrer, 85057db).  Names introduced by an inserted value are added to
+        the candidate set so that chained consts behave exactly as before (later consts only)."""
+        present = {t.lower() for t in _ident_re.findall(rate_py)}
+        if not present:
+            return rate_py
         out = rate_py
         for cname, cval in consts.items():
-            out = re.sub(r'(?i)\b' + re.escape(cname) + r'\b', f'({cval})', out)
+            if cname.lower() not in present:
+                continue
+            pat = _const_patterns.get(cname) or re.compile(r'(?i)\b' + re.escape(cname) + r'\b')
+            new = pat.sub(f'({cval})', out)
+            if new != out:
+                out = new
+                present.update(t.lower() for t in _ident_re.findall(str(cval)))
         return out
 
     # ---- classify reactions --------------------------------------------------
@@ -1042,7 +1061,13 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     def _is_tautology(name, expr):
         return expr.strip().upper() == name.upper()
 
-    def _is_referenced(name, text):
+    _word_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    _base_tokens = set(_word_re.findall(_base_expr))      # tokenised once (a regex search per const over the
+                                                          # whole rate text cost 6 s per pass on toluene gen 2)
+
+    def _is_referenced(name, text, tokens=None):
+        if tokens is not None and _word_re.fullmatch(name):
+            return name in tokens                          # identical to \bname\b on the same text
         return re.search(rf"\b{re.escape(name)}\b", text) is not None
 
     # Transitive closure: promote `DILUTE` → scan its formula for FLOW → promote.
@@ -1050,6 +1075,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         _added = False
         _promoted_formulas = " ".join(idl_parameters.values()).upper()
         _search_text = _base_expr + " " + _promoted_formulas
+        _search_tokens = _base_tokens | set(_word_re.findall(_promoted_formulas))
         for _pname, _pval in source_consts.items():
             if _pname in _EXCLUDE_FROM_IDL_PARAMS:
                 continue
@@ -1059,7 +1085,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 continue
             if _is_tautology(_pname, _pval):
                 continue
-            if _is_referenced(_pname, _search_text):
+            if _is_referenced(_pname, _search_text, _search_tokens):
                 idl_parameters[_pname] = _pval
                 _added = True
         if not _added:
