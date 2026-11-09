@@ -1,0 +1,68 @@
+     66   ! number of record in the dictionary
+H2       H2                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+H2O      H2O                                                                                                                                        0.0  0  0  0  0  0  0  0  0  0
+H2O2     H2O2                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+HNO2     HNO2                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+HNO3     HNO3                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+HNO4     HNO4                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+HO       HO                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+HO2      HO2                                                                                                                                        0.0  0  0  0  0  0  0  0  0  0
+N2O5     N2O5                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+NO       NO                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+NO2      NO2                                                                                                                                        0.0  0  0  0  0  0  0  0  0  0
+NO3      NO3                                                                                                                                        0.0  0  0  0  0  0  0  0  0  0
+O3P      O                                                                                                                                          0.0  0  0  0  0  0  0  0  0  0
+O1D      O*                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+O2       O2                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+O3       O3                                                                                                                                         0.0  0  0  0  0  0  0  0  0  0
+SO2      SO2                                                                                                                                        0.0  0  0  0  0  0  0  0  0  0
+SULF     sulf                                                                                                                                       0.0  0  0  0  0  0  0  0  0  0
+XCLOST   xxlost                                                                                                                                     0.0  0  0  0  0  0  0  0  0  0
+CH2OH2   CH2(OH)(OH)                                                                                                                               48.0  0  1  4  0  2  0  0  0  0
+1O2000   CH2(OH)CH2(O.)                                                                                                            1.O             61.1  1  2  5  0  2  0  0  0  0
+OO2000   CH2(OH)CH2(OH)                                                                                                            OO              62.1  0  2  6  0  2  0  0  0  0
+2O2000   CH2(OH)CH2(OO.)                                                                                                           2.O             77.1  1  2  5  0  3  0  0  0  0
+HO2000   CH2(OH)CH2(OOH)                                                                                                           HO              78.1  0  2  6  0  3  0  0  0  0
+DO2000   CH2(OH)CHO                                                                                                                DO              60.1  0  2  4  0  2  0  0  0  0
+AO2000   CH2(OH)CO(OH)                                                                                                             AO              76.1  0  2  4  0  3  0  0  0  0
+3K2001   CH2(OH)CO(OO.)                                                                                                            3.KO            91.0  1  2  3  0  4  0  0  0  0
+GO2000   CH2(OH)CO(OOH)                                                                                                            GO              92.1  0  2  4  0  4  0  0  0  0
+PO2000   CH2(OH)CO(OONO2)                                                                                                          PO             137.1  0  2  3  1  6  0  0  0  0
+HD2000   CH2(OOH)CHO                                                                                                               HD              76.1  0  2  4  0  3  0  0  0  0
+3H2000   CH2(OOH)CO(OO.)                                                                                                           3.HK           107.0  1  2  3  0  5  0  0  0  0
+GH2000   CH2(OOH)CO(OOH)                                                                                                           GH             108.1  0  2  4  0  5  0  0  0  0
+PH2000   CH2(OOH)CO(OONO2)                                                                                                         PH             153.1  0  2  3  1  7  0  0  0  0
+CH2O     CH2O                                                                                                                      D               30.0  0  1  2  0  1  0  0  0  0
+CH3O     CH3(O.)                                                                                                                   1.              31.0  1  1  3  0  1  0  0  0  0
+CH3OH    CH3(OH)                                                                                                                   O               32.0  0  1  4  0  1  0  0  0  0
+N01001   CH3(ONO2)                                                                                                                 N               77.0  0  1  3  1  3  0  0  0  0
+CH3O2    CH3(OO.)                                                                                                                  2.              47.0  1  1  3  0  2  0  0  0  0
+CH3OOH   CH3(OOH)                                                                                                                  H               48.0  0  1  4  0  2  0  0  0  0
+O02000   CH3CH2(OH)                                                                                                                O               46.1  0  2  6  0  1  0  0  0  0
+D02000   CH3CHO                                                                                                                    D               44.1  0  2  4  0  1  0  0  0  0
+A02000   CH3CO(OH)                                                                                                                 A               60.1  0  2  4  0  2  0  0  0  0
+3K2000   CH3CO(OO.)                                                                                                                3.K             75.0  1  2  3  0  3  0  0  0  0
+G02000   CH3CO(OOH)                                                                                                                G               76.1  0  2  4  0  3  0  0  0  0
+P02000   CH3CO(OONO2)                                                                                                              P              121.1  0  2  3  1  5  0  0  0  0
+CH4      CH4                                                                                                                       C               16.1  0  1  4  0  0  0  0  0  0
+HCOOH    CHO(OH)                                                                                                                   A               46.0  0  1  2  0  2  0  0  0  0
+HCOO2    CHO(OO.)                                                                                                                  3.D             61.0  1  1  1  0  3  0  0  0  0
+HCOO2H   CHO(OOH)                                                                                                                  G               62.0  0  1  2  0  3  0  0  0  0
+P01001   CHO(OONO2)                                                                                                                P              107.0  0  1  1  1  5  0  0  0  0
+1D2000   CHOCH2(O.)                                                                                                                1.D             59.0  1  2  3  0  2  0  0  0  0
+2D2000   CHOCH2(OO.)                                                                                                               2.D             75.0  1  2  3  0  3  0  0  0  0
+DD2000   CHOCHO                                                                                                                    DD              58.0  0  2  2  0  2  0  0  0  0
+3D2000   CHOCO(OO.)                                                                                                                3.DK            89.0  1  2  1  0  4  0  0  0  0
+CO       CO                                                                                                                                        28.0  0  1  0  0  1  0  0  0  0
+1A2000   CO(OH)CH2(O.)                                                                                                             1.A             75.0  1  2  3  0  3  0  0  0  0
+2A2000   CO(OH)CH2(OO.)                                                                                                            2.A             91.0  1  2  3  0  4  0  0  0  0
+AH2000   CO(OH)CH2(OOH)                                                                                                            AH              92.1  0  2  4  0  4  0  0  0  0
+AD2000   CO(OH)CHO                                                                                                                 AD              74.0  0  2  2  0  3  0  0  0  0
+1G2000   CO(OOH)CH2(O.)                                                                                                            1.G             91.0  1  2  3  0  4  0  0  0  0
+2G2000   CO(OOH)CH2(OO.)                                                                                                           2.G            107.0  1  2  3  0  5  0  0  0  0
+GD2000   CO(OOH)CHO                                                                                                                GD              90.0  0  2  2  0  4  0  0  0  0
+1P2000   CO(OONO2)CH2(O.)                                                                                                          1.P            136.1  1  2  2  1  6  0  0  0  0
+2P2000   CO(OONO2)CH2(OO.)                                                                                                         2.P            152.1  1  2  2  1  7  0  0  0  0
+PD2000   CO(OONO2)CHO                                                                                                              PD             135.0  0  2  1  1  6  0  0  0  0
+CO2      CO2                                                                                                                                       44.0  0  1  0  0  2  0  0  0  0
+END 

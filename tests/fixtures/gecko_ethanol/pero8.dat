@@ -1,0 +1,7 @@
+       5  ! number of records (RO2 species) in the file
+G2O2000
+G2D2000
+G2A2000
+G2G2000
+G2P2000
+END 

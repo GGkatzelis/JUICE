@@ -1,0 +1,25 @@
+      19  ! number of records (species) in the file
+! data generated using NANNOOLAL SAR
+! 1st line give the T used to estimate vapor pressure
+! Psat (atm) @Tref (1st) and evaporation heat (kJ.mol-1) (2nd)
+TREF 298.0
+GOO2000   9.596E-05    66.1
+GHO2000   1.895E-05    73.3
+GDO2000   1.012E-02    47.7
+GAO2000   1.171E-05    77.4
+GGO2000   7.801E-05    69.4
+GPO2000   3.167E-04    61.7
+GHD2000   1.470E-03    55.3
+GGH2000   1.153E-05    77.3
+GPH2000   5.423E-05    69.1
+GO02000   2.251E-01    35.7
+GD02000   1.977E+00    25.2
+GA02000   1.765E-02    46.0
+GG02000   4.869E-02    41.6
+GP02000   3.936E-02    39.7
+GDD2000   3.809E-03    50.7
+GAH2000   1.759E-06    85.4
+GAD2000   7.753E-04    58.6
+GGD2000   2.722E-03    53.2
+GPD2000   8.473E-03    46.3
+END 

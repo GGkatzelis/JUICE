@@ -15,3 +15,4 @@ Pillow>=10             # figure snapshots for the figure list
 python-pptx>=1.0       # figure list -> .pptx document
 imageio>=2.30          # isopleth videos (study window) and Chemical Space videos
 imageio-ffmpeg>=0.5    # MP4 export (bundles ffmpeg)
+rdkit>=2024.3        # SMILES for GECKO-A species (gecko_notation_to_smiles, used by the GECKO-A importer)

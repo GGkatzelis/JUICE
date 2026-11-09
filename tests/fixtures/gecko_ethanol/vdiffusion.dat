@@ -1,0 +1,23 @@
+      19  ! number of records (species) in the file
+! Diffusion volume computed using the Fuller et al. approach,
+! as described in Poling et al. book (5th edition, 2004)
+GOO2000     57.88
+GHO2000     63.99
+GDO2000     53.26
+GAO2000     59.37
+GGO2000     65.48
+GPO2000     79.93
+GHD2000     59.37
+GGH2000     71.59
+GPH2000     86.04
+GO02000     51.77
+GD02000     47.15
+GA02000     53.26
+GG02000     59.37
+GP02000     73.82
+GDD2000     48.64
+GAH2000     65.48
+GAD2000     54.75
+GGD2000     60.86
+GPD2000     75.31
+END 

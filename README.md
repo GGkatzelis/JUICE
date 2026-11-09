@@ -305,6 +305,46 @@ known limitation in [architecture.md](architecture.md), section A6.
 
 The table is the **fast** solver profile, the default.
 
+### GECKO-A mechanisms
+
+JUICE reads the output of the GECKO-A mechanism generator (Aumont et al.; v1.0, 2026) and writes it as
+EASY includes, so a GECKO-A mechanism runs like any other chemistry — in FACSIMILE as well as in JUICE.
+The importer is Franz Rohrer's (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`,
+`gecko_to_easy.py`, `make_soa_condensation.py`, table `gecko_data/solarlight.phot`), taken over from the
+MCM_SAPHIR_Tool branch `easy-start-gui` on 9 Nov 2026 with his notes. From a generator folder
+(`dictionary.out`, `reactionswithcom.dum`, `pvap.nan.dat`, `pero*.dat`, `scheme.log`) it writes:
+
+- `anorg.geckoa.incl` — GECKO-A's inorganic core, and `geckoa.aliases.incl` — the GECKO-A names (HO, HNO2,
+  HNO4, O3P, SULF) as `ALIAS` synonyms of the EASY/MCM names; a scenario loads this core *or* the MCM one;
+- `<name>.geckoa.organic.incl` — the organic chemistry with GECKO-A's kinetics 1:1 (`A·Tⁿ·exp(−Ea/T)`,
+  `TBODY`, `OXYGEN`, RO₂ counter classes as settings, Troe fall-off as `GTROE(...)`, the `EXTRA` forms
+  written out, `ISOM` polynomials); multi-channel duplicates merged into summed rates; species whose fastest
+  loss exceeds 1e6 s⁻¹ rescaled to the MCM `KDEC` convention with branching ratios unchanged;
+- photolysis: GECKO-A tabulates J at 11 solar zenith angles per label and has no formula; each label is fitted
+  to the MCM form l·cosᵐ(SZA)·exp(−n·sec SZA) and written as `GPHOT(...)`, the SZA-dependent ratio to the
+  measured jNO₂ or jO¹D — the same construction as `j_clear_sky.incl`; the six SAPHIR-measured channels are
+  used directly;
+- `<name>.geckoa.names.incl` — MCM names where the structure is unambiguous (C2H5OH, HOCH2CH2O2, PAN, …),
+  otherwise `G<GECKO code>`, every code accepted as an `ALIAS`; `<name>.dil.incl`; `<name>.SOA.include` —
+  the Krechmer gas↔particle↔wall partitioning for the species GECKO-A itself partitions, with C* from its
+  Nannoolal vapour pressures; `<name>.species.tsv` with SMILES (rdkit).
+
+```
+python gecko_to_easy.py <generator folder> --template <SAPHIR .easy> --name Isopren_GECKOA --mode pure --out <EASY root>
+```
+
+`--mode pure` is self-contained (GECKO-A core); `--mode mcmcore` keeps the template's MCM inorganic core and
+chamber lines and replaces only the organic includes. `--maxgen N` cuts the mechanism at an oxidation
+generation, `--cstar-max` limits the partitioning species. Every generated file carries the SHA of the
+generator files it came from. Verified 9 Nov 2026 on the isoprene mechanism (9 909 species, 44 204
+generator reactions → 31 340 EASY reactions): regenerated from the raw output, the includes are byte for
+byte those of Franz's run; JUICE parses them to the same 49 741 reactions; with the twostep profile the
+SAPHIR day 18.07.2023 runs in 3 min 17 s (12 015 species with partitioning) and agrees with his BDF run to
+0.035 % (median over species; O₃ 0.04 %, OH 0.34 %). Generator output for six precursors (ethanol to
+α-pinene, 243 000 species / 1.23 M reactions) exists; the monoterpenes have not been run yet. GECKO-A
+itself is GPL-3.0; JUICE reads its output and ships none of its code (the test fixture
+`tests/fixtures/gecko_ethanol` is a small generator output folder).
+
 ### Solver profiles: fast, precise or twostep
 
 JUICE has three validated ways to solve the same chemistry. Choose one in the Run step of the
@@ -379,6 +419,8 @@ facsimile_import.py          reads an experiment set up for FACSIMILE (.easy + E
 experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
 scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
 twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BDF2 with fixed-point sweeps, no Jacobian
+gecko_to_easy.py             GECKO-A generator output → EASY includes (gecko_mechanism.py reader, gecko_photolysis.py J fits,
+                             gecko_notation_to_smiles.py, make_soa_condensation.py partitioning include; gecko_data/solarlight.phot)
 scenario_runner.py           the solver
 chambers.py, chambers/       chamber profiles
 lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)

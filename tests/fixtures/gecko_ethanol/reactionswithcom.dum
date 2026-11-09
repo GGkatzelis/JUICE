@@ -1,0 +1,354 @@
+GO3P + GO3 => NOTHING                                                                     8.000E-12  0.0   2060.
+GO3P + GNO2 => GNO                                                                        5.100E-12  0.0   -210.
+GO1D +TBODY => GO3P                                                                       1.677E-11  0.0   -110.
+GO1D +TBODY => GO3P                                                                       6.765E-12  0.0    -55.
+GO3 + GNO => GNO2                                                                         3.000E-12  0.0   1500.
+GO3 + GNO2 => GNO3                                                                        1.200E-13  0.0   2450.
+GNO + GNO3 => 2. GNO2                                                                     1.500E-11  0.0   -170.
+GNO + GNO +TBODY => 2. GNO2                                                               3.300E-39  0.0   -530.
+GNO2 + GNO3 => GNO + GNO2                                                                 4.500E-14  0.0   1260.
+GHO + GHNO2 => GNO2                                                                       1.800E-11  0.0    390.
+GHO + GNO3 => GHO2 + GNO2                                                                 2.200E-11  0.0      0.
+GHO + GCO => GHO2 + GCO2                                                                  1.500E-13  0.0      0.
+GHO + GCO +TBODY => GHO2 + GCO2                                                           3.660E-33  0.0      0.
+GHO + GO3 => GHO2                                                                         1.700E-12  0.0    940.
+GHO2 + GNO => GHO + GNO2                                                                  3.500E-12  0.0   -270.
+GHNO4 + GHO => GNO2                                                                       1.300E-12  0.0   -380.
+GHO2 + GO3 => GHO                                                                         1.000E-14  0.0    490.
+GHO2 + GHO2 => GH2O2                                                                      3.000E-13  0.0   -460.
+GHO2 + GHO2 +TBODY => GH2O2                                                               2.100E-33  0.0   -920.
+GNO3 + GHO2 => 0.8 GHO + 0.8 GNO2 + 0.2 GHNO3                                             3.500E-12  0.0      0.
+GNO3 + GNO3 => 2. GNO2                                                                    8.500E-13  0.0   2450.
+GH2O2 + GHO => GHO2                                                                       1.800E-12  0.0      0.
+GHO + GHO2 => NOTHING                                                                     4.800E-11  0.0   -250.
+GHO + GH2 => GH2O + GHO2                                                                  2.800E-12  0.0   1800.
+GO3P + GNO + FALLOFF => GNO2                                                              3.000E-11 -0.0      0.
+  FALLOFF /  0.900E-31 -1.5      0. 0.6    0.   0.    0. /
+GO3P + GNO2 + FALLOFF => GNO3                                                             2.200E-11 -0.7      0.
+  FALLOFF /  0.250E-30 -1.8      0. 0.6    0.    0.   0. /
+GNO2 + GNO3 + FALLOFF=> GN2O5                                                             1.400E-12 -0.7      0.
+  FALLOFF /  0.200E-29 -4.4      0. 0.6    0.   0.    0. /
+GN2O5 + FALLOFF => GNO2 + GNO3                                                            4.670E+14 -0.7  10991.
+  FALLOFF /  0.667E-03 -4.4  10991. 0.6    0.   0.    0. /
+GHO + GNO + FALLOFF => GHNO2                                                              3.600E-11 -0.1      0.
+  FALLOFF /  0.700E-30 -2.6      0. 0.6    0.   0.    0. /
+GHO + GNO2 + FALLOFF => GHNO3                                                             2.800E-11 -0.0      0.
+  FALLOFF /  0.180E-29 -3.0      0. 0.6    0.   0.    0. /
+GHO2 + GNO2 + FALLOFF => GHNO4                                                            2.900E-12 -0.0      0.
+  FALLOFF /  0.200E-30 -3.4      0. 0.6    0.   0.    0. /
+GHNO4 + FALLOFF => GHO2 + GNO2                                                            2.610E+15 -0.0  10900.
+  FALLOFF /  0.500E-05 -0.0  10000. 0.6    0.   0.    0. /
+GHO + GSO2 + FALLOFF => GHO2 + GSULF                                                      1.600E-12 -0.0      0.
+  FALLOFF /  0.330E-30 -4.3      0. 0.6    0.   0.    0. /
+GO3P + EXTRA => GO3                                                                       5.290E-28 -2.4      0.
+  EXTRA / 100  /                                                
+GO1D + EXTRA => 2. GHO                                                                    1.630E-10  0.0    -60.
+  EXTRA / 500  /                                                
+GHO + GHNO3 + EXTRA => GNO3                                                               2.400E-14  0.0   -460.
+  EXTRA / 550  2.7E-17 0. -2199 6.5E-34 0. -1335 /              
+GHO2 + GHO2 + EXTRA => GH2O2                                                              4.200E-34  0.0  -2660.
+  EXTRA / 501  2.94E-54    0.    -3120  /                       
+GO3 + HV => GO1D                                                                          1.000E+00  0.0      0.
+  HV /     2  1.00 /
+GO3 + HV => GO3P                                                                          1.000E+00  0.0      0.
+  HV /     3  1.00 /
+GNO2 + HV => GNO + GO3P                                                                   1.000E+00  0.0      0.
+  HV /     4  1.00 /
+GNO3 + HV => GNO                                                                          1.000E+00  0.0      0.
+  HV /     5  1.00 /
+GNO3 + HV => GNO2 + GO3                                                                   1.000E+00  0.0      0.
+  HV /     6  1.00 /
+GH2O2 + HV => 2. GHO                                                                      1.000E+00  0.0      0.
+  HV /    11  1.00 /
+GHNO2 + HV => GHO + GNO                                                                   1.000E+00  0.0      0.
+  HV /    12  1.00 /
+GHNO3 + HV => GHO + GNO2                                                                  1.000E+00  0.0      0.
+  HV /    13  1.00 /
+GHNO4 + HV => 0.61 GHO2 + 0.61 GNO2 + 0.39 GHO + 0.39 GHNO3                               1.000E+00  0.0      0.
+  HV /    14  1.00 /
+GCH4 + GHO => GCH3O2                                                                      2.150E-12  0.0   1735.
+GCH3O2 + GNO => GCH3O + GNO2                                                              2.800E-12  0.0   -300.
+GCH3O2 + GNO3 => GCH3O + GNO2                                                             1.300E-12  0.0      0.
+GCH3O2 + GHO2 => GCH3OOH                                                                  4.100E-13  0.0   -750.
+GCH3O + OXYGEN => GCH2O + GHO2                                                            7.200E-14  0.0   1080.
+GCH3OH + GHO => 0.85 GCH2O + 0.85 GHO2 + 0.15 GCH3O                                       3.100E-12  0.0    360.
+GCH3OH + GNO3 => GCH2O + GHO2 + GHNO3                                                     9.400E-13  0.0   2650.
+GCH3OOH + HV => GCH3O + GHO                                                               1.000E+00  0.0      0.
+  HV /  7300  1.00 /
+GCH3OOH + GHO => GHO + GCH2O                                                              1.000E-12  0.0   -190.
+GCH3OOH + GHO => GCH3O2                                                                   1.900E-12  0.0   -190.
+GCH3O + GNO2 + FALLOFF => GN01001                                                         1.900E-11 -0.0      0.
+  FALLOFF /  0.900E-28 -4.5      0. 0.44  0.  0.  0. /
+GN01001 + HV => GCH3O + GNO2                                                              1.000E+00  0.0      0.
+  HV /   100  1.00 /
+GN01001 + GHO => GCH2O + GNO2                                                             4.000E-13  0.0    845.
+GCH2O + HV => GCO + 2 GHO2                                                                1.000E+00  0.0      0.
+  HV /   110  1.00 /
+GCH2O + HV => GH2 + GCO                                                                   1.000E+00  0.0      0.
+  HV /    17  1.00 /
+GCH2O + GHO => GCO + GHO2                                                                 8.600E-12  0.0    -20.
+GCH2O + GNO3 => GHNO3 + GCO + GHO2                                                        5.800E-16  0.0      0.
+GHCOOH + GHO => GHO2 + GCO2                                                               4.500E-13  0.0      0.
+GHCOO2H + GHO => GHCOO2                                                                   1.900E-12  0.0   -190.
+GHCOO2H + HV => GHO2 + GHO + GCO2                                                         1.000E+00  0.0      0.
+  HV / 40100  1.00 /
+GHCOO2 + GHO2 => 0.7 GHCOO2H + 0.3 GHCOOH + 0.3 GO3                                       4.300E-13  0.0  -1040.
+GHCOO2 + GNO => GHO2 + GNO2 + GCO2                                                        8.100E-12  0.0   -270.
+GHCOO2 + GNO3 => 0.5 GCH3O2 + 0.5 GCO2 + GNO2                                             5.000E-12  0.0      0.
+GHCOO2 + GCH3O2 => 1.37 GHO2 + 1.37 GCO2 + 1.37 GCH3O                                     5.000E-12  0.0      0.
+GHCOO2 + GCH3O2 => 0.63 GHCOOH + 0.63 GCH2O                                               5.000E-12  0.0      0.
+GHCOO2 + GNO2 + FALLOFF => GP01001                                                        1.100E-11 -1.0      0.
+  FALLOFF /  0.850E-28 -6.5      0. 0.6    0.   0.  0. /
+GP01001 + FALLOFF => GHCOO2 + GNO2                                                        5.400E+16 -0.0  13830.
+  FALLOFF /  0.490E-02 -0.0  12100. 0.3    0.   0.  0. /
+GP01001 + HV => GHCOO2 + GNO2                                                             1.000E+00  0.0      0.
+  HV /  1400  1.00 /
+GCH3O2  + PERO1               => 0.800 GCH3O   + 0.200 GCH2O                                         1.000E-13  0.0    627. 
+GCH3O2  + PERO2               => 0.600 GCH3O   + 0.200 GCH2O   + 0.200 GCH3OH                        1.000E-13  0.0    341. 
+GCH3O2  + PERO3               => 0.800 GCH3O   + 0.200 GCH2O                                         1.000E-13  0.0   -257. 
+GCH3O2  + PERO4               => 0.600 GCH3O   + 0.200 GCH2O   + 0.200 GCH3OH                        1.000E-13  0.0   -289. 
+GCH3O2  + PERO5               => 0.800 GCH3O   + 0.200 GCH2O                                         1.000E-13  0.0   -635. 
+GCH3O2  + MEPERO              => 0.370 GCH3O   + 0.315 GCH2O   + 0.315 GCH3OH                        2.060E-13  0.0   -365. 
+GCH3O2  + PERO7               => 0.600 GCH3O   + 0.200 GCH2O   + 0.200 GCH3OH                        1.000E-13  0.0   -702. 
+GCH3O2  + PERO8               => 0.600 GCH3O   + 0.200 GCH2O   + 0.200 GCH3OH                        1.000E-13  0.0   -936. 
+GCH3O2  + PERO9               => 0.800 GCH3O   + 0.200 GCH2O                                         2.000E-12  0.0   -508. 
+GO02000 + GHO                 =>       G2O2000                                                       3.551E-13  0.0     -5.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GO02000 + GHO                 =>       GD02000 +       GHO2                                          2.532E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GO02000 + GNO3                =>       GD02000 +       GHO2    +       GHNO3                         4.818E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+G2O2000 + GNO                 =>       GNO2    +       G1O2000                                       2.700E-12  0.0   -360.  ; MJ19KMV000
+G2O2000 + GHO2                =>       GHO2000                                                       1.396E-13  0.0  -1300.  ; MJ19KMV000
+G2O2000 + GNO3                =>       G1O2000 +       GNO2                                          8.900E-12  0.0    390.  ; MJ19KMV000
+G2O2000 + PERO1               => 0.800 G1O2000 + 0.200 GDO2000                                       1.000E-13  0.0    371.  ; MJ19KMV000
+G2O2000 + PERO2               => 0.600 G1O2000 + 0.200 GDO2000 + 0.200 GOO2000                       1.000E-13  0.0      2.  ; MJ19KMV000
+G2O2000 + PERO3               => 0.800 G1O2000 + 0.200 GDO2000                                       1.000E-13  0.0   -513.  ; MJ19KMV000
+G2O2000 + PERO4               => 0.600 G1O2000 + 0.200 GDO2000 + 0.200 GOO2000                       1.000E-13  0.0   -629.  ; MJ19KMV000
+G2O2000 + PERO5               => 0.800 G1O2000 + 0.200 GDO2000                                       1.000E-13  0.0   -891.  ; MJ19KMV000
+G2O2000 + MEPERO              => 0.600 G1O2000 + 0.200 GDO2000 + 0.200 GOO2000                       1.000E-13  0.0   -871.  ; MJ19KMV000
+G2O2000 + PERO7               => 0.600 G1O2000 + 0.200 GDO2000 + 0.200 GOO2000                       1.000E-13  0.0  -1042.  ; MJ19KMV000
+G2O2000 + PERO8               => 0.600 G1O2000 + 0.200 GDO2000 + 0.200 GOO2000                       1.000E-13  0.0  -1276.  ; MJ19KMV000
+G2O2000 + PERO9               => 0.800 G1O2000 + 0.200 GDO2000                                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G1O2000 + OXYGEN              =>       GDO2000 +       GHO2                                          2.500E-14  0.0    300.  ; RA07KER000
+G1O2000                       => 2.000 GCH2O   +       GHO2                                          1.120E+09  1.7   5234.  ; LV09KER000
+GD02000 + GHO                 =>       G3K2000                                                       4.700E-12  0.0   -345.  ; HABSAR     ; MJ18KMV000 ; KEXPBRSAR
+GD02000 + GNO3                =>       G2D2000 +       GHNO3                                         7.826E-14  0.0   1860.  ; HABSAR     ; JK10KEV000 ; KEXPBRSAR  ; RA03KMV001
+GD02000 + GNO3                =>       G3K2000 +       GHNO3                                         1.322E-12  0.0   1860.  ; HABSAR     ; JK10KEV000 ; KEXPBRSAR  ; RA03KMV001
+GD02000 + HV                  =>       GCH3O2  +       GCO     +       GHO2                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  1700   1.000 /
+G3K2000 + GNO                 =>       GCH3O2  +       GCO2    +       GNO2                          7.500E-12  0.0   -290.  ; MJ19KMV000
+G3K2000 + GNO2    + FALLOFF   =>       GP02000                                                       1.125E-11 -1.1      0.  ; IUPAKMV000
+  FALLOFF / 3.28E-28 -6.9     0.    0.3    0.0    0.0    0.0 /
+G3K2000 + GNO3                =>       GCH3O2  +       GCO2    +       GNO2                          8.900E-12  0.0    305.  ; MJ19KMV000
+G3K2000 + GHO2                => 0.370 GG02000 + 0.130 GA02000 + 0.130 GO3     + 0.500 GCH3O2  +
+                                 0.500 GCO2    + 0.500 GHO                                           1.744E-12  0.0   -730.  ; MJ19KMV000
+G3K2000 + PERO1               =>       GCH3O2  +       GCO2                                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO2               => 0.800 GCH3O2  + 0.800 GCO2    + 0.200 GA02000                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO3               =>       GCH3O2  +       GCO2                                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO4               => 0.800 GCH3O2  + 0.800 GCO2    + 0.200 GA02000                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO5               =>       GCH3O2  +       GCO2                                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + MEPERO              => 0.800 GCH3O2  + 0.800 GCO2    + 0.200 GA02000                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO7               => 0.800 GCH3O2  + 0.800 GCO2    + 0.200 GA02000                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO8               => 0.800 GCH3O2  + 0.800 GCO2    + 0.200 GA02000                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2000 + PERO9               =>       GCH3O2  +       GCO2                                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G2D2000 + GNO                 =>       GNO2    +       G1D2000                                       2.700E-12  0.0   -360.  ; MJ19KMV000
+G2D2000 + GHO2                =>       GHD2000                                                       1.396E-13  0.0  -1300.  ; MJ19KMV000
+G2D2000 + GNO3                =>       G1D2000 +       GNO2                                          8.900E-12  0.0    390.  ; MJ19KMV000
+G2D2000 + PERO1               => 0.800 G1D2000 + 0.200 GDD2000                                       1.000E-13  0.0    683.  ; MJ19KMV000
+G2D2000 + PERO2               => 0.600 G1D2000 + 0.200 GDD2000 + 0.200 GDO2000                       1.000E-13  0.0    314.  ; MJ19KMV000
+G2D2000 + PERO3               => 0.800 G1D2000 + 0.200 GDD2000                                       1.000E-13  0.0   -200.  ; MJ19KMV000
+G2D2000 + PERO4               => 0.600 G1D2000 + 0.200 GDD2000 + 0.200 GDO2000                       1.000E-13  0.0   -317.  ; MJ19KMV000
+G2D2000 + PERO5               => 0.800 G1D2000 + 0.200 GDD2000                                       1.000E-13  0.0   -578.  ; MJ19KMV000
+G2D2000 + MEPERO              => 0.600 G1D2000 + 0.200 GDD2000 + 0.200 GDO2000                       1.000E-13  0.0   -559.  ; MJ19KMV000
+G2D2000 + PERO7               => 0.600 G1D2000 + 0.200 GDD2000 + 0.200 GDO2000                       1.000E-13  0.0   -729.  ; MJ19KMV000
+G2D2000 + PERO8               => 0.600 G1D2000 + 0.200 GDD2000 + 0.200 GDO2000                       1.000E-13  0.0   -963.  ; MJ19KMV000
+G2D2000 + PERO9               => 0.800 G1D2000 + 0.200 GDD2000                                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G1D2000                       =>       GCO     +       GCH2O   +       GHO2                          1.120E+09  1.7   4730.  ; LV09KER000
+GHO2000 + GHO                 =>       GHD2000 +       GHO2                                          2.486E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GHO2000 + GHO                 =>       GDO2000 +       GHO                                           2.958E-13  0.0   -965.  ; HABSAR     ; MJ18KMV000
+GHO2000 + GHO                 =>       G2O2000                                                       3.719E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GHO2000 + GNO3                =>       GHD2000 +       GHO2    +       GHNO3                         4.890E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+GHO2000 + GNO3                =>       GDO2000 +       GHO     +       GHNO3                         2.716E-17  0.0      0.  ; HABSAR     ; JK10KEV000
+GHO2000 + HV                  =>       G1O2000 +       GHO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GDO2000 + GHO                 =>       GDD2000 +       GHO2                                          2.489E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GDO2000 + GHO                 =>       G3K2001                                                       1.184E-11  0.0    140.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GDO2000 + GNO3                =>       GDD2000 +       GHO2    +       GHNO3                         6.838E-14  0.0      0.  ; HABSAR     ; JK10KEV000
+GDO2000 + HV                  =>       GCH2O   +       GCO     + 2.000 GHO2                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  7400   1.000 /
+G3K2001 + GNO                 =>       GCH2O   +       GCO2    +       GHO2    +       GNO2          7.500E-12  0.0   -290.  ; MJ19KMV000
+G3K2001 + GNO2    + FALLOFF   =>       GPO2000                                                       1.125E-11 -1.1      0.  ; IUPAKMV000
+  FALLOFF / 3.28E-28 -6.9     0.    0.3    0.0    0.0    0.0 /
+G3K2001 + GNO3                =>       GCH2O   +       GCO2    +       GHO2    +       GNO2          8.900E-12  0.0    305.  ; MJ19KMV000
+G3K2001 + GHO2                => 0.370 GGO2000 + 0.130 GAO2000 + 0.130 GO3     + 0.500 GCH2O   +
+                                 0.500 GCO2    + 0.500 GHO2    + 0.500 GHO                           2.105E-12  0.0   -730.  ; MJ19KMV000
+G3K2001 + PERO1               =>       GCH2O   +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO2               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAO2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO3               =>       GCH2O   +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO4               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAO2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO5               =>       GCH2O   +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + MEPERO              => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAO2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO7               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAO2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO8               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAO2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3K2001 + PERO9               =>       GCH2O   +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+GOO2000 + GHO                 =>       GDO2000 +       GHO2                                          5.689E-13  0.0   -965.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GOO2000 + GNO3                =>       GDO2000 +       GHO2    +       GHNO3                         9.800E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+GP02000 + FALLOFF             =>       G3K2000 +       GNO2                                          1.900E+17  0.0  14100.  ; IUPAKMV000
+  FALLOFF / 1.10E-05  0.0 10100.    0.3    0.0    0.0    0.0 /
+GP02000 + GHO                 =>       G2P2000                                                       6.686E-13  0.0    925.  ; HABSAR     ; MJ18KMV000 ; KEXP298    ; VALUEUP
+GP02000 + GNO3                =>       G2P2000 +       GHNO3                                         6.400E-19  0.0      0.  ; HABSAR     ; JK10KEV000
+GP02000 + HV                  =>       G3K2000 +       GNO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  1400   1.000 /
+G2P2000 + GNO                 =>       GNO2    +       G1P2000                                       2.700E-12  0.0   -360.  ; MJ19KMV000
+G2P2000 + GHO2                =>       GPH2000                                                       2.355E-13  0.0  -1300.  ; MJ19KMV000
+G2P2000 + GNO3                =>       G1P2000 +       GNO2                                          8.900E-12  0.0    390.  ; MJ19KMV000
+G2P2000 + PERO1               => 0.800 G1P2000 + 0.200 GPD2000                                       1.000E-13  0.0    421.  ; MJ19KMV000
+G2P2000 + PERO2               => 0.600 G1P2000 + 0.200 GPD2000 + 0.200 GPO2000                       1.000E-13  0.0     52.  ; MJ19KMV000
+G2P2000 + PERO3               => 0.800 G1P2000 + 0.200 GPD2000                                       1.000E-13  0.0   -463.  ; MJ19KMV000
+G2P2000 + PERO4               => 0.600 G1P2000 + 0.200 GPD2000 + 0.200 GPO2000                       1.000E-13  0.0   -579.  ; MJ19KMV000
+G2P2000 + PERO5               => 0.800 G1P2000 + 0.200 GPD2000                                       1.000E-13  0.0   -841.  ; MJ19KMV000
+G2P2000 + MEPERO              => 0.600 G1P2000 + 0.200 GPD2000 + 0.200 GPO2000                       1.000E-13  0.0   -821.  ; MJ19KMV000
+G2P2000 + PERO7               => 0.600 G1P2000 + 0.200 GPD2000 + 0.200 GPO2000                       1.000E-13  0.0   -992.  ; MJ19KMV000
+G2P2000 + PERO8               => 0.600 G1P2000 + 0.200 GPD2000 + 0.200 GPO2000                       1.000E-13  0.0  -1226.  ; MJ19KMV000
+G2P2000 + PERO9               => 0.800 G1P2000 + 0.200 GPD2000                                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G1P2000 + OXYGEN              =>       GPD2000 +       GHO2                                          2.500E-14  0.0    300.  ; RA07KER000
+GG02000 + GHO                 =>       G3K2000                                                       3.834E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GG02000 + GNO3                =>       G2G2000 +       GHNO3                                         6.400E-19  0.0      0.  ; HABSAR     ; JK10KEV000
+GG02000 + HV                  =>       GCH3O2  +       GHO     +       GCO2                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+G2G2000 + GNO                 =>       GNO2    +       G1G2000                                       2.700E-12  0.0   -360.  ; MJ19KMV000
+G2G2000 + GHO2                =>       GGH2000                                                       1.913E-13  0.0  -1300.  ; MJ19KMV000
+G2G2000 + GNO3                =>       G1G2000 +       GNO2                                          8.900E-12  0.0    390.  ; MJ19KMV000
+G2G2000 + PERO1               => 0.800 G1G2000 + 0.200 GGD2000                                       1.000E-13  0.0    496.  ; MJ19KMV000
+G2G2000 + PERO2               => 0.600 G1G2000 + 0.200 GGD2000 + 0.200 GGO2000                       1.000E-13  0.0    127.  ; MJ19KMV000
+G2G2000 + PERO3               => 0.800 G1G2000 + 0.200 GGD2000                                       1.000E-13  0.0   -387.  ; MJ19KMV000
+G2G2000 + PERO4               => 0.600 G1G2000 + 0.200 GGD2000 + 0.200 GGO2000                       1.000E-13  0.0   -504.  ; MJ19KMV000
+G2G2000 + PERO5               => 0.800 G1G2000 + 0.200 GGD2000                                       1.000E-13  0.0   -766.  ; MJ19KMV000
+G2G2000 + MEPERO              => 0.600 G1G2000 + 0.200 GGD2000 + 0.200 GGO2000                       1.000E-13  0.0   -746.  ; MJ19KMV000
+G2G2000 + PERO7               => 0.600 G1G2000 + 0.200 GGD2000 + 0.200 GGO2000                       1.000E-13  0.0   -916.  ; MJ19KMV000
+G2G2000 + PERO8               => 0.600 G1G2000 + 0.200 GGD2000 + 0.200 GGO2000                       1.000E-13  0.0  -1151.  ; MJ19KMV000
+G2G2000 + PERO9               => 0.800 G1G2000 + 0.200 GGD2000                                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G1G2000                       =>       GCO     +       GCH2O   +       GHO2                          1.120E+09  1.7   4328.  ; LV09KER000
+GA02000 + GHO                 =>       G2A2000                                                       2.614E-12  0.0   1125.  ; HABSAR     ; MJ18KMV000 ; KEXP298
+GA02000 + GHO                 =>       GCH3O2  +       GCO2                                          3.304E-14  0.0   -880.  ; HABSAR3    ; MJ18KMV000 ; KEXP298
+GA02000 + GNO3                =>       G2A2000 +       GHNO3                                         6.400E-19  0.0      0.  ; HABSAR     ; JK10KEV000
+G2A2000 + GNO                 =>       GNO2    + 0.240 G1A2000 + 0.760 GCO     + 0.760 GHO     +
+                                 0.760 GCH2O                                                         2.700E-12  0.0   -360.  ; MJ19KMV000
+G2A2000 + GHO2                =>       GAH2000                                                       1.684E-13  0.0  -1300.  ; MJ19KMV000
+G2A2000 + GNO3                =>       G1A2000 +       GNO2                                          8.900E-12  0.0    390.  ; MJ19KMV000
+G2A2000 + PERO1               => 0.800 G1A2000 + 0.200 GAD2000                                       1.000E-13  0.0    565.  ; MJ19KMV000
+G2A2000 + PERO2               => 0.600 G1A2000 + 0.200 GAD2000 + 0.200 GAO2000                       1.000E-13  0.0    196.  ; MJ19KMV000
+G2A2000 + PERO3               => 0.800 G1A2000 + 0.200 GAD2000                                       1.000E-13  0.0   -319.  ; MJ19KMV000
+G2A2000 + PERO4               => 0.600 G1A2000 + 0.200 GAD2000 + 0.200 GAO2000                       1.000E-13  0.0   -435.  ; MJ19KMV000
+G2A2000 + PERO5               => 0.800 G1A2000 + 0.200 GAD2000                                       1.000E-13  0.0   -697.  ; MJ19KMV000
+G2A2000 + MEPERO              => 0.600 G1A2000 + 0.200 GAD2000 + 0.200 GAO2000                       1.000E-13  0.0   -677.  ; MJ19KMV000
+G2A2000 + PERO7               => 0.600 G1A2000 + 0.200 GAD2000 + 0.200 GAO2000                       1.000E-13  0.0   -848.  ; MJ19KMV000
+G2A2000 + PERO8               => 0.600 G1A2000 + 0.200 GAD2000 + 0.200 GAO2000                       1.000E-13  0.0  -1082.  ; MJ19KMV000
+G2A2000 + PERO9               => 0.800 G1A2000 + 0.200 GAD2000                                       2.000E-12  0.0   -508.  ; MJ19KMV000
+G1A2000 + OXYGEN              =>       GAD2000 +       GHO2                                          2.500E-14  0.0    300.  ; RA07KER000
+G1A2000                       =>       GCO     +       GCH2O   +       GHO                           1.120E+09  1.7   5234.  ; LV09KER000
+GHD2000 + GHO                 =>       GDD2000 +       GHO                                           2.460E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GHD2000 + GHO                 =>       G3H2000                                                       1.170E-11  0.0    140.  ; HABSAR     ; MJ18KMV000
+GHD2000 + GHO                 =>       G2D2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GHD2000 + GNO3                =>       GDD2000 +       GHO     +       GHNO3                         3.661E-15  0.0      0.  ; HABSAR     ; JK10KEV000
+GHD2000 + GNO3                =>       G3H2000 +       GHNO3                                         2.463E-15  0.0      0.  ; HABSAR     ; JK10KEV000
+GHD2000 + HV                  =>       G1D2000 +       GHO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GHD2000 + HV                  =>       GCH2O   +       GCO     +       GHO     +       GHO2          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 21800   1.000 /
+G3H2000 + GNO                 =>       GCH2O   +       GCO2    +       GHO     +       GNO2          7.500E-12  0.0   -290.  ; MJ19KMV000
+G3H2000 + GNO2    + FALLOFF   =>       GPH2000                                                       1.125E-11 -1.1      0.  ; IUPAKMV000
+  FALLOFF / 3.28E-28 -6.9     0.    0.3    0.0    0.0    0.0 /
+G3H2000 + GNO3                =>       GCH2O   +       GCO2    +       GHO     +       GNO2          8.900E-12  0.0    305.  ; MJ19KMV000
+G3H2000 + GHO2                => 0.370 GGH2000 + 0.130 GAH2000 + 0.130 GO3     + 0.500 GCH2O   +
+                                 0.500 GCO2    +       GHO                                           2.392E-12  0.0   -730.  ; MJ19KMV000
+G3H2000 + PERO1               =>       GCH2O   +       GCO2    +       GHO                           2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO2               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO     + 0.200 GAH2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO3               =>       GCH2O   +       GCO2    +       GHO                           2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO4               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO     + 0.200 GAH2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO5               =>       GCH2O   +       GCO2    +       GHO                           2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + MEPERO              => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO     + 0.200 GAH2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO7               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO     + 0.200 GAH2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO8               => 0.800 GCH2O   + 0.800 GCO2    + 0.800 GHO     + 0.200 GAH2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3H2000 + PERO9               =>       GCH2O   +       GCO2    +       GHO                           2.000E-12  0.0   -508.  ; MJ19KMV000
+GDD2000 + GHO                 => 2.000 GCO     +       GHO2                                          2.170E-12  0.0   -340.  ; RXEXP      ; MJ18KMV000 ; FORCEDREAC
+GDD2000 + GHO                 =>       G3D2000                                                       9.300E-13  0.0   -340.  ; RXEXP      ; MJ18KMV000 ; FORCEDREAC
+GDD2000 + GNO3                => 2.000 GCO     +       GHO2    +       GHNO3                         1.960E-12  0.0   2375.  ; RXEXP      ; WC99KMV000 ; DUMNO3PD1
+GDD2000 + GNO3                =>       G3D2000 +       GHNO3                                         8.400E-13  0.0   2375.  ; RXEXP      ; WC99KMV000 ; DUMNO3PD1
+GDD2000 + HV                  =>       GH2     + 2.000 GCO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  5100   1.000 /
+GDD2000 + HV                  => 2.000 GCO     + 2.000 GHO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  5200   1.000 /
+GDD2000 + HV                  =>       GCH2O   +       GCO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  5300   1.000 /
+G3D2000 + GNO                 =>       GCO     +       GCO2    +       GHO2    +       GNO2          7.500E-12  0.0   -290.  ; MJ19KMV000
+G3D2000 + GNO2                =>       GCO     +       GCO2    +       GHO2    +       GNO3          6.143E-09 -1.1      0.  ; MJ19KMV000 ; RCOCO3_NO2
+G3D2000 + GNO3                =>       GCO     +       GCO2    +       GHO2    +       GNO2          8.900E-12  0.0    305.  ; MJ19KMV000
+G3D2000 + GHO2                => 0.370 GGD2000 + 0.130 GAD2000 + 0.130 GO3     + 0.500 GCO     +
+                                 0.500 GCO2    + 0.500 GHO2    + 0.500 GHO                           2.105E-12  0.0   -730.  ; MJ19KMV000
+G3D2000 + PERO1               =>       GCO     +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO2               => 0.800 GCO     + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAD2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO3               =>       GCO     +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO4               => 0.800 GCO     + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAD2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO5               =>       GCO     +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + MEPERO              => 0.800 GCO     + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAD2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO7               => 0.800 GCO     + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAD2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO8               => 0.800 GCO     + 0.800 GCO2    + 0.800 GHO2    + 0.200 GAD2000       2.000E-12  0.0   -508.  ; MJ19KMV000
+G3D2000 + PERO9               =>       GCO     +       GCO2    +       GHO2                          2.000E-12  0.0   -508.  ; MJ19KMV000
+GPO2000 + FALLOFF             =>       G3K2001 +       GNO2                                          1.900E+17  0.0  14100.  ; IUPAKMV000
+  FALLOFF / 1.10E-05  0.0 10100.    0.3    0.0    0.0    0.0 /
+GPO2000 + GHO                 =>       GPD2000 +       GHO2                                          2.460E-13  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GPO2000 + GHO                 =>       G1P2000                                                       1.280E-12  0.0    660.  ; HABSAR1    ; MJ18KMV000
+GPO2000 + GNO3                =>       GPD2000 +       GHO2    +       GHNO3                         2.949E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+GPO2000 + GNO3                =>       G1P2000 +       GHNO3                                         2.000E-17  0.0      0.  ; HABSAR1    ; JK10KEV000
+GPO2000 + HV                  =>       G3K2001 +       GNO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 10500   1.000 /
+GGO2000 + GHO                 =>       GGD2000 +       GHO2                                          2.519E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GGO2000 + GHO                 =>       G3K2001                                                       3.768E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GGO2000 + GNO3                =>       GGD2000 +       GHO2    +       GHNO3                         2.949E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+GGO2000 + GNO3                =>       G1G2000 +       GHNO3                                         2.000E-17  0.0      0.  ; HABSAR1    ; JK10KEV000
+GGO2000 + HV                  =>       GCH2O   +       GHO     +       GCO2    +       GHO2          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GAO2000 + GHO                 =>       GAD2000 +       GHO2                                          2.089E-12  0.0    165.  ; HABSAR     ; MJ18KMV000
+GAO2000 + GHO                 =>       GCH2O   +       GCO2    +       GHO2                          3.112E-14  0.0   -880.  ; HABSAR3    ; MJ18KMV000
+GAO2000 + GNO3                =>       GAD2000 +       GHO2    +       GHNO3                         3.149E-16  0.0      0.  ; HABSAR     ; JK10KEV000
+GPH2000 + FALLOFF             =>       G3H2000 +       GNO2                                          1.900E+17  0.0  14100.  ; IUPAKMV000
+  FALLOFF / 1.10E-05  0.0 10100.    0.3    0.0    0.0    0.0 /
+GPH2000 + GHO                 =>       GPD2000 +       GHO                                           2.460E-13  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GPH2000 + GHO                 =>       G2P2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GPH2000 + GNO3                =>       GPD2000 +       GHO     +       GHNO3                         1.638E-17  0.0      0.  ; HABSAR     ; JK10KEV000
+GPH2000 + HV                  =>       G1P2000 +       GHO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GPH2000 + HV                  =>       G3H2000 +       GNO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 10500   1.000 /
+GPD2000 + FALLOFF             =>       G3D2000 +       GNO2                                          1.900E+17  0.0  14100.  ; IUPAKMV000
+  FALLOFF / 1.10E-05  0.0 10100.    0.3    0.0    0.0    0.0 /
+GPD2000 + GHO                 => 2.000 GCO     +       GNO2                                          1.780E-12  0.0   -590.  ; HABSAR     ; MJ18KMV000
+GPD2000 + GNO3                => 2.000 GCO     +       GNO2    +       GHNO3                         1.546E-15  0.0      0.  ; HABSAR     ; JK10KEV000
+GPD2000 + HV                  => 2.000 GCO     +       GHO2    +       GNO2                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  5200   1.000 /
+GGH2000 + GHO                 =>       GGD2000 +       GHO                                           2.460E-12  0.0    -35.  ; HABSAR     ; MJ18KMV000
+GGH2000 + GHO                 =>       G2G2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GGH2000 + GHO                 =>       G3H2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GGH2000 + GNO3                =>       GGD2000 +       GHO     +       GHNO3                         1.638E-17  0.0      0.  ; HABSAR     ; JK10KEV000
+GGH2000 + HV                  =>       G1G2000 +       GHO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GGH2000 + HV                  =>       GCH2O   + 2.000 GHO     +       GCO2                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GAH2000 + GHO                 =>       GAD2000 +       GHO                                           1.926E-12  0.0    165.  ; HABSAR     ; MJ18KMV000
+GAH2000 + GHO                 =>       G2A2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GAH2000 + GHO                 =>       GCH2O   +       GCO2    +       GHO                           2.870E-14  0.0   -880.  ; HABSAR3    ; MJ18KMV000
+GAH2000 + GNO3                =>       GAD2000 +       GHO     +       GHNO3                         1.638E-17  0.0      0.  ; HABSAR     ; JK10KEV000
+GAH2000 + HV                  =>       G1A2000 +       GHO                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV / 40100   1.000 /
+GGD2000 + GHO                 => 2.000 GCO     +       GHO2                                          1.780E-12  0.0   -590.  ; HABSAR     ; MJ18KMV000
+GGD2000 + GHO                 =>       G3D2000                                                       3.680E-13  0.0   -635.  ; HABSAR2    ; MJ18KMV000
+GGD2000 + GNO3                => 2.000 GCO     +       GHO2    +       GHNO3                         1.546E-15  0.0      0.  ; HABSAR     ; JK10KEV000
+GGD2000 + HV                  =>       GHCOOH  +       GCO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  7800   1.000 /
+GGD2000 + HV                  =>       GCO     +       GCO2                                          1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  7900   1.000 /
+GAD2000 + GHO                 => 2.000 GCO     +       GHO                                           1.856E-12  0.0   -590.  ; HABSAR     ; MJ18KMV000
+GAD2000 + GNO3                => 2.000 GCO     +       GHO     +       GHNO3                         1.546E-15  0.0      0.  ; HABSAR     ; JK10KEV000
+GAD2000 + HV                  =>       GCO2    +       GCH2O                                         1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  7800   1.000 /
+GAD2000 + HV                  => 2.000 GCO                                                           1.000E+00  0.0      0.  ; OLDHVRX
+  HV /  7900   1.000 /
