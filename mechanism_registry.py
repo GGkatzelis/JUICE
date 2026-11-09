@@ -6,6 +6,10 @@ Two kinds of chemistry, kept apart:
   mechanisms/base/<ID>/manifest.json      an MCM download exactly as published (never edited)
       files as downloaded (+ checksums), version, source URL and selection, download date,
       citation, status.  Today: MCM_v3.3.1.
+      kind "gecko": a GECKO-A generator output converted once by gecko_import.py into EASY
+      includes (organic chemistry, GECKO-A inorganic core, aliases, dilution pair, partitioning,
+      species table) with the generator files' SHA-256 and the import options in the manifest.
+      An experiment with such a base chooses the inorganic core and the partitioning include.
 
   mechanisms/addons/<ID>/manifest.json    chemistry added on top, as EASY include files
       version, status (draft | reviewed), compatible base IDs, the files, the species it adds
@@ -57,6 +61,12 @@ class BaseMechanism:
     citation: str = ""
     status: str = "reviewed"
     notes: str = ""
+    kind: str = "base"                         # "base" (an MCM download) | "gecko" (a converted GECKO-A generator output)
+    gecko: Dict = field(default_factory=dict)  # kind gecko: precursor, primary_code, n_species, n_reactions_organic, ...
+
+    @property
+    def is_gecko(self) -> bool:
+        return self.kind == "gecko"
 
     def path(self, role: str) -> str:
         return os.path.join(self.folder, self.files[role]) if role in self.files else ""
@@ -110,13 +120,14 @@ def _read_manifest(folder: str) -> Optional[dict]:
         return json.load(fh)
 
 
-def load_bases() -> Dict[str, BaseMechanism]:
+def load_bases(base_dir: str = "") -> Dict[str, BaseMechanism]:
     out: Dict[str, BaseMechanism] = {}
-    if os.path.isdir(BASE_DIR):
-        for d in sorted(os.listdir(BASE_DIR)):
-            folder = os.path.join(BASE_DIR, d)
+    root = base_dir or BASE_DIR
+    if os.path.isdir(root):
+        for d in sorted(os.listdir(root)):
+            folder = os.path.join(root, d)
             m = _read_manifest(folder)
-            if m and m.get("kind", "base") == "base":
+            if m and m.get("kind", "base") in ("base", "gecko"):
                 keys = {k for k in BaseMechanism.__dataclass_fields__} - {"folder"}
                 out[m["id"]] = BaseMechanism(folder=folder, **{k: v for k, v in m.items() if k in keys})
     return out
@@ -142,6 +153,33 @@ def base(base_id: str = "") -> BaseMechanism:
             raise KeyError(f"base mechanism '{bid}' not installed; available: {', '.join(bases)}")
         raise KeyError(f"no base mechanism installed under {BASE_DIR}")
     return bases[bid]
+
+
+def is_gecko(base_id: str) -> bool:
+    try:
+        return base(base_id).is_gecko
+    except KeyError:
+        return False
+
+
+def species_names(base_id: str) -> Dict[str, str]:
+    """NAME -> formula of a GECKO-A base's species table ({} for an MCM base, whose species come from mcm_species_db)."""
+    try:
+        b = base(base_id)
+    except KeyError:
+        return {}
+    p = b.path("species_tsv") if b.is_gecko else ""
+    out: Dict[str, str] = {}
+    if p and os.path.isfile(p):
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            header = fh.readline().rstrip("\n").split("\t")
+            i_name = header.index("Name") if "Name" in header else 0
+            i_formula = header.index("Formula") if "Formula" in header else 4
+            for line in fh:
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) > max(i_name, i_formula) and cols[i_name]:
+                    out[cols[i_name].upper()] = cols[i_formula]
+    return out
 
 
 def addons_for(base_id: str, ids: Optional[List[str]] = None) -> List[AddOn]:
@@ -173,6 +211,15 @@ def addon_species(ids: List[str]) -> Dict[str, str]:
 def provenance_lines(base_id: str, addon_ids: List[str]) -> List[str]:
     """Comment lines for the generated EASY file: what chemistry this run used."""
     b = base(base_id)
+    if b.is_gecko:
+        src = b.source.get("generator_files_sha256", {}) or {}
+        g = b.gecko or {}
+        lines = [f"; CHEMISTRY: base {b.id} ({b.name}; {b.version}) - GECKO-A generator output {b.source.get('folder', '?')}",
+                 "; CHEMISTRY:   generator files sha256[:12] " + ", ".join(f"{k} {v[:12]}" for k, v in src.items()),
+                 f"; CHEMISTRY:   {g.get('n_species', '?')} species, {g.get('n_reactions_inorganic', '?')} inorganic + "
+                 f"{g.get('n_reactions_organic', '?')} organic reactions, {g.get('n_partitioning', '?')} partitioning species; "
+                 f"primary {g.get('primary_code', '?')} = {g.get('precursor', '?')}; options {b.source.get('options', {})}"]
+        return [l.encode("ascii", "replace").decode() for l in lines]
     sha = b.checksums.get(b.files.get("fac", ""), "")[:12]
     lines = [f"; CHEMISTRY: base {b.id} ({b.name}, {b.version}; fac sha256 {sha or 'n/a'}; "
              f"source {b.source.get('url', '?')}, downloaded {b.source.get('downloaded', '?')})"]

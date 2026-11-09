@@ -118,3 +118,6 @@ MCM_tested_scenarios/IDL Input/**/*.figures/
 
 # Paper in preparation: local only, never on GitHub (replaced by the published paper after release)
 paper/
+
+# GECKO-A mechanisms imported into the registry (large, regenerated from the generator output)
+mechanisms/base/GECKOA_*/

@@ -329,14 +329,36 @@ MCM_SAPHIR_Tool branch `easy-start-gui` on 9 Nov 2026 with his notes. From a gen
   the Krechmer gas↔particle↔wall partitioning for the species GECKO-A itself partitions, with C* from its
   Nannoolal vapour pressures; `<name>.species.tsv` with SMILES (rdkit).
 
+**In the app:** the Chemistry step has *Import GECKO-A output…* next to the base-mechanism chooser. Pick the
+generator folder, name its primary species (the MCM name the Injections step will use, suggested where
+known), optionally a generation cut, a C* limit and the wall scheme; the converter runs in the background
+and files the result under `mechanisms/base/GECKOA_<name>/` with a manifest (`kind: gecko`, the generator
+files' SHA-256, the options). From then on it is a base mechanism like the MCM download: choose
+"GECKO-A: …", and the page leaves two decisions — the **inorganic core** (GECKO-A's own, with its photolysis
+anchored on the measured jNO₂/jO¹D; or the MCM v3.3.1 core with the SAPHIR measured-J include, GECKO-A's
+names aliased, for a like-for-like comparison with an MCM run) and whether the **partitioning** include is
+loaded. Everything else — injections, chamber sources, dilution, photolysis, field emissions, studies —
+is written as for any experiment; the run folder gets the includes under `chemistry/`, so FACSIMILE runs
+it too, and the EASY header states the generator provenance. Two things an MCM include set brings in its
+`.saphir.incl` and a GECKO-A mechanism has to bring itself are written by the import and the writer: the
+physics lines (`CONST`, `DENSITY`, `M = DENSITY(P,T)`, `O2`, `N2` in `geckoa.physics.incl`, loaded first —
+without them every termolecular rate, GECKO-A's `TBODY`/`OXYGEN` as much as the MCM `KMT` fall-offs, is
+zero and OH runs away), and the six measured-J names GECKO-A's GPHOT ratios anchor on: the ones a run does
+not measure are defined as the MCM clear-sky `PHTFKT(l,m,n)` (with the HV switch and the jNO₂ scaling of
+`j_clear_sky.incl`) or, in a lamp chamber, from the lamp `J<n>`. Checked on a synthetic SAPHIR day with
+the ethanol generator output: with either core O₃, OH, HONO and the ethanol decay follow the MCM-subset
+run of the same experiment within a few per cent. The same import works from the command line:
+
 ```
+python gecko_import.py <generator folder> --id GECKOA_isoprene --voc C5H8 [--maxgen N] [--cstar-max X] [--wall krechmer|gecko]
 python gecko_to_easy.py <generator folder> --template <SAPHIR .easy> --name Isopren_GECKOA --mode pure --out <EASY root>
 ```
 
-`--mode pure` is self-contained (GECKO-A core); `--mode mcmcore` keeps the template's MCM inorganic core and
-chamber lines and replaces only the organic includes. `--maxgen N` cuts the mechanism at an oxidation
-generation, `--cstar-max` limits the partitioning species. Every generated file carries the SHA of the
-generator files it came from. Verified 9 Nov 2026 on the isoprene mechanism (9 909 species, 44 204
+The second form is Franz's original converter: a complete scenario from a SAPHIR template EASY (`--mode
+pure` = GECKO-A core, `--mode mcmcore` = the template's MCM core with only the organic includes replaced).
+Every generated file carries the SHA of the generator files it came from. Imported mechanisms are
+git-ignored (`mechanisms/base/GECKOA_*/`): regenerate them from the generator output rather than share
+them. Verified 9 Nov 2026 on the isoprene mechanism (9 909 species, 44 204
 generator reactions → 31 340 EASY reactions): regenerated from the raw output, the includes are byte for
 byte those of Franz's run; JUICE parses them to the same 49 741 reactions; with the twostep profile the
 SAPHIR day 18.07.2023 runs in 3 min 17 s (12 015 species with partitioning) and agrees with his BDF run to
@@ -421,6 +443,7 @@ scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, id
 twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BDF2 with fixed-point sweeps, no Jacobian
 gecko_to_easy.py             GECKO-A generator output → EASY includes (gecko_mechanism.py reader, gecko_photolysis.py J fits,
                              gecko_notation_to_smiles.py, make_soa_condensation.py partitioning include; gecko_data/solarlight.phot)
+gecko_import.py              a generator folder → base mechanism of the registry (kind 'gecko'); the Chemistry step's import dialog
 scenario_runner.py           the solver
 chambers.py, chambers/       chamber profiles
 lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)

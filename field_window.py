@@ -48,7 +48,8 @@ STEPS = ["Field case", "Chemistry", "Emissions and constraints", "Mixing and dep
 RUN_STEP = fs.STEP_RUN
 CASE_FILTER = "Field case (*.field.json)"
 TABLE_FILTER = "Input table (*.csv *.txt *.tsv *.xlsx *.xls);;All files (*)"
-CHEM_KEYS = ("base_mechanism", "addons", "precursors", "mechanism_stem", "inorganic_only", "include_dirs", "reaction_adjustments")
+CHEM_KEYS = ("base_mechanism", "addons", "precursors", "mechanism_stem", "inorganic_only", "include_dirs", "reaction_adjustments",
+             "gecko_core", "gecko_partitioning")
 RUN_TEXT = {
     "constrained": "A measurement site. Measured species are held to the data; radicals and products run free. "
                    "No emissions or transport are needed.",
@@ -684,6 +685,7 @@ class FieldWindow(QMainWindow):
             w.currentIndexChanged.connect(self._changed)
         c.mech_combo.currentTextChanged.connect(self._changed)
         c.addon_combo.changed.connect(self._changed)
+        c.gecko_core.currentIndexChanged.connect(self._changed); c.gecko_part.toggled.connect(self._changed)
         for w in (c.mode_compounds, c.mode_existing, c.mode_inorganic):
             w.toggled.connect(self._changed)
         for lst in (c.chosen, c.include_dirs):

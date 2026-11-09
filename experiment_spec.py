@@ -240,6 +240,8 @@ class ExperimentSpec:
     include_dirs: List[str] = field(default_factory=list)       # more folders searched for #include files (an imported FACSIMILE experiment's own)
     easy_version: str = ""                                      # EASY that made the FACSIMILE run this came from ('5.96b'); '' = JUICE's rules (elog_generator.function_scope_for)
     reference_cs: str = ""                                      # FACSIMILE results of the same experiment: 'Compare with FACSIMILE' on the Run step
+    gecko_core: str = "gecko"           # GECKO-A base: inorganic core 'gecko' (as generated) or 'mcm' (MCM v3.3.1 + aliases, measured J include)
+    gecko_partitioning: bool = True     # GECKO-A base: load the gas <-> particle <-> wall partitioning include (Nannoolal C*)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -627,6 +629,58 @@ def write_enz_file(path: str, grid: np.ndarray, cols: Dict[str, np.ndarray]) -> 
 # EASY form
 # ─────────────────────────────────────────────────────────────────────────────
 
+def is_gecko_base(base_id: str) -> bool:
+    return mreg.is_gecko(base_id)
+
+
+def gecko_includes(spec: ExperimentSpec) -> Tuple[List[str], List[str], str]:
+    """(includes_pre, includes_other, dilution stem) of a GECKO-A base: the physics lines (M, O2, N2 - an MCM
+    include set carries them in its .saphir.incl) and the alias file first, the GECKO-A inorganic core when it is
+    the chosen core, then names, organic chemistry and (optionally) partitioning."""
+    b = mreg.base(spec.base_mechanism)
+    fl = b.files
+    pre = ([fl["physics"]] if "physics" in fl else []) + [fl["aliases"]] + ([fl["anorg"]] if (spec.gecko_core or "gecko") == "gecko" else [])
+    other = [fl["names"], fl["organic"]] + ([fl["soa"]] if spec.gecko_partitioning and "soa" in fl else [])
+    return pre, other, b.id
+
+
+# MCM clear-sky parameters (l, m, n of J = l*cos^m(SZA)*exp(n*sec SZA)) of the six measured-J channels GECKO-A's
+# GPHOT(...) anchors on, as in anorg.mcm331.phot.rate / default_minimum.incl (MCM v3.3.1).
+GECKO_ANCHOR_PHTFKT = {"jo1d": "6.073D-05,1.743,-0.474", "jno2": "1.165D-02,0.244,-0.267", "jh2o2": "1.041D-05,0.723,-0.279",
+                       "jhono": "2.644D-03,0.261,-0.288", "jhcho_r": "4.642D-05,0.762,-0.353", "jhcho_m": "6.853D-05,0.477,-0.323"}
+
+
+def gecko_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False) -> None:
+    """Apply a GECKO-A base to a form whose photolysis rows are already set: include files, the .dil pair, the
+    inorganic core choice (GECKO-A's own core drops the MCM anorg set and the SAPHIR measured-J include with its MCM
+    rate overrides; j_clear_sky stays for PHTFKT), and an anchor for every measured-J name GECKO-A's GPHOT(...) refers
+    to that this run does not measure: under the sun the MCM clear-sky PHTFKT(l,m,n) (j_clear_sky.incl: with the HV
+    switch and the measured-jNO2 scaling), under lamps the lamp J<n>.  Never CONST(J<n>) under the sun: J1 etc. exist
+    only with the MCM phot include, and an undefined name is not zero in every path."""
+    import lamp_photolysis as lp
+    pre, other, stem = gecko_includes(spec)
+    ours = set(pre) | set(other)
+    f.includes_pre = pre + [x for x in f.includes_pre if x not in ours]
+    f.includes_other = other + [x for x in f.includes_other if x not in ours]
+    f.mech_stem = ""
+    f.dil_stem = stem
+    core = spec.gecko_core or "gecko"
+    f.use_anorg = core == "mcm"
+    f.use_j_clear_sky = True
+    if core == "gecko":
+        f.jmeasured_include = ""
+        f.j_overrides = {}
+    have = {r.name for r in f.j_rows if r.mode != "off"}
+    for j, n in lp.MEASURED_J.items():
+        if j in have:
+            continue
+        if lamps:
+            f.extra_statements.append(f"{j} = CONST(J{n})   ; GECKO-A photolysis anchor, not measured here: the lamp J{n}")
+        else:
+            f.extra_statements.append(f"{j} = PHTFKT({GECKO_ANCHOR_PHTFKT[j]})   ; GECKO-A photolysis anchor, not measured here: "
+                                      f"MCM clear-sky J{n}, HV and measured-jNO2 scaling as in j_clear_sky.incl")
+
+
 def easy_form(spec: ExperimentSpec) -> EasyForm:
     c, ch = spec.conditions, spec.chamber
     f = default_form()
@@ -698,6 +752,8 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
             f.injections.append(InjectionRow(sw, col, prod, str(ppb)))
         f.chain_reactions.extend(inj.chain)
     f.extra_statements = []
+    if is_gecko_base(spec.base_mechanism):
+        gecko_form(f, spec, lamps=lamps)
     try:                                               # every generated EASY states its chemistry
         f.extra_statements += mreg.provenance_lines(spec.base_mechanism, list(spec.addons))
     except Exception as e:
@@ -737,6 +793,8 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
     """Extract the base-mechanism subset for spec.precursors into <out_dir>/chemistry, copy the
     chosen add-ons next to it and register them as includes, and point the spec at it.
     No-op when spec.mechanism_stem is already set (existing include set)."""
+    if is_gecko_base(spec.base_mechanism):
+        return _ensure_gecko(spec, out_dir)
     if spec.mechanism_stem or not (spec.precursors or spec.inorganic_only):
         return {}
     import io, contextlib, shutil
@@ -761,6 +819,25 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
                 spec.extra_includes.append(os.path.basename(p))
     res["addons"] = [a.id for a in addons]
     return res
+
+
+def _ensure_gecko(spec: ExperimentSpec, out_dir: str) -> dict:
+    """A GECKO-A base: its include files are copied into <out_dir>/chemistry (the run folder stays self-contained,
+    FACSIMILE and JUICE find them next to the EASY); the form takes its include lines from gecko_includes()."""
+    import shutil
+    b = mreg.base(spec.base_mechanism)
+    chem = os.path.join(out_dir, "chemistry")
+    os.makedirs(chem, exist_ok=True)
+    for role, fn in b.files.items():
+        src = os.path.join(b.folder, fn)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(chem, fn))
+    spec.mechanism_stem = ""
+    spec.inorganic_only = False
+    voc = (b.gecko or {}).get("precursor", "")
+    if voc and voc.upper() not in {p.upper() for p in spec.precursors}:
+        spec.precursors = [voc] + list(spec.precursors)
+    return {"mech": os.path.join(chem, b.files["organic"]), "gecko": b.id, "species": (b.gecko or {}).get("n_species")}
 
 
 # FACSIMILE fall-off function; normally defined in anorg.mcm331.dark.rate, which the
@@ -1014,6 +1091,7 @@ def known_species_for(spec: ExperimentSpec, include_dir: str, out_dir: str = "")
             names |= {t.upper() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]*", f"{lhs}+{rhs}")}
     try:
         names |= {s.upper() for s in mreg.addon_species(list(spec.addons))}
+        names |= set(mreg.species_names(spec.base_mechanism))          # a GECKO-A base: its species table
     except Exception:
         pass
     chem = os.path.join(out_dir, "chemistry") if out_dir else ""

@@ -536,6 +536,110 @@ class ConditionsPage(QWizardPage):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+class _GeckoImportThread(QThread):
+    done = pyqtSignal(str)
+    failed = pyqtSignal(str)
+    message = pyqtSignal(str)
+
+    def __init__(self, folder: str, base_id: str, voc: str, maxgen, cstar_max, wall: str):
+        super().__init__(); self.args = (folder, base_id, voc, maxgen, cstar_max, wall)
+
+    def run(self):
+        try:
+            import gecko_import as gi
+            folder, base_id, voc, maxgen, cstar_max, wall = self.args
+            b = gi.import_generator_folder(folder, base_id, voc, "", maxgen, cstar_max, wall, log=self.message.emit)
+            self.done.emit(b.id)
+        except Exception as e:
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class GeckoImportDialog(QDialog):
+    """Pick a GECKO-A generator output folder, name its primary species, choose the import options; the converter
+    runs in the background and the result is registered as a base mechanism."""
+
+    def __init__(self, parent=None, start_dir: str = ""):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QDialogButtonBox, QDoubleSpinBox, QFormLayout, QPlainTextEdit, QSpinBox
+        import gecko_import as gi
+        self._gi = gi
+        self.setWindowTitle("Import GECKO-A generator output as a base mechanism")
+        self.resize(760, 520)
+        self.result_id = ""
+        lay = QVBoxLayout(self)
+        lay.addWidget(_info("A GECKO-A generator output folder (OUT/<mechanism>/ with dictionary.out, reactionswithcom.dum, "
+                            "pvap.nan.dat, pero*.dat, scheme.log) is converted once into EASY include files and filed in "
+                            "mechanisms/base/<id>/ with the generator files' checksums. Afterwards it is a base mechanism like "
+                            "the MCM: choose it, and the experiment records what it used. GECKO-A's own code is not involved."))
+        f = QFormLayout()
+        hb = QHBoxLayout(); self.folder = QLineEdit(); self.folder.textChanged.connect(self._folder_changed); hb.addWidget(self.folder, stretch=1)
+        b = QPushButton("Browse…"); b.clicked.connect(self._browse); hb.addWidget(b); f.addRow("Generator folder", hb)
+        self.summary = _info("—"); f.addRow("", self.summary)
+        self.voc = QLineEdit(); self.voc.setToolTip("The name the experiment uses for the generator's primary species (its MCM name, e.g. C5H8, TOLUENE, C2H5OH)")
+        self.voc.textChanged.connect(self._voc_changed); f.addRow("Primary species name", self.voc)
+        self.base_id = QLineEdit(); self.base_id.setToolTip("Folder name under mechanisms/base/; letters, digits and _"); f.addRow("Mechanism id", self.base_id)
+        self.maxgen = QSpinBox(); self.maxgen.setRange(0, 12); self.maxgen.setSpecialValueText("complete generator output")
+        self.maxgen.setToolTip("Static generation cut: closed-shell organics beyond this oxidation generation do not react further (a size reduction)")
+        f.addRow("Generation cut", self.maxgen)
+        self.cstar = QDoubleSpinBox(); self.cstar.setRange(0, 1e9); self.cstar.setDecimals(1); self.cstar.setSpecialValueText("every species GECKO-A partitions")
+        self.cstar.setToolTip("Partition only species with C* at or below this value (ug/m3); 0 = all"); f.addRow("C* limit for partitioning", self.cstar)
+        self.wall = QComboBox(); self.wall.addItem("Krechmer wall (project scheme)", "krechmer"); self.wall.addItem("GECKO-A's own wall parameters", "gecko")
+        f.addRow("Gas-wall parameters", self.wall)
+        lay.addLayout(f)
+        self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumHeight(140); lay.addWidget(self.log)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import"); self.buttons.accepted.connect(self._start)
+        self.buttons.rejected.connect(self.reject); lay.addWidget(self.buttons)
+        self._thread = None
+        if start_dir:
+            self.folder.setText(start_dir)
+
+    def _browse(self):
+        p = QFileDialog.getExistingDirectory(self, "GECKO-A generator output folder", self.folder.text().strip())
+        if p:
+            self.folder.setText(p)
+
+    def _folder_changed(self, text: str):
+        folder = text.strip()
+        if not folder or not self._gi.is_generator_folder(folder):
+            self.summary.setText("not a generator output folder (dictionary.out and reactionswithcom.dum expected)" if folder else "—"); return
+        s = self._gi.generator_summary(folder)
+        prim = ", ".join(f"{c} {n}".strip() for c, n in s["primaries"]) or "?"
+        self.summary.setText(f"{s['species'] or '?'} species, {s['reactions'] or '?'} reactions, generator maxgen {s['maxgen'] if s['maxgen'] is not None else '?'}; "
+                             f"primary {prim}")
+        if not self.voc.text().strip():
+            self.voc.setText(self._gi.suggest_voc_name(folder))
+        self._voc_changed()
+
+    def _voc_changed(self, _t: str = ""):
+        if self.folder.text().strip():
+            self.base_id.setText(self._gi.suggest_id(self.folder.text().strip(), self.voc.text().strip()))
+
+    def _start(self):
+        folder = self.folder.text().strip()
+        if not self._gi.is_generator_folder(folder):
+            QMessageBox.warning(self, "GECKO-A import", "Choose a generator output folder."); return
+        if not self.voc.text().strip():
+            QMessageBox.warning(self, "GECKO-A import", "Give the primary species a name (its MCM name)."); return
+        self.buttons.setEnabled(False); self.log.appendPlainText(f"importing {folder} …")
+        self._thread = _GeckoImportThread(folder, self.base_id.text().strip(), self.voc.text().strip().upper(),
+                                          self.maxgen.value() or None, self.cstar.value() or None, self.wall.currentData())
+        self._thread.message.connect(self.log.appendPlainText)
+        self._thread.done.connect(self._done); self._thread.failed.connect(self._failed); self._thread.start()
+
+    def _done(self, base_id: str):
+        self.result_id = base_id; self.log.appendPlainText(f"registered as {base_id}"); self.accept()
+
+    def _failed(self, msg: str):
+        self.buttons.setEnabled(True); self.log.appendPlainText("failed: " + msg)
+        QMessageBox.warning(self, "GECKO-A import", msg)
+
+
+def _base_label(b) -> str:
+    return (f"GECKO-A: {b.name}  [{b.status}]" if getattr(b, "is_gecko", False) else f"{b.name}  [{b.status}]")
+
+
 class ChemistryPage(QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -550,22 +654,42 @@ class ChemistryPage(QWizardPage):
         self.base_combo = QComboBox()
         self._bases = mreg.load_bases()
         for b in self._bases.values():
-            self.base_combo.addItem(f"{b.name}  [{b.status}]", b.id)
+            self.base_combo.addItem(_base_label(b), b.id)
         self.base_combo.currentIndexChanged.connect(self._base_changed); mg.addWidget(self.base_combo, 0, 1)
         self.base_info = _info(""); mg.addWidget(self.base_info, 0, 2)
+        self.import_btn = QPushButton("Import GECKO-A output…"); self.import_btn.clicked.connect(self._import_gecko)
+        self.import_btn.setToolTip("Convert a GECKO-A generator output folder into a base mechanism of this list")
+        mg.addWidget(self.import_btn, 0, 3)
         mg.addWidget(QLabel("Add-ons"), 1, 0)
         self.addon_combo = MultiSelectCombo(); self.addon_combo.changed.connect(self._addons_changed)
         mg.addWidget(self.addon_combo, 1, 1)
         self.addon_info = _info("none chosen"); mg.addWidget(self.addon_info, 1, 2)
         lay.addLayout(mg)
-        self._base_changed()
+        # a GECKO-A base: the generator's primary is the compound; two choices remain
+        self.gecko_box = QGroupBox("GECKO-A mechanism"); gl = QGridLayout(self.gecko_box)
+        self.gecko_info = _info(""); gl.addWidget(self.gecko_info, 0, 0, 1, 2)
+        gl.addWidget(QLabel("Inorganic core"), 1, 0); self.gecko_core = QComboBox()
+        self.gecko_core.addItem("GECKO-A's own inorganic core (as generated)", "gecko")
+        self.gecko_core.addItem("MCM v3.3.1 inorganic core with the SAPHIR measured-J include (GECKO-A names aliased)", "mcm")
+        self.gecko_core.setToolTip("With GECKO-A's core the chamber photolysis uses GECKO-A's J(SZA) ratios anchored on the measured jNO2/jO1D;\n"
+                                   "with the MCM core the inorganic chemistry and photolysis are exactly those of an MCM experiment and only\n"
+                                   "the organic chemistry comes from GECKO-A - the choice for a like-for-like comparison with an MCM run.")
+        gl.addWidget(self.gecko_core, 1, 1)
+        self.gecko_part = QCheckBox("Gas-particle-wall partitioning of the condensable species (GECKO-A's Nannoolal C*, Krechmer wall)")
+        self.gecko_part.setChecked(True); gl.addWidget(self.gecko_part, 2, 0, 1, 2)
+        gl.addWidget(_info("The chemistry comes from the imported generator output as EASY includes (FACSIMILE runs them too). "
+                           "Injections name the primary species as written here; every other GECKO-A species is known to the injection "
+                           "step under its MCM name where one exists, otherwise as G<GECKO code>. Mechanisms of this size run best "
+                           "with the twostep solver profile."), 3, 0, 1, 2)
+        lay.addWidget(self.gecko_box)
+        self.mcm_box = QWidget(); ml = QVBoxLayout(self.mcm_box); ml.setContentsMargins(0, 0, 0, 0)
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
         self.mode_existing = QRadioButton("Existing mechanism include set")
         self.mode_inorganic = QRadioButton("Inorganic chemistry only (no VOC)")
         self.mode_inorganic.setToolTip("NOx, O3, HOx, CO, SO2 chemistry and photolysis plus the chamber's own HONO and HCHO sources —\n"
                                        "for tests such as dilution, NO/O3 titration, CO or zero-air experiments.")
         self.mode_compounds.setChecked(True)
-        hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); lay.addLayout(hb)
+        hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); ml.addLayout(hb)
         g = QGridLayout()
         g.addWidget(QLabel("Search MCM species (name or formula)"), 0, 0)
         self.search = QLineEdit(); self.search.textChanged.connect(self._filter); g.addWidget(self.search, 0, 1)
@@ -576,11 +700,11 @@ class ChemistryPage(QWizardPage):
         g.addLayout(bb, 2, 0, 1, 2)
         g.addWidget(QLabel("Chosen compounds"), 0, 2)
         self.chosen = QListWidget(); g.addWidget(self.chosen, 1, 2, 2, 1)
-        lay.addLayout(g)
+        ml.addLayout(g)
         hb2 = QHBoxLayout(); hb2.addWidget(QLabel("Existing mechanism"))
         self.mech_combo = QComboBox(); self.mech_combo.setEditable(True)
         self.mech_combo.addItems([""] + list(scan_mechanisms(wiz.include_dir))); hb2.addWidget(self.mech_combo, stretch=1)
-        lay.addLayout(hb2)
+        ml.addLayout(hb2)
         # more folders with include files: an imported FACSIMILE experiment keeps its mechanism where it is
         hb2b = QHBoxLayout(); hb2b.addWidget(QLabel("Include folders"))
         self.include_dirs = QListWidget(); self.include_dirs.setMaximumHeight(52)
@@ -589,9 +713,9 @@ class ChemistryPage(QWizardPage):
         hb2b.addWidget(self.include_dirs, stretch=1)
         vb = QVBoxLayout(); b = QPushButton("Add …"); b.clicked.connect(self._add_include_dir); vb.addWidget(b)
         b = QPushButton("Remove"); b.clicked.connect(self._remove_include_dir); vb.addWidget(b); hb2b.addLayout(vb)
-        lay.addLayout(hb2b)
-        lay.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
-                            "the CHANEL template shows how a mixture is written as mole fractions."))
+        ml.addLayout(hb2b)
+        ml.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
+                           "the CHANEL template shows how a mixture is written as mole fractions."))
 
         # first-generation products of the chosen compounds (from the full MCM .fac): one block per
         # compound, one column per reaction partner, products listed downwards, rate on hover
@@ -605,7 +729,8 @@ class ChemistryPage(QWizardPage):
         tl.addLayout(hb3)
         self._tree_widgets = [self.tree_tabs] + [hb3.itemAt(i).widget() for i in range(hb3.count()) if hb3.itemAt(i).widget()]
         tb.toggled.connect(self._toggle_tree)
-        lay.addWidget(tb)
+        ml.addWidget(tb)
+        lay.addWidget(self.mcm_box)
 
         # reaction adjustments = EASY k[...] overrides
         ab = QGroupBox("Reaction adjustments (written exactly as EASY does it)"); al = QVBoxLayout(ab)
@@ -624,10 +749,39 @@ class ChemistryPage(QWizardPage):
                            "JUICE drops the reaction). Write rates in EASY notation, e.g. 2.70D-11*EXP(390/T)*0.5."))
         lay.addWidget(ab)
         self._filter("")
+        self._base_changed()
 
     # ── base / add-ons ──
     def base_id(self) -> str:
         return self.base_combo.currentData() or mreg.DEFAULT_BASE
+
+    def is_gecko(self) -> bool:
+        b = self._bases.get(self.base_id())
+        return bool(b is not None and b.is_gecko)
+
+    def _gecko_changed(self):
+        g = self.is_gecko()
+        self.gecko_box.setVisible(g); self.mcm_box.setVisible(not g)
+        if g:
+            b = self._bases[self.base_id()]; d = b.gecko or {}
+            self.gecko_info.setText(
+                f"{b.name} - primary {d.get('primary_code', '?')} {d.get('primary_notation', '')} is called {d.get('precursor', '?')}; "
+                f"{d.get('n_species', '?')} species, {d.get('n_reactions_inorganic', '?')} inorganic + {d.get('n_reactions_organic', '?')} organic "
+                f"reactions, {d.get('n_partitioning', '?')} partitioning species; {b.version}; generator output {b.source.get('folder', '?')}")
+
+    def _reload_bases(self, select: str = ""):
+        self._bases = mreg.load_bases()
+        keep = select or self.base_id()
+        self.base_combo.blockSignals(True); self.base_combo.clear()
+        for b in self._bases.values():
+            self.base_combo.addItem(_base_label(b), b.id)
+        i = self.base_combo.findData(keep); self.base_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.base_combo.blockSignals(False); self._base_changed()
+
+    def _import_gecko(self):
+        dlg = GeckoImportDialog(self, start_dir=getattr(self.wiz, "easy_root", ""))
+        if dlg.exec() and dlg.result_id:
+            self._reload_bases(dlg.result_id)
 
     def addon_ids(self) -> List[str]:
         return self.addon_combo.checked_ids()
@@ -651,11 +805,13 @@ class ChemistryPage(QWizardPage):
                                      a.id in keep) for a in addons],
                                     empty_text="none installed for this base (mechanisms/addons/<id>/manifest.json)")
         self._addons_changed()
+        if hasattr(self, "gecko_box"):
+            self._gecko_changed()
 
     # ── first-generation tree / adjustments ──
     def _fac(self) -> str:
         from experiment_spec import base_fac
-        return base_fac(self.base_id())
+        return "" if self.is_gecko() else base_fac(self.base_id())
 
     def _toggle_tree(self, on: bool):
         for w in self._tree_widgets:
@@ -700,6 +856,8 @@ class ChemistryPage(QWizardPage):
         q = self.rxn_search.text().strip()
         if not q:
             return
+        if self.is_gecko():
+            self._find_gecko_reactions(q.upper()); return
         try:
             rxns = reactions_of(q, self._fac())
         except Exception as e:
@@ -708,6 +866,34 @@ class ChemistryPage(QWizardPage):
             it = QListWidgetItem(f"{r['easy']}      k = {r['easy_rate']}"); it.setData(Qt.ItemDataRole.UserRole, (r["easy"], r["easy_rate"])); self.found.addItem(it)
         if not rxns:
             self.found.addItem(f"no MCM reactions with {q.upper()} as a reactant")
+
+    def _find_gecko_reactions(self, q: str):
+        """Reactions of the GECKO-A organic include with q as a reactant: 'X + ... --> ...' and its k[] line."""
+        import re as _re
+        b = self._bases[self.base_id()]
+        n = 0
+        try:
+            lines = open(b.path("organic"), encoding="latin-1").read().splitlines()
+        except OSError as e:
+            self.found.addItem(f"cannot read the GECKO-A include: {e}"); return
+        rates = {}
+        for l in lines:
+            m = _re.match(r"\s*k\[(.+?)\]\s*=\s*CONST\((.*)\)\s*$", l.split(";", 1)[0] if not l.lstrip().startswith(";") else "")
+            if m:
+                rates[_re.sub(r"\s+", "", m.group(1)).upper()] = m.group(2).strip()
+        for l in lines:
+            code = l.split(";", 1)[0].strip()
+            if "-->" not in code or code.startswith("k["):
+                continue
+            lhs = code.split("-->", 1)[0]
+            if any(_re.sub(r"^[0-9.eE+\-]*\*", "", t.strip()).upper() == q for t in lhs.split("+")):
+                rate = rates.get(_re.sub(r"\s+", "", code).upper(), "")
+                it = QListWidgetItem(f"{code}      k = {rate}"); it.setData(Qt.ItemDataRole.UserRole, (code, rate)); self.found.addItem(it)
+                n += 1
+                if n >= 60:
+                    self.found.addItem("… more; narrow the name"); break
+        if not n:
+            self.found.addItem(f"no GECKO-A reactions with {q} as a reactant")
 
     def _adjust_from_found(self, item):
         data = item.data(Qt.ItemDataRole.UserRole)
@@ -775,11 +961,22 @@ class ChemistryPage(QWizardPage):
             self.include_dirs.addItem(d)
         self._refresh_mechanisms()
         self.mech_combo.setCurrentText(spec.mechanism_stem)
+        i = self.gecko_core.findData(spec.gecko_core or "gecko"); self.gecko_core.setCurrentIndex(i if i >= 0 else 0)
+        self.gecko_part.setChecked(bool(spec.gecko_partitioning))
         (self.mode_existing if spec.mechanism_stem else self.mode_inorganic if spec.inorganic_only else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
         self.update_tree()
 
     def apply(self, spec: ExperimentSpec):
+        spec.gecko_core = self.gecko_core.currentData() or "gecko"
+        spec.gecko_partitioning = self.gecko_part.isChecked()
+        if self.is_gecko():
+            b = self._bases[self.base_id()]
+            spec.inorganic_only = False; spec.mechanism_stem = ""
+            spec.precursors = [p for p in [(b.gecko or {}).get("precursor", "")] if p]
+            spec.reaction_adjustments = [(a, b_, c) for a, b_, c in _rows(self.adjust) if a.strip()]
+            spec.base_mechanism = self.base_id(); spec.addons = []; spec.include_dirs = self.include_dir_list()
+            return
         spec.inorganic_only = self.mode_inorganic.isChecked()
         if self.mode_existing.isChecked():
             spec.mechanism_stem = self.mech_combo.currentText().strip(); spec.precursors = []
@@ -793,6 +990,8 @@ class ChemistryPage(QWizardPage):
         spec.include_dirs = self.include_dir_list()
 
     def validatePage(self) -> bool:
+        if self.is_gecko():
+            return True
         if self.mode_existing.isChecked() and not self.mech_combo.currentText().strip():
             QMessageBox.warning(self, "Chemistry", "Choose a mechanism include set."); return False
         if self.mode_compounds.isChecked() and self.chosen.count() == 0:
