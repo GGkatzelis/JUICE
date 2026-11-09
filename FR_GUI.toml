@@ -19,8 +19,9 @@ favorites = "['OH', 'HO2', 'RO2', 'NO', 'NO2', 'O3', 'Ox', 'NOx', 'NOy', 'HONO',
 #             of FACSIMILE (O3/NOx/OH/HO2 within 0.25 %). For O3, SOA and product studies.
 #   precise — rtol 1e-6, cold restart at every ENZ row. ~2x slower. Main species within 0.03 % in large
 #             mechanisms; rare excursions (up to 5x) in species < 0.01 ppt. For validation and reference runs.
-#   twostep — Verwer's TWOSTEP (no Jacobian, no LU; twostep_solver.py), rtol 1e-3, 3 iterations per step.
-#             For GECKO-A-sized mechanisms (> ~10 000 species). Same answer as fast to ~0.05 % (median).
+#   twostep — Verwer's TWOSTEP (no Jacobian, no LU; twostep_solver.py), rtol 1e-3, 3..10 sweeps per step (adaptive).
+#             For GECKO-A-sized mechanisms (> ~10 000 species). Same answer as fast to ~0.05 % (median); species
+#             below ~30 x atol_floor are numerical zero in its output.
 profile = "fast"
 rtol_choices = "[0.01, 1e-04, 1e-06]"
 hmax = "60.0"
@@ -54,7 +55,9 @@ perstep_warm = "false"
 rtol = "1e-03"
 perstep_warm = "false"
 solver_method = "TWOSTEP"
-twostep_numit = "3"          # fixed-point iterations per step (GECKO-A box model: 10; Verwer: few)
+twostep_numit = "3"          # fixed-point sweeps per step at least (GECKO-A box model: a fixed 10; Verwer: few)
+twostep_numit_max = "10"     # more sweeps until the iterate has converged (= twostep_numit restores the fixed count)
+twostep_conv = "0.1"         # converged when the iterate changes by less than this x (atol + rtol*|y|), max-norm
 twostep_dtmin = "1e-4"       # smallest step in s
 
 [viewer]

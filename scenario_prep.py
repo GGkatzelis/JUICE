@@ -74,20 +74,20 @@ SOLVER_PROFILES: Dict[str, dict] = {
     },
     "twostep": {
         "rtol": 1e-3, "perstep_warm": False,
-        "solver_method": "TWOSTEP", "twostep_numit": 3, "twostep_dtmin": 1e-4,
+        "solver_method": "TWOSTEP", "twostep_numit": 3, "twostep_numit_max": 10, "twostep_conv": 0.1, "twostep_dtmin": 1e-4,
         "label": "TWOSTEP (Verwer 1994, rtol 1e-3, no Jacobian)",
         "summary": "For large mechanisms (GECKO-A, above ~10 000 species): no Jacobian and no LU factorisation, "
                    "so the run time grows with the number of reactions, not with the fill-in of the Jacobian "
-                   "(toluene GECKO-A with 79 000 species: 73 min instead of 15 h). BDF2 with three fixed-point "
-                   "sweeps per step, cold restart at every ENZ row. Against FACSIMILE every species above 1 ppt "
-                   "within 0.72 % (scenes 04-09); species below 0.004 ppt can carry a restart transient of a few "
-                   "thousand molecules/cm3, as under 'precise'. In MCM-sized mechanisms between 9x faster "
-                   "(scene_06) and 2.3x slower (isoprene days, whose fast-changing RO2 force sub-second steps) "
-                   "than 'fast'; the profile for mechanisms BDF cannot run.",
+                   "(toluene GECKO-A with 79 000 species: 73 min instead of 15 h). BDF2 with 3 to 10 fixed-point "
+                   "sweeps per step (more until the iterate has converged), cold restart at every ENZ row. Against "
+                   "FACSIMILE every species above 1 ppt within 0.7 % (scenes 04-09). Species below ~30 x the atol "
+                   "floor (3000 molecules/cm3, 1e-13 ppb) are numerical zero in its output: after each restart the "
+                   "BDF2 history carries the last increment on, within what atol allows. In MCM-sized mechanisms "
+                   "faster than 'fast' (scene_06 9x); the profile for mechanisms BDF cannot run.",
     },
 }
 DEFAULT_PROFILE = "fast"
-PROFILE_KEYS = ("solver_method", "twostep_numit", "twostep_dtmin")      # profile keys beyond rtol / perstep_warm
+PROFILE_KEYS = ("solver_method", "twostep_numit", "twostep_numit_max", "twostep_conv", "twostep_dtmin")   # beyond rtol / perstep_warm
 
 
 def _tobool(v) -> bool:
@@ -127,6 +127,10 @@ def resolve_profile(sol: dict, profile: str | None = None) -> dict:
         out["solver_method"] = str(p["solver_method"]).strip().upper()
     if "twostep_numit" in p:
         out["twostep_numit"] = int(float(p["twostep_numit"]))
+    if "twostep_numit_max" in p:
+        out["twostep_numit_max"] = int(float(p["twostep_numit_max"]))
+    if "twostep_conv" in p:
+        out["twostep_conv"] = float(p["twostep_conv"])
     if "twostep_dtmin" in p:
         out["twostep_dtmin"] = float(p["twostep_dtmin"])
     return out

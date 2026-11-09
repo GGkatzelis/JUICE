@@ -73,6 +73,7 @@ def test_twostep_profile_resolves_to_the_verwer_solver():
     sol = sp.solver_from_toml(TOML, "twostep")
     assert sol["solver_profile"] == "twostep" and sol["solver_method"] == "TWOSTEP"
     assert (sol["rtol"], sol["perstep_warm"], sol["twostep_numit"], sol["twostep_dtmin"]) == (1e-3, False, 3, 1e-4)
+    assert (sol["twostep_numit_max"], sol["twostep_conv"]) == (10, 0.1)
     # the BDF profiles keep the TOML's method and carry no TWOSTEP keys
     for name in ("fast", "precise"):
         sol = sp.solver_from_toml(TOML, name)

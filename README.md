@@ -392,27 +392,30 @@ Compare runs only within one profile: the difference between the profiles (up to
 than the difference between two runs with the same profile.
 
 **twostep** is the solver of the GECKO-A box model: Verwer's TWOSTEP (SIAM J. Sci. Comput. 15, 1243,
-1994; Verwer and Simpson 1995), a variable-step BDF2 whose implicit stage is solved by a fixed number
-of fixed-point sweeps y ← (w + gP)/(1 + gL) on the production/loss form instead of Newton iterations
-with an LU factorisation. No Jacobian is built, so the cost per step is three rate evaluations and the
-run time grows with the number of reactions rather than with the fill-in of the Jacobian factorisation
+1994; Verwer and Simpson 1995), a variable-step BDF2 whose implicit stage is solved by fixed-point
+sweeps y ← (w + gP)/(1 + gL) on the production/loss form instead of Newton iterations with an LU
+factorisation — at least three sweeps, more (up to ten) until the iterate has converged to a tenth of
+the tolerance, because an unconverged iterate pollutes the error estimate and forces needless small
+steps (isoprene peroxy radicals did exactly that with a fixed count). No Jacobian is built, so the cost
+per step is three to five rate evaluations and the run time grows with the number of reactions rather
+than with the fill-in of the Jacobian factorisation
 — the term that stops BDF in GECKO-A mechanisms (toluene GECKO-A, 79 000 species: 73 min against
 15 h; 118 000 species / 469 000 reactions: 2.5 h, where BDF did not finish in 20 h). It restarts at
 every ENZ row (implicit Euler), rtol 1e-3 with Verwer's max-norm error test, atol floor 100. Written
 by Franz Rohrer ([twostep_solver.py](twostep_solver.py), an independent Python implementation of the
-published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026): every species above
-1 ppt in scenes 04–09 within 0.72 % (fast: 0.56 %), and in scenes 06, 07 and 09 *more* species within
-0.1 % than fast; the median deviation from fast over all species above 1e7 molecules/cm³ is 0.05–0.07 %.
-Below ~1e5 molecules/cm³ (0.004 ppt) it shares the cold-restart artefact of precise, in a milder form:
-a transient at an injection row can leave a species that should hold 3 molecules/cm³ at a few thousand
-(SA in scene_08, DHPMPAL in scene_07), so `run_benchmark.py` at its 100-molecule floor reports FAILs
-there, exactly as it does for precise. Its run time depends on the chemistry of the day, not on the
-mechanism size: on an idle machine scene_06 (limonene, 747 species) takes 9 s against 81 s with fast,
-scene_08 (isoprene, 612 species) 33 s against 24 s and scene_09 (isoprene, 3228 species) 6.2 min
-against 2.7 min. On the isoprene days two peroxy radicals at ~1e6 molecules/cm³ (CISOPAO2, ISOPBO2)
-change by ~1 % per second and, under the max-norm error test, hold the step below a second for most of
-the day — 200 steps per 60-s row against 28 in scene_06, with ~4000 marginal rejections — where BDF at
-order 5 strides through. Its purpose is the mechanism BDF cannot run. Per-ENZ-row mode only;
+published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026, adaptive iteration):
+every species above 1 ppt in scenes 04–09 within 0.72 % except ISOPBO2 in scene_08 at 1.6 % (fast:
+0.56 %), and in scenes 06, 07 and 09 *more* species within 0.1 % than fast; the median deviation from
+fast over all species above 1e7 molecules/cm³ is 0.05–0.07 %.
+Species below about 30 × the absolute-tolerance floor (3000 molecules/cm³ ≈ 1e-13 ppb at the default
+`atol_floor` of 100) are numerical zero in its output: after every restart the two-step history of BDF2
+carries the last real increment on (parasitic root 0.8 when the step doubles), by an amount the absolute
+tolerance permits — so a species that should hold 3 molecules/cm³ can end at thousands (SA in scene_07/08),
+and `run_benchmark.py` at its 100-molecule floor reports FAILs there, as it does for precise, whose cold
+restarts show ≈ 1 × atol of the same effect. If sub-ppt species matter, lower `atol_floor`. Run time (two
+benchmark workers, scenes 04–09 together): 191 s for the nine scenes against 465 s with fast; scene_08
+15 s against 24 s, scene_09 75 s against 161 s on an idle machine; 3.1–4.6 sweeps per step. Its purpose
+is the mechanism BDF cannot run. Per-ENZ-row mode only;
 `JUICE_TS_CHECK=1` verifies at every row start
 that P − L·y equals the BDF right-hand side, `JUICE_TS_ROWS=430,431` additionally integrates those rows
 with BDF at rtol 1e-8 and prints the largest deviations.

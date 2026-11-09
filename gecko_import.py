@@ -38,7 +38,9 @@ CITATION = ("GECKO-A: Aumont, Szopa & Madronich, ACP 5, 2497 (2005); Valorso et 
 PRIMARY_NAMES = {"ISOPRE": "C5H8", "APINEN": "APINENE", "BPINEN": "BPINENE", "LIMONE": "LIMONENE", "TOLUEN": "TOLUENE",
                  "BENZEN": "BENZENE", "OXYLEN": "OXYL", "MXYLEN": "MXYL", "PXYLEN": "PXYL"}
 NOTATION_NAMES = {"CH3CH2(OH)": "C2H5OH", "CH3(OH)": "CH3OH", "CH3CHO": "CH3CHO", "CH3COCH3": "CH3COCH3",
-                  "CH2=CH2": "C2H4", "CH3CH=CH2": "C3H6", "CH3CH2CH2CH2CH2CH2CH2CH3": "NC8H18", "CH3CH2CH2CH3": "NC4H10"}
+                  "CH2=CH2": "C2H4", "CH3CH=CH2": "C3H6", "CH3CH2CH2CH2CH2CH2CH2CH3": "NC8H18", "CH3CH2CH2CH3": "NC4H10",
+                  "c1HcHcHcHcHc1CH3": "TOLUENE", "c1HcHcHcHcHcH1": "BENZENE",            # GECKO-A aromatic notation (lower-case ring c)
+                  "CH2=CH-C(CH3)=CH2": "C5H8", "CH2=CHC(CH3)=CH2": "C5H8"}
 
 
 def generator_summary(folder: str) -> dict:

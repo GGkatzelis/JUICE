@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """twostep_solver.py -- TWOSTEP (Verwer 1994) as a JUICE ODE backend.
 
-Written by F. Rohrer (MCM_SAPHIR_Tool branch easy-start-gui, 2026-11-09) and taken over unchanged into JUICE;
-the runner (scenario_runner._solve, solver_method "TWOSTEP") and the solver profile "twostep" (scenario_prep)
-drive it.  Integration notes: Franz's TWOSTEP_BACKEND.md; here README "Solver profiles".
+Written by F. Rohrer (MCM_SAPHIR_Tool branch easy-start-gui; 2026-11-09, adaptive iteration 279df43) and taken over
+unchanged into JUICE; the runner (scenario_runner._solve, solver_method "TWOSTEP") and the solver profile "twostep"
+(scenario_prep) drive it.  Integration notes: Franz's TWOSTEP_BACKEND.md; here README "Solver profiles".
 
     python twostep_solver.py --selftest          # mini SAPHIR-like mechanism vs scipy BDF reference
 
@@ -133,16 +133,28 @@ def _fit(t, te, dt):
 
 
 def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
-            max_steps=2_000_000, stats=None):
+            max_steps=2_000_000, stats=None, trace=None,
+            numit_max=None, conv=0.1, max_growth=2.0, restart_growth=None, restart_steps=0):
     """Integrate dy/dt = P - L*y from t0 to t1 with Verwer's TWOSTEP.
 
     pl_fn(t, y) -> (P, L)   arrays (molec cm-3 s-1, s-1); y is always >= smallc.
     atol        float or array (molec cm-3), rtol float; error test = max-norm of the BDF2 local error estimate.
     dtmin == dtmax -> fixed step (no error control, last step shortened to hit t1).
-    Returns y(t1).  `stats` (dict) collects nfcn, naccpt, nrejec, nstart."""
+    Returns y(t1).  `stats` (dict) collects nfcn, naccpt, nrejec, nstart.
+    `trace(t_abs, y, dt, kind)` is called after every accepted step (kind 'euler' or 'bdf2') -- debugging only.
+
+    Iteration control: `numit` sweeps are always done; when `numit_max` > numit, further sweeps follow until the
+    change of the iterate is below `conv` x (atol + rtol|y|) in the max-norm or numit_max is reached (an unconverged
+    Jacobi iterate pollutes the BDF2 error estimate and forces sub-second steps -- intermediate-lifetime RO2).
+    Step growth: the factor per step is limited to `max_growth` (Verwer: 2); `restart_growth` (if set) applies for
+    the first `restart_steps` BDF2 steps after a (re)start -- the parasitic root of variable-step BDF2 is
+    omega^2/(1+2 omega) (0.8 for doubling, 1/3 for constant steps), so fast growth right after the implicit-Euler
+    start carries the transient of the start step into the following steps (floor species end at ~20 x atol)."""
     y = np.maximum(np.asarray(y0, dtype=np.float64), smallc)
     n = y.size
     atol_v = np.broadcast_to(np.asarray(atol, dtype=np.float64), (n,))
+    if numit_max is None or numit_max < numit:
+        numit_max = numit
     # Integrate in time RELATIVE to t0: JUICE times are seconds since 2000 (~8e8 s), where an absolute
     # end test such as t >= te - 1e-9*|te| would stop up to ~1 s early (1 % of a 60-s ENZ row).
     t0_abs = float(t0)
@@ -154,10 +166,15 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
 
     def iterate(w, g, ynew, t_eval):
         nonlocal nfcn
-        for _ in range(numit):
+        for it in range(numit_max):
             P, L = pl_fn(t0_abs + t_eval, ynew)
             nfcn += 1
-            ynew = np.maximum(smallc, (w + g * P) / (1.0 + g * L))
+            ynext = np.maximum(smallc, (w + g * P) / (1.0 + g * L))
+            if it + 1 >= numit and it + 1 < numit_max:
+                # converged? (max-norm change relative to the tolerance)
+                if float(np.max(np.abs(ynext - ynew) / (atol_v + rtol * np.abs(ynext)))) < conv:
+                    return ynext
+            ynew = ynext
         return ynew
 
     fixed = (dtmin == dtmax)
@@ -190,10 +207,13 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
         naccpt += 1
         t += dt
         y = ynew
+        if trace is not None:
+            trace(t0_abs + t, y, dt, 'euler')
         dtold = dt
         ratio = 1.0
         back_to_restart = False
         nsteps = 0
+        n_since_restart = 0
         while True:                               # label 60: BDF2 steps
             nsteps += 1
             if nsteps > max_steps:
@@ -230,8 +250,11 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
                 accept = True
                 dtold = dt
                 ts = t + dtold
-            fac = 0.8 / math.sqrt(errlte) if errlte > 0.0 else 2.0
-            dt = max(0.5, min(2.0, fac)) * dt
+            fac = 0.8 / math.sqrt(errlte) if errlte > 0.0 else max_growth
+            growth = max_growth
+            if restart_growth is not None and n_since_restart < restart_steps:
+                growth = min(max_growth, restart_growth)
+            dt = max(0.5, min(growth, fac)) * dt
             dt = max(dtmin, min(dt, dtmax))
             dt = _fit(ts, te, dt)
             ratio = dt / dtold
@@ -240,7 +263,10 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
                 restart = False
                 t += dtold
                 naccpt += 1
+                n_since_restart += 1
                 yold, y = y, ynew
+                if trace is not None:
+                    trace(t0_abs + t, y, dtold, 'bdf2')
                 if t >= te - eps_end:
                     break
                 continue

@@ -1968,8 +1968,13 @@ class ScenarioRunner:
                 _perstep_snap = True
             _ts_numit = int(float(self.cfg.get('twostep_numit', _solver_toml.get('twostep_numit', 3))))
             _ts_dtmin = float(self.cfg.get('twostep_dtmin', _solver_toml.get('twostep_dtmin', 1e-4)))
-            print(f"  [SOLVER] TWOSTEP: numit={_ts_numit}  dtmin={_ts_dtmin:g}s  dtmax=hmax  "
-                  f"(no Jacobian; jac_mode/perstep_warm/first_step ignored)")
+            # adaptive iteration (F. Rohrer, 279df43): at least numit sweeps, more (up to numit_max) until the iterate
+            # has converged to conv x tolerance -- an unconverged Jacobi iterate pollutes the BDF2 error estimate
+            # (isoprene RO2 forced 208 steps per row in scene_08 with a fixed numit of 3; adaptive: 22 instead of 211 k)
+            _ts_numit_max = int(float(self.cfg.get('twostep_numit_max', _solver_toml.get('twostep_numit_max', 10))))
+            _ts_conv = float(self.cfg.get('twostep_conv', _solver_toml.get('twostep_conv', 0.1)))
+            print(f"  [SOLVER] TWOSTEP: numit={_ts_numit} (adaptive up to {_ts_numit_max}, conv {_ts_conv:g} x tol)  "
+                  f"dtmin={_ts_dtmin:g}s  dtmax=hmax  (no Jacobian; jac_mode/perstep_warm/first_step ignored)")
 
         # ── Per-row rate-constant cache (per-ENZ-row modes only) ─────────────────
         # Inside a row every setting is frozen by the snapshot, so k depends on y
@@ -2345,7 +2350,8 @@ class ScenarioRunner:
                 _y_row0 = y_seg.copy() if _ts_check else None
                 _y_held = y_seg[_held_idx] if _held_idx.size else None
                 y_seg = _twostep(_ts_pl, y_seg, t0, t1, dtmin=_ts_dtmin, dtmax=min(step_limit, t1 - t0),
-                                 atol=_atol_floor, rtol=_rtol, numit=_ts_numit, stats=_st)
+                                 atol=_atol_floor, rtol=_rtol, numit=_ts_numit, stats=_st,
+                                 numit_max=_ts_numit_max, conv=_ts_conv)
                 if _held_idx.size:
                     y_seg[_held_idx] = _y_held        # P = L = 0 keeps them to rounding; make it exact
                 for _k_ in _ts_stats:
@@ -2376,8 +2382,9 @@ class ScenarioRunner:
                     print(f"  ... {pct:.0f}% ({step_idx+1}/{n_out_steps} steps, "
                           f"{elapsed:.1f}s elapsed)", end='\r')
             print(f"\n  [SOLVER] TWOSTEP: {_ts_stats['naccpt']} steps, {_ts_stats['nrejec']} rejected, "
-                  f"{_ts_stats['nstart']} restarts, {_ts_stats['nfcn']} P/L evaluations, numit={_ts_numit}")
-            self._ode_backend = f"{self._ode_backend}  Solver: TWOSTEP numit={_ts_numit}"
+                  f"{_ts_stats['nstart']} restarts, {_ts_stats['nfcn']} P/L evaluations "
+                  f"({_ts_stats['nfcn'] / max(_ts_stats['naccpt'], 1):.2f} per step), numit={_ts_numit}..{_ts_numit_max}")
+            self._ode_backend = f"{self._ode_backend}  Solver: TWOSTEP numit={_ts_numit}..{_ts_numit_max}"
         elif _perstep_snap and _perstep_warm:
             # ── Per-ENZ-row mode, warm continuation (GEAR-like) ─────────────────
             # One BDF instance for the whole run.  At every ENZ row boundary:
