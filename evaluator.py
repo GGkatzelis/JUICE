@@ -23,6 +23,16 @@ _MATH_CTX = {
 }
 
 
+# Fortran/FACSIMILE double exponents (1.0D-31 -> 1.0E-31), only inside NUMERIC LITERALS: the number must
+# start at a token boundary, so a '<digit>D<digit>' inside an identifier (GECKO-A species G2D5004) is left
+# alone.  From F. Rohrer's branch (2026-11-08); the old lookbehind regex renamed such species.
+_D_EXP = re.compile(r'(?<![A-Za-z_0-9.])(\d+\.?\d*|\.\d+)[dD]([+-]?\d+)')
+
+
+def fortran_d_to_e(expr: str) -> str:
+    return _D_EXP.sub(r'\1E\2', expr)
+
+
 def build_ctx(s_vec, c_vec, enz_vec):
     """Build a flat evaluation context dict from all three vectors.
 
@@ -55,7 +65,7 @@ def evaluate(call_string, function_entries, s_vec, c_vec, enz_vec):
         # Bare expression with no function wrapper — evaluate directly.
         ctx = build_ctx(s_vec, c_vec, enz_vec)
         expr = call_string.replace('@', '**')
-        expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
+        expr = fortran_d_to_e(expr)
         return float(eval(expr, {"__builtins__": {}}, ctx))
 
     func_name = m.group(1).upper()
@@ -97,7 +107,7 @@ def evaluate(call_string, function_entries, s_vec, c_vec, enz_vec):
     # ── Normalise and convert to Python syntax ────────────────────────────────
     expanded = expanded.upper()                                  # case-normalise (FUNCTION bodies may be mixed-case)
     expanded = expanded.replace('@', '**')                       # power operator
-    expanded = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expanded) # Fortran D→E
+    expanded = fortran_d_to_e(expanded) # Fortran D→E
 
     # ── Evaluate ─────────────────────────────────────────────────────────────
     ctx = build_ctx(s_vec, c_vec, enz_vec)
@@ -143,7 +153,7 @@ def _deps_of(definition, func_dict):
         expanded = re.sub(rf'%{i}\b', f'({arg.strip()})', expanded)
     expanded = expand_macros(expanded, func_dict)
     expanded = expanded.upper().replace('@', '**')
-    expanded = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expanded)
+    expanded = fortran_d_to_e(expanded)
     try:
         code = compile(expanded, '<string>', 'eval')
         return {n for n in code.co_names if not n.startswith('__')}
@@ -209,7 +219,7 @@ def precompile_s_vec(s_entries, function_entries):
                 expr = re.sub(rf'%{i}\b', f'({arg.strip()})', expr)
             expr = expand_macros(expr, func_dict)
         expr = expr.upper().replace('@', '**')
-        expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
+        expr = fortran_d_to_e(expr)
         try:
             entry._code      = compile(expr.strip(), '<string>', 'eval')
             entry._expr_str  = expr.strip()   # kept for batch-function generation

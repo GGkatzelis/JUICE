@@ -176,6 +176,7 @@ def _load_step_col_patterns():
 # Internal Module Imports
 from mechanism_solver import MechanismSolver
 from easy_parser import EasyParser
+from evaluator import fortran_d_to_e
 from mechanism import Mechanism, Reaction
 from load_saphir_environment import load_saphir_environment
 # mcm_kinetics is intentionally NOT imported into the execution path.
@@ -428,7 +429,7 @@ class ScenarioRunner:
             self.mechanism.s_entries.extend(m_part.s_entries)
             for p_name, p_expr in m_part.parameters.items():
                 p_clean = p_expr.replace('@', '**')
-                p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+                p_clean = fortran_d_to_e(p_clean)
                 p_clean = p_clean.strip()
                 try:
                     self._va_src[p_name.upper()] = p_clean
@@ -451,7 +452,7 @@ class ScenarioRunner:
                 if p_up in self.cfg.get('env_map', {}):
                     # Evaluate the expression to get the constant value
                     p_clean = p_expr.replace('@', '**')
-                    p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean).strip()
+                    p_clean = fortran_d_to_e(p_clean).strip()
                     try:
                         val = float(eval(compile(p_clean, '<s>', 'eval'), {}, {}))
                         _phys_overridden[p_up] = val
@@ -511,7 +512,7 @@ class ScenarioRunner:
             # Only use uncommented parameters — the parser already filters invalid names
             for p_name, p_expr in m_part.parameters.items():
                 p_clean = p_expr.replace('@', '**')
-                p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+                p_clean = fortran_d_to_e(p_clean)
                 p_clean = re.sub(r'J\((\d+)\)', r'J\1', p_clean)
                 p_clean = p_clean.strip()
                 try:
@@ -629,10 +630,10 @@ class ScenarioRunner:
         self._idl_params_upper = _idl_params_upper   # expose for _solve / _export_results
         for p_name, p_expr in reversed(_idl_params):
             p_clean = p_expr.upper().replace('@', '**')
-            p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)
+            p_clean = fortran_d_to_e(p_clean)
             p_clean = _expand_macros(p_clean, parser.functions)   # expand COMPRC, PHTFKT, …
             p_clean = p_clean.replace('@', '**')   # re-apply: macro bodies may reintroduce @
-            p_clean = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', p_clean)   # re-apply D→E
+            p_clean = fortran_d_to_e(p_clean)   # re-apply D→E
             p_clean = p_clean.strip()
             try:
                 self._va_src[p_name.upper()] = p_clean
@@ -1223,7 +1224,7 @@ class ScenarioRunner:
             for rxn in self.mechanism.reactions:
                 expr = getattr(rxn, 'rate_expression', getattr(rxn, 'rate_str', '0.0')).upper()
                 expr = expr.replace('@', '**') 
-                expr = re.sub(r'(?<=\d)[dD](?=[+-]?\d)', 'E', expr)
+                expr = fortran_d_to_e(expr)
                 expr = re.sub(r'J\((\d+)\)', r'J\1', expr)
                 try:
                     rxn.safe_expr = compile(expr, '<string>', 'eval')
