@@ -1,0 +1,10 @@
+; cracmm2.physics.incl -- CRACMM 2 from the F0AM chemistry library (Chem/CRACMM2), converted by f0am_import.py 2026-11-10
+; Skipper et al. (2024); F0AM version of the CMAQ mech.def by N. Skipper (EPA).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
+; source files sha256[:16]: cracmm2_AllRxns.m 77f91896db70c38c, cracmm2_K.m 07d002a6b97b27c1, cracmm2_J.m 6ec61d35f114b129
+; physics: air density from the pressure and temperature settings, F0AM's constant species
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]
+M =DENSITY(P,T)
+O2=CONST(0.2095*M)
+N2=CONST(0.7808*M)
+H2=CONST(5.6E-7*M)

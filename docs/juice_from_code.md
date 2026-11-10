@@ -1,0 +1,246 @@
+# JUICE from code
+
+Everything the JUICE windows do can be done from Python. The windows and the code are not two
+programs: the windows fill in the same experiment description and call the same functions. An
+experiment built in code and the same experiment built by clicking give byte-identical input files.
+
+There are two ways in:
+
+- **Start from the window.** Every experiment the window prepares also gets a `<name>_run.py` next to its
+  files. That file is the experiment written out as code. Run it, change it, copy it.
+- **Start from scratch.** Write a script with `import juice`, as in the examples below.
+
+All of it is in one module, [`juice.py`](../juice.py). The examples are in [`examples/`](../examples).
+
+## 1. Setup
+
+JUICE's own Python environment (the one the windows use) has everything. A script only needs to find the
+JUICE folder:
+
+```python
+import sys
+sys.path.insert(0, r"C:\path\to\JUICE")   # the folder that holds juice.py
+import juice
+```
+
+Run scripts with that environment's Python, e.g. `<venv>\Scripts\python.exe my_experiment.py`.
+
+## 2. A first experiment
+
+Isoprene in SAPHIR under the open roof, with invented conditions
+([`examples/saphir_isoprene.py`](../examples/saphir_isoprene.py)):
+
+```python
+exp = juice.new_experiment("saphir_isoprene", chamber="SAPHIR")
+
+c = exp.conditions                         # when and under which conditions
+c.date, c.start, c.end, c.step_s = "2024-07-09", "06:00", "16:00", 60
+c.source = "manual"                        # manual | archive | file
+c.temperature_K, c.temperature_mode = 298.0, "const"
+c.pressure_hPa, c.h2o_percent, c.flow_m3h = 1013.0, 1.0, 0.5
+c.roof_open = [("08:00", "15:00")]
+c.j_source = "clear_sky"
+
+exp.precursors = ["C5H8"]                  # the MCM subset of isoprene is cut from the full MCM
+
+exp.injections = [
+    juice.Injection(name="NO", products="NO", total_ppb="5", start="07:30"),
+    juice.Injection(name="isoprene", products="C5H8", total_ppb="10", start="08:30", duration_min=5),
+]
+
+run = juice.run(exp, r"D:\runs\saphir_isoprene", solver="fast")
+print(run.summary())
+```
+
+`new_experiment` does what picking a chamber on the first step does: it sets that chamber's defaults (its
+volume, wall sources, dilution, light). Everything after it is a plain field of the experiment.
+
+The experiment has four parts, the same as the window's steps:
+
+| part | in code | what it holds |
+|---|---|---|
+| Where and when | `exp.conditions` | date, time window (UTC), output step, T, p, humidity, flow, roof or lights, J-value source |
+| Chemistry | `exp.base_mechanism`, `exp.addons`, `exp.precursors`, `exp.initials` | the mechanism and what is in the chamber at the start |
+| Injections | `exp.injections` | one `juice.Injection` per event: what, total amount, start, duration |
+| Chamber | `exp.chamber` | what the chamber adds on its own: HONO and HCHO wall sources, background reactivity, dilution, wall deposition |
+
+The fields that take a keyword, and what each keyword means:
+
+| field | choices |
+|---|---|
+| `conditions.source` | `manual` (the constants you set), `archive` (the SAPHIR data archive of that day), `file` (a CSV or Excel table with T, p, H2O, J values, ...) |
+| `conditions.temperature_mode` | `enz` (temperature read per time step), `const` (`temperature_K`) |
+| `conditions.j_source` | `measured` (J values per time step), `clear_sky` (the mechanism's clear-sky formulas) |
+| solver | `fast`, `precise`, `twostep` (Sect. 5) |
+
+`juice.OPTIONS` holds the same list in code.
+
+## 3. The four steps
+
+`juice.run` is four calls in a row. They can be made one by one, for example to look at the files before
+the solver runs:
+
+```python
+files = juice.write(exp, out_dir)                    # <name>.enz, <name>.easy, chemistry/, <name>.experiment.json
+json  = juice.prepare(exp, out_dir, solver="fast")   # the solver input <name>.json
+cs    = juice.solve(json)                            # runs the solver; the log goes to <name>_run.log
+res   = juice.results(cs, exp)                       # the results as a table
+```
+
+`juice.write` runs the checks of the review panel first and refuses an experiment with errors. Call
+`juice.check(exp)` to see the messages yourself; each one has a level (`error`, `warning`, `info`).
+
+`<name>.easy` and `<name>.enz` are ordinary FACSIMILE input files, so the same experiment runs in FACSIMILE
+unchanged.
+
+## 4. Results
+
+```python
+r = run.results()             # or juice.results(path_to_cs, exp)
+r.species                     # every output column
+r["OH"]                       # molecules cm-3, one value per output time
+r.ppb("O3")                   # ppb, with the experiment's pressure and temperature
+r.hour                        # hours since midnight UTC of the first output time
+r.utc                         # the output times as datetimes
+r.df                          # everything as a pandas DataFrame
+```
+
+For a field case, `ppb()` uses 1013.25 hPa and 298 K. Its skill table (`<name>_skill.csv`) uses the
+measured air density.
+
+The results open in the results viewer like any other run: `python results_viewer.py <name>.cs`.
+
+## 5. What can be chosen
+
+```python
+juice.chambers()       # {'SAPHIR': ..., 'generic_lamps': ..., 'EUPHORE': ..., ...}
+juice.mechanisms()     # {'bases': {'MCM_v3.3.1': ...}, 'addons': {...}}
+juice.solvers()        # {'fast': ..., 'precise': ..., 'twostep': ...}, with what each costs
+juice.templates()      # the templates of the first step
+```
+
+The three solver profiles solve the same equations and agree closely with FACSIMILE. They differ in run time
+and in how closely they follow FACSIMILE:
+
+| profile | method | use it for |
+|---|---|---|
+| `fast` (default) | BDF with the exact Jacobian, relative tolerance 1e-3 | everyday runs |
+| `precise` | the same at a tighter tolerance | the closest agreement with FACSIMILE |
+| `twostep` | Verwer's TWOSTEP, no Jacobian | very large mechanisms (GECKO-A); also the fastest for the complete MCM |
+
+To start from a template instead of an empty experiment:
+
+```python
+exp = juice.new_experiment("my_run", template="voc_photooxidation_low_nox")
+```
+
+## 6. From the window to code
+
+When the Run step prepares an experiment, the run folder gets `<name>_run.py` besides the ENZ, EASY and
+JSON files. The field window does the same. A shortened example:
+
+```python
+OUT = os.path.dirname(os.path.abspath(__file__))   # where the input files and results go
+SOLVER = 'fast'       # fast | precise | twostep
+TOML = r'...\GG_GUI.toml'
+KV_PD = True          # also export reaction rates (Process Analysis); False is faster
+
+def build():
+    exp = juice.new_experiment('uv_lights_on_off', chamber='generic_lamps')
+    c = exp.conditions
+    c.date = '2024-07-09'
+    c.source = 'manual'    # manual | archive | file
+    ...
+    exp.injections = [
+        juice.Injection(name='ethanol', products='C2H5OH', total_ppb='200', start='10:30', duration_min=10),
+    ]
+    # chamber effects: the generic_lamps defaults (exp.chamber.<name> to change one)
+    return exp
+```
+
+- `python <name>_run.py` rebuilds the experiment, writes its files into `OUT`, runs the solver and prints
+  a summary.
+- `build()` returns exactly the experiment the window held, field by field. The test suite checks this
+  for every template and example and through both windows.
+- Only the fields that differ from the chamber's defaults are written out, plus the main ones, so the
+  file stays short. Every field of `exp`, `exp.conditions` and `exp.chamber` can still be set.
+- Running the file again in its own folder overwrites that run. Change `OUT` to keep both.
+
+A saved experiment can also be loaded directly:
+
+```python
+exp = juice.load(r"D:\runs\my_day\my_day.experiment.json")   # or a .field.json
+exp.name = "my_day_no_hono"
+exp.chamber.hono = False
+juice.run(exp, r"D:\runs\my_day_no_hono")
+```
+
+## 7. Going further
+
+Code makes it easy to do things the window does one at a time.
+
+**Loops.** For example the same day at three NO levels (`python examples/saphir_isoprene.py --scan`):
+
+```python
+for no in (1, 5, 20):
+    e = isoprene_day(f"isoprene_NO{no}", no)
+    r = juice.run(e, os.path.join(OUT, e.name), kv_pd=False).results()
+    print(no, r.ppb("O3")[-1])
+```
+
+For large sweeps with parallel workers and summary tables, use the study runner
+(`python study_runner.py <name>.study.json`).
+
+**Changing a rate constant.** Give the reaction exactly as the mechanism writes it, the new expression, and a
+comment. `"0"` removes the reaction:
+
+```python
+exp.reaction_adjustments = [("OH + NO2 --> HNO3", "1.1*KMT08", "test: OH + NO2 10 % faster")]
+```
+
+**Your own chemistry.** Put an EASY include file in a folder, name the folder and the file, and add the
+species it needs at the start:
+
+```python
+exp.include_dirs = [r"D:\my chemistry"]
+exp.extra_includes = ["my_extra_reactions.incl"]
+```
+
+**Verbatim EASY.** Statements in `exp.overrides` are written into the EASY file as they are, after the
+mechanism and the rate-constant changes. A later definition replaces an earlier one.
+
+**Holding species to measurements.** `c.constrain_species = ["NO2", "O3"]` holds them to their columns in the
+input table (`c.source = "file"` or `"archive"`).
+
+**A lamp chamber.** Use `chamber="generic_lamps"` or a chamber profile of your own (made with the chamber
+editor). `roof_open` then means lights on. See [`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py).
+
+**Field cases.** A site, a plume or a Lagrangian air parcel:
+
+```python
+case = juice.new_field_case("my_site", run_type="constrained", table=r"D:\data\site.csv")
+case.chemistry = {"precursors": ["C5H8", "TOLUENE"]}
+case.generic_lifetime_h = 6.0
+juice.run(case, r"D:\runs\my_site")
+```
+
+The input table is described in the main tutorial (Sect. 3.2). See
+[`examples/field_site.py`](../examples/field_site.py).
+
+## 8. Functions
+
+| function | what it does |
+|---|---|
+| `new_experiment(name, chamber="SAPHIR", template="")` | a chamber experiment with the chamber's defaults, or a template |
+| `new_field_case(name, run_type, table)` | a field case of one kind of run |
+| `load(path)`, `save(spec, path)` | `.experiment.json` / `.field.json` |
+| `check(spec)` | the review panel's checks: `[(level, message)]` |
+| `write(spec, out_dir)` | the input files; refuses an experiment with errors |
+| `prepare(spec, out_dir, solver=None, kv_pd=True)` | + the solver input `<name>.json` |
+| `solve(json_path)` | runs the solver; returns the results file `<name>.cs` |
+| `results(cs_path, spec=None)` | the results as a table (`Results`) |
+| `run(spec, out_dir, solver=None, kv_pd=True)` | write, prepare, solve; returns a `Run` with `.results()` and `.summary()` |
+| `write_script(spec, path, solver=None)` | the experiment as a runnable `<name>_run.py` |
+| `build_from_script(path)` | `build()` of such a file, without running it |
+| `chambers()`, `mechanisms()`, `solvers()`, `templates()`, `OPTIONS` | what can be chosen |
+| `paths()` | the folders of the settings file (`include_dir`, `output_root`) |

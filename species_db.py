@@ -95,7 +95,6 @@ DEFAULT_SOURCES = [
     (_MCMd + "/mcm_export_species.tsv",                  'positional'),
     (_MCMd + "/additional_species.tsv",                  'positional'),
     (_MCM331 + "/mcm_3-3-1_species_complete.tsv",        'positional'),
-    (_SH + "/guaiacol_creosol_gas.tsv",                  'positional'),
     # condenser formulas used by make_soa_condensation to build the SOA include group-sums -- fill
     # the closed-shell condensers (incl. LIMO/BPIN HOM) the clean files don't carry (formula @ col 1):
     (_SH + "/SIMHOM_volatility.param",                   'volparam'),

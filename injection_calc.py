@@ -274,7 +274,7 @@ class ResolvedCompound:
 def resolve_compound(text: str, extra_species: Optional[Dict[str, str]] = None) -> ResolvedCompound:
     """Common name, MCM name or formula → ResolvedCompound.  Never raises.
     `extra_species` (NAME → formula) are the species of the chosen add-ons: they resolve
-    like MCM species (a guaiacol injection becomes GUAIACOL when its add-on is on)."""
+    like MCM species (an injected compound becomes the add-on species of that name when the add-on is on)."""
     q = (text or "").strip()
     low = q.lower()
     rc = ResolvedCompound(q)

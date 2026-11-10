@@ -316,7 +316,7 @@ def chemistry_chosen(spec: FieldSpec) -> bool:
         return True
     try:
         import mechanism_registry as _mreg
-        return bool(c.get("base_mechanism")) and _mreg.is_gecko(c["base_mechanism"])
+        return bool(c.get("base_mechanism")) and _mreg.is_complete(c["base_mechanism"])
     except Exception:
         return False
 
@@ -328,6 +328,8 @@ def chemistry_label(spec: FieldSpec) -> str:
     base = c.get("base_mechanism", "")
     try:
         import mechanism_registry as _mreg
+        if base and _mreg.is_lumped(base):
+            return f"{base} (whole mechanism)"
         if base and _mreg.is_gecko(base):
             core = "GECKO-A core" if (c.get("gecko_core") or "gecko") == "gecko" else "MCM inorganic core"
             return f"{base} ({core}{', with partitioning' if c.get('gecko_partitioning', True) else ''})"

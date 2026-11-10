@@ -40,7 +40,7 @@ import mechanism_registry as mreg
 import experiment_plots as _ep
 from easy_builder import J_INPUTS, MeasuredRow, default_form, render_form
 from enz_builder import compute_solar_zenith, write_enz
-from experiment_spec import CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME, is_gecko_base, gecko_form
+from experiment_spec import CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME, is_gecko_base, gecko_form, lumped_form
 from lamp_photolysis import MEASURED_J
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -329,6 +329,8 @@ def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, co
     f.extra_statements = []
     if is_gecko_base(chem.base_mechanism):           # GECKO-A base: its includes, core choice and photolysis anchors
         gecko_form(f, chem)
+    elif mreg.is_lumped(chem.base_mechanism):        # a lumped mechanism (F0AM library): its includes and J<n>/JN<k>
+        lumped_form(f, chem)
     try:
         f.extra_statements += mreg.provenance_lines(chem.base_mechanism, list(chem.addons))
     except Exception as e:

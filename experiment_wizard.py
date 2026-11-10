@@ -148,11 +148,15 @@ class MultiSelectCombo(QComboBox):
         self._updating = False
 
     def set_items(self, items, empty_text: str = "none"):
-        """items: [(id, label, tooltip, checked)]"""
+        """items: [(id, label, tooltip, checked)] or (id, label, tooltip, checked, enabled): a disabled item is
+        shown greyed out and cannot be ticked."""
         self._updating = True
         self._model.clear(); self._ids = []
-        for i, label, tip, checked in items:
-            it = QStandardItem(label); it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+        for item in items:
+            i, label, tip, checked = item[:4]
+            enabled = item[4] if len(item) > 4 else True
+            it = QStandardItem(label)
+            it.setFlags((Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable) if enabled else Qt.ItemFlag.NoItemFlags)
             it.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked); it.setToolTip(tip)
             self._model.appendRow(it); self._ids.append(i)
         self._updating = False
@@ -161,7 +165,7 @@ class MultiSelectCombo(QComboBox):
 
     def _toggle_row(self, index):
         it = self._model.itemFromIndex(index)
-        if it is not None:
+        if it is not None and it.isEnabled():
             it.setCheckState(Qt.CheckState.Unchecked if it.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked)
 
     def _on_item_changed(self, _it):
@@ -636,6 +640,23 @@ class GeckoImportDialog(QDialog):
         QMessageBox.warning(self, "GECKO-A import", msg)
 
 
+def _planned_tip(e: dict) -> str:
+    return "\n".join([f"{e.get('name', e['id'])}: not converted yet.", e.get("citation", ""), f"source: {e.get('source', '')}"])
+
+
+def _add_planned_bases(combo: QComboBox) -> None:
+    """The catalogue's mechanisms that are not installed yet: listed after a separator, greyed out, not selectable."""
+    todo = mreg.planned("bases")
+    if not todo:
+        return
+    combo.insertSeparator(combo.count())
+    model = combo.model()
+    for e in todo:
+        combo.addItem(f"{e.get('name', e['id'])}  ({e.get('family', '')}, not converted yet)", None)
+        it = model.item(combo.count() - 1)
+        it.setEnabled(False); it.setToolTip(_planned_tip(e))
+
+
 def _base_label(b) -> str:
     return (f"GECKO-A: {b.name}  [{b.status}]" if getattr(b, "is_gecko", False) else f"{b.name}  [{b.status}]")
 
@@ -655,6 +676,7 @@ class ChemistryPage(QWizardPage):
         self._bases = mreg.load_bases()
         for b in self._bases.values():
             self.base_combo.addItem(_base_label(b), b.id)
+        _add_planned_bases(self.base_combo)
         self.base_combo.currentIndexChanged.connect(self._base_changed); mg.addWidget(self.base_combo, 0, 1)
         self.base_info = _info(""); mg.addWidget(self.base_info, 0, 2)
         self.import_btn = QPushButton("Import GECKO-A output…"); self.import_btn.clicked.connect(self._import_gecko)
@@ -759,9 +781,20 @@ class ChemistryPage(QWizardPage):
         b = self._bases.get(self.base_id())
         return bool(b is not None and b.is_gecko)
 
+    def is_lumped(self) -> bool:
+        b = self._bases.get(self.base_id())
+        return bool(b is not None and b.is_lumped)
+
     def _gecko_changed(self):
-        g = self.is_gecko()
-        self.gecko_box.setVisible(g); self.mcm_box.setVisible(not g)
+        g, lumped = self.is_gecko(), self.is_lumped()
+        self.gecko_box.setVisible(g); self.mcm_box.setVisible(not (g or lumped))
+        if lumped:                                   # a whole mechanism: nothing to choose, say what it is
+            b = self._bases[self.base_id()]; d = b.lumped or {}
+            names = ", ".join(f"{m} = {o}" for m, o in list((d.get("mcm_names") or {}).items())[:6])
+            self.base_info.setText(f"{b.name}: {d.get('n_species', '?')} species, {d.get('n_reactions', '?')} reactions, used as a whole "
+                                   f"[{b.status}]. Inject its own species names, or MCM names where it has the compound ({names}, ...). "
+                                   f"{b.citation}")
+            self.base_info.setToolTip(b.notes or "")
         if g:
             b = self._bases[self.base_id()]; d = b.gecko or {}
             self.gecko_info.setText(
@@ -775,6 +808,7 @@ class ChemistryPage(QWizardPage):
         self.base_combo.blockSignals(True); self.base_combo.clear()
         for b in self._bases.values():
             self.base_combo.addItem(_base_label(b), b.id)
+        _add_planned_bases(self.base_combo)
         i = self.base_combo.findData(keep); self.base_combo.setCurrentIndex(i if i >= 0 else 0)
         self.base_combo.blockSignals(False); self._base_changed()
 
@@ -802,7 +836,9 @@ class ChemistryPage(QWizardPage):
         self.addon_combo.set_items([(a.id, f"{a.name}  v{a.version} [{a.status}]",
                                      f"{a.description}\n\nfiles: {', '.join(a.files)}\nadds: {', '.join(a.adds_species) or '-'}\n"
                                      f"needs from base: {', '.join(a.needs_base_species) or '-'}\nstatus: {a.status}, version {a.version}",
-                                     a.id in keep) for a in addons],
+                                     a.id in keep) for a in addons]
+                                   + [(e["id"], f"{e.get('name', e['id'])}  (not converted yet)", _planned_tip(e), False, False)
+                                      for e in mreg.planned("addons") if self.base_id() in e.get("for", [])],
                                     empty_text="none installed for this base (mechanisms/addons/<id>/manifest.json)")
         self._addons_changed()
         if hasattr(self, "gecko_box"):
@@ -970,6 +1006,11 @@ class ChemistryPage(QWizardPage):
     def apply(self, spec: ExperimentSpec):
         spec.gecko_core = self.gecko_core.currentData() or "gecko"
         spec.gecko_partitioning = self.gecko_part.isChecked()
+        if self.is_lumped():                            # the whole mechanism; no subset, no add-ons yet
+            spec.inorganic_only = False; spec.mechanism_stem = ""; spec.precursors = []
+            spec.reaction_adjustments = [(a, b_, c) for a, b_, c in _rows(self.adjust) if a.strip()]
+            spec.base_mechanism = self.base_id(); spec.addons = []; spec.include_dirs = self.include_dir_list()
+            return
         if self.is_gecko():
             b = self._bases[self.base_id()]
             spec.inorganic_only = False; spec.mechanism_stem = ""
@@ -990,7 +1031,7 @@ class ChemistryPage(QWizardPage):
         spec.include_dirs = self.include_dir_list()
 
     def validatePage(self) -> bool:
-        if self.is_gecko():
+        if self.is_gecko() or self.is_lumped():
             return True
         if self.mode_existing.isChecked() and not self.mech_combo.currentText().strip():
             QMessageBox.warning(self, "Chemistry", "Choose a mechanism include set."); return False
@@ -2193,6 +2234,12 @@ class ExperimentHost:
         res = write_experiment(spec, out)
         res["spec_path"] = save_spec(spec, os.path.join(out, spec.name + ".experiment.json"))
         res["spec"] = spec
+        try:                                   # the same experiment as code (the Run step rewrites it with its solver)
+            import juice
+            res["script"] = juice.write_script(spec, os.path.join(out, spec.name + "_run.py"),
+                                               toml=getattr(self, "toml_path", "") or "")
+        except Exception as e:
+            print(f"[experiment] the experiment script was not written: {e}")
         self.last_result = res
         for n in res.get("notes", []):
             print(f"[experiment] {n}")

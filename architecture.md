@@ -213,7 +213,7 @@ mechanism on the MCM core against the MCM subset of the same experiment (within 
 3. **mcm_full** (5 842 species) is not in the benchmark: its files are named `full_MCM.*`, not after
    the folder, and its 100 MB `.cs` would dominate the run time.
 4. **Chamber profiles other than SAPHIR** come from public numbers (`docs/chamber_survey.md`) and are
-   marked `verified: false`. The **guaiacol/creosol add-on** is a draft.
+   marked `verified: false`.
 5. **The printed RO2 sum differs from FACSIMILE's by up to 1.4 % for a few minutes while it rises
    steeply** (after the roof opens or after an injection; 20–70 of ~1 000 rows per scene, median
    below 0.02 %; the same in both solver profiles and in the runs of the earlier repository). It is

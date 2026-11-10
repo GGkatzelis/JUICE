@@ -681,6 +681,81 @@ def gecko_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False) -> None:
                                       f"MCM clear-sky J{n}, HV and measured-jNO2 scaling as in j_clear_sky.incl")
 
 
+# Lamp chambers: F0AM channels without an MCM number (JN<k>) take the lamp J of the MCM channel that absorbs in
+# the same region, times their clear-sky ratio at 30 deg (approximate; noted in the EASY file).
+JN_LAMP_REFERENCE = {1: 18, 2: 18, 3: 22, 4: 41, 14: 41, 15: 41, 16: 41, 17: 41, 21: 3, 22: 3}
+
+
+def _phtfkt_table(path: str, key_prefix: str) -> Dict[int, Tuple[float, float, float]]:
+    """{number: (l, m, n)} of a J table (photolysis/mcm_photolysis.csv: J<n>; f0am_jn_clear_sky.csv: Jn<k>)."""
+    import csv
+    out: Dict[int, Tuple[float, float, float]] = {}
+    with open(path, encoding="utf-8") as fh:
+        rows = csv.DictReader(l for l in fh if not l.startswith("#"))
+        for r in rows:
+            m = re.fullmatch(key_prefix + r"(\d+)", (r.get("J") or "").strip())
+            if m and r.get("l"):
+                out[int(m.group(1))] = (float(r["l"]), float(r["m"]), float(r["n"]))
+    return out
+
+
+def _clear_sky(p: Tuple[float, float, float], sza: float = 30.0) -> float:
+    c = math.cos(math.radians(sza))
+    return p[0] * c ** p[1] * math.exp(-p[2] / c)
+
+
+def lumped_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False, lamp_lines: Optional[List[str]] = None) -> List[str]:
+    """Apply a lumped base (a mechanism of the F0AM library, f0am_import.py) to a form whose photolysis rows are set:
+    its own includes (physics, aliases, chemistry, J names) and dilution pair, no MCM inorganic set, no SAPHIR
+    measured-J include.  Its J names refer to J<n> (MCM numbers) and JN<k> (F0AM channels), defined here for the
+    light of the run: under the sun the MCM clear-sky PHTFKT(l,m,n) (HV switch and measured-jNO2 scaling of
+    j_clear_sky.incl) or the measured J where the run has it; under lamps the lamp J<n> (the k[...] lines of
+    the MCM inorganic reactions are dropped) and JN<k> scaled from a lamp J<n>.  Returns the lamp lines to use."""
+    import lamp_photolysis as lp
+    b = mreg.base(spec.base_mechanism)
+    fl, info = b.files, b.lumped or {}
+    pre, other = [fl["physics"], fl["aliases"]], [fl["chemistry"], fl["phot"]]
+    ours = set(pre) | set(other)
+    f.includes_pre = pre + [x for x in f.includes_pre if x not in ours]
+    f.includes_other = other + [x for x in f.includes_other if x not in ours]
+    f.mech_stem, f.dil_stem = "", b.id
+    f.use_anorg, f.use_j_clear_sky = False, True
+    f.jmeasured_include, f.j_overrides = "", {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    mcm = _phtfkt_table(os.path.join(here, "photolysis", "mcm_photolysis.csv"), "J")
+    f0am = _phtfkt_table(os.path.join(here, "photolysis", "f0am_jn_clear_sky.csv"), "Jn")
+    lines = [f"; PHOTOLYSIS of {b.id}: J<n> = MCM v3.3.1 J number n, JN<k> = F0AM channel Jn<k> "
+             f"({'lamps' if lamps else 'sun'})"]
+    measured = {lp.MEASURED_J[r.name]: r.name for r in f.j_rows if r.mode == "enz" and r.name in lp.MEASURED_J}
+    lamp_out = [l for l in (lamp_lines or []) if not l.lstrip().startswith("k[")]
+    defined = {int(m.group(1)) for l in lamp_out for m in [re.match(r"\s*J(\d+)\s*=", l)] if m}
+    for n in info.get("j_mcm", []):
+        if lamps:
+            if n not in defined:
+                lines.append(f"J{n} = CONST(0.0)   ; no lamp J{n}: this light source gives no value for it")
+        elif n in measured:
+            lines.append(f"J{n} = CONST({measured[n]})   ; measured")
+        elif n in mcm:
+            l_, m_, n_ = mcm[n]
+            lines.append(f"J{n} = PHTFKT({l_:.4e},{m_:g},{-n_:g})")
+        else:
+            lines.append(f"J{n} = CONST(0.0)   ; no MCM parameters for J{n}")
+    for k in info.get("j_f0am", []):
+        if k not in f0am:
+            lines.append(f"JN{k} = CONST(0.0)   ; F0AM channel Jn{k} is zero in its clear-sky table"); continue
+        l_, m_, n_ = f0am[k]
+        if lamps:
+            ref = JN_LAMP_REFERENCE.get(k, 41)
+            ratio = _clear_sky(f0am[k]) / _clear_sky(mcm[ref]) if ref in mcm else 0.0
+            lines.append(f"JN{k} = CONST(J{ref}*{ratio:.4e})   ; approximate: lamp J{ref} x clear-sky Jn{k}/J{ref} at 30 deg")
+        else:
+            lines.append(f"JN{k} = PHTFKT({l_:.4e},{m_:g},{-n_:g})   ; F0AM clear-sky table, fitted (photolysis/f0am_jn_clear_sky.csv)")
+    if lamps:                                          # after the lamp J<n> they refer to
+        return lamp_out + lines
+    f.extra_statements += lines
+    return lamp_out
+
+
 def easy_form(spec: ExperimentSpec) -> EasyForm:
     c, ch = spec.conditions, spec.chamber
     f = default_form()
@@ -754,6 +829,8 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
     f.extra_statements = []
     if is_gecko_base(spec.base_mechanism):
         gecko_form(f, spec, lamps=lamps)
+    elif mreg.is_lumped(spec.base_mechanism):
+        lamp_lines = lumped_form(f, spec, lamps=lamps, lamp_lines=lamp_lines)
     try:                                               # every generated EASY states its chemistry
         f.extra_statements += mreg.provenance_lines(spec.base_mechanism, list(spec.addons))
     except Exception as e:
@@ -795,6 +872,8 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
     No-op when spec.mechanism_stem is already set (existing include set)."""
     if is_gecko_base(spec.base_mechanism):
         return _ensure_gecko(spec, out_dir)
+    if mreg.is_lumped(spec.base_mechanism):
+        return _ensure_lumped(spec, out_dir)
     if spec.mechanism_stem or not (spec.precursors or spec.inorganic_only):
         return {}
     import io, contextlib, shutil
@@ -838,6 +917,20 @@ def _ensure_gecko(spec: ExperimentSpec, out_dir: str) -> dict:
     if voc and voc.upper() not in {p.upper() for p in spec.precursors}:
         spec.precursors = [voc] + list(spec.precursors)
     return {"mech": os.path.join(chem, b.files["organic"]), "gecko": b.id, "species": (b.gecko or {}).get("n_species")}
+
+
+def _ensure_lumped(spec: ExperimentSpec, out_dir: str) -> dict:
+    """A lumped base: its include files are copied into <out_dir>/chemistry; the whole mechanism is used."""
+    import shutil
+    b = mreg.base(spec.base_mechanism)
+    chem = os.path.join(out_dir, "chemistry")
+    os.makedirs(chem, exist_ok=True)
+    for fn in b.files.values():
+        src = os.path.join(b.folder, fn)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(chem, fn))
+    spec.mechanism_stem, spec.inorganic_only = "", False
+    return {"mech": os.path.join(chem, b.files["chemistry"]), "lumped": b.id, "species": (b.lumped or {}).get("n_species")}
 
 
 # FACSIMILE fall-off function; normally defined in anorg.mcm331.dark.rate, which the
@@ -1035,7 +1128,7 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
             msgs.append(("error", "Held species without measurements: " + src["held to measurements"].split("MISSING: ")[1]))
     except Exception:
         pass
-    if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only:
+    if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only and not mreg.is_complete(spec.base_mechanism):
         msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
     if c.j_source == "measured" and c.source == "manual" and light == "sun" and not dark_run:
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "

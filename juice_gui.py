@@ -618,6 +618,7 @@ class RunPage(QWidget):
         for line in buf.getvalue().splitlines():
             if "[scenario_prep]" in line:
                 self.log.append(line)
+        script = self._write_script(spec, out)
         missing = []
         try:
             with open(os.path.join(out, spec.name + "_juice.elog"), encoding="utf-8", errors="replace") as fh:
@@ -627,7 +628,7 @@ class RunPage(QWidget):
         if missing:
             self.log.append(f"✖ {len(missing)} include file(s) not found: " + ", ".join(missing) +
                             "\n  Add the folder that holds them under 'Include folders' on the Chemistry step.")
-        self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path)))
+        self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path, script) if p))
         try:                                   # the measurements the results will be compared with, extracted once
             import experiment_plots as _ep
             note: list = []
@@ -646,6 +647,15 @@ class RunPage(QWidget):
         self.win.set_step_state(RUN_STEP, "ok")
         self.refresh()
         return self.json_path
+
+    def _write_script(self, spec, out: str) -> str:
+        """<name>_run.py: this experiment as code (juice.write_script), with the solver chosen here.  '' on failure."""
+        try:
+            import juice
+            return juice.write_script(spec, os.path.join(out, spec.name + "_run.py"), solver=self.solver.currentData(),
+                                      toml=self.win.toml_path, kv_pd=self.kvpd.isChecked())
+        except Exception as e:
+            self.log.append(f"note: the experiment script was not written ({e})"); return ""
 
     def compare(self):
         """This run against the FACSIMILE results the experiment was imported with (compare_juice_facsimile)."""

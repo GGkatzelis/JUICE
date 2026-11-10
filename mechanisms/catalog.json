@@ -1,0 +1,30 @@
+{
+ "about": "Every chemistry JUICE offers or plans to offer. An entry whose id is installed under mechanisms/base or mechanisms/addons is available; the others are listed in the Chemistry step as not yet converted. Planned entries come from the F0AM chemistry library (github.com/AirChem/F0AM, Chem/, GPL-3.0 like JUICE); each converted file keeps its source and authors.",
+ "bases": [
+  {"id": "MCM_v3.3.1", "name": "MCM v3.3.1", "family": "explicit", "citation": "Jenkin et al. (1997, 2015); Saunders et al. (2003)", "source": "mcm.york.ac.uk"},
+  {"id": "CRACMM2", "name": "CRACMM 2", "family": "lumped", "citation": "Skipper et al. (2024)", "source": "F0AM Chem/CRACMM2 (from the CMAQ mech.def, N. Skipper)"},
+  {"id": "MCM_v3.2", "name": "MCM v3.2", "family": "explicit", "citation": "Jenkin et al. (1997); Saunders et al. (2003)", "source": "F0AM Chem/MCMv32"},
+  {"id": "CRACMM1_aq", "name": "CRACMM 1 (with aqueous chemistry)", "family": "lumped", "citation": "Place et al. (2023)", "source": "F0AM Chem/CRACMM1"},
+  {"id": "RACM2", "name": "RACM2", "family": "lumped", "citation": "Goliff et al. (2013)", "source": "F0AM Chem/RACM2"},
+  {"id": "CB05", "name": "Carbon Bond 05", "family": "lumped", "citation": "Yarwood et al. (2005)", "source": "F0AM Chem/CB05"},
+  {"id": "CB6r2", "name": "Carbon Bond 6 r2", "family": "lumped", "citation": "Hildebrandt Ruiz and Yarwood (2013)", "source": "F0AM Chem/CB6r2"},
+  {"id": "CB7", "name": "Carbon Bond 7", "family": "lumped", "citation": "Yarwood et al., CB7 final report", "source": "F0AM Chem/CB7"},
+  {"id": "SAPRC07B", "name": "SAPRC-07B", "family": "lumped", "citation": "Carter (2010)", "source": "F0AM Chem/SAPRC07"},
+  {"id": "GEOSCHEM_v12.07", "name": "GEOS-Chem v12.07 standard", "family": "lumped", "citation": "GEOS-Chem standard mechanism v12.07", "source": "F0AM Chem/GEOSChem/v12.07"}
+ ],
+ "addons": [
+  {"id": "NOAA_BB", "name": "NOAA biomass burning (furans, phenolics, ...)", "for": ["MCM_v3.3.1"], "citation": "Decker et al. (2019); Coggon et al.", "source": "F0AM Chem/MCMv331/NOAA_BiomassBurning"},
+  {"id": "Halogens_Sherwen2016", "name": "Halogens (Sherwen et al. 2016)", "for": ["MCM_v3.3.1"], "citation": "Sherwen et al. (2016)", "source": "F0AM Chem/MCMv331/Halogens_Sherwen2016"},
+  {"id": "Halogens_MECCA", "name": "Halogens (MECCA)", "for": ["MCM_v3.3.1"], "citation": "MECCA", "source": "F0AM Chem/MCMv331/SubMechanisms/Halogens_MECCA.m"},
+  {"id": "Cl_VOC_Riedel2014", "name": "Cl + VOC (Riedel et al. 2014)", "for": ["MCM_v3.3.1"], "citation": "Riedel et al. (2014)", "source": "F0AM Chem/MCMv331/SubMechanisms/Cl_VOC_Riedel2014.m"},
+  {"id": "MTSQT_Wolfe2011", "name": "Monoterpenes and sesquiterpenes (Wolfe et al. 2011)", "for": ["MCM_v3.3.1"], "citation": "Wolfe et al. (2011)", "source": "F0AM Chem/MCMv331/SubMechanisms/MTSQT_Wolfe2011.m"},
+  {"id": "FireTracers", "name": "Fire tracers", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/FireTracers.m"},
+  {"id": "CH3ONO_hv", "name": "CH3ONO photolysis (UV-chamber OH source)", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/CH3ONO_hv.m"},
+  {"id": "HO2NO2_hv", "name": "HO2NO2 photolysis", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/HO2NO2_hv.m"},
+  {"id": "CH3O2_OH", "name": "CH3O2 + OH", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/CH3O2_OH.m"},
+  {"id": "CH4_O1D", "name": "CH4 + O1D", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/CH4_O1D.m"},
+  {"id": "HMHP_OH", "name": "HMHP + OH", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/HMHP_OH.m"},
+  {"id": "C3H4_OH", "name": "C3H4 + OH", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/C3H4_OH.m"},
+  {"id": "Slow_PAA_OH", "name": "Slow PAA + OH", "for": ["MCM_v3.3.1"], "citation": "F0AM", "source": "F0AM Chem/MCMv331/SubMechanisms/Slow_PAA_OH.m"}
+ ]
+}

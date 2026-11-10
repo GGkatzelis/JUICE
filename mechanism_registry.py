@@ -39,6 +39,7 @@ MECH_DIR = os.path.join(HERE, "mechanisms")
 BASE_DIR = os.path.join(MECH_DIR, "base")
 ADDON_DIR = os.path.join(MECH_DIR, "addons")
 DEFAULT_BASE = "MCM_v3.3.1"
+CATALOG = os.path.join(MECH_DIR, "catalog.json")
 
 
 def sha256_of(path: str) -> str:
@@ -62,11 +63,22 @@ class BaseMechanism:
     status: str = "reviewed"
     notes: str = ""
     kind: str = "base"                         # "base" (an MCM download) | "gecko" (a converted GECKO-A generator output)
+                                               # | "lumped" (a mechanism of the F0AM library converted by f0am_import.py)
     gecko: Dict = field(default_factory=dict)  # kind gecko: precursor, primary_code, n_species, n_reactions_organic, ...
+    lumped: Dict = field(default_factory=dict) # kind lumped: family, n_species, n_reactions, j_mcm, j_f0am, mcm_names, dropped
 
     @property
     def is_gecko(self) -> bool:
         return self.kind == "gecko"
+
+    @property
+    def is_lumped(self) -> bool:
+        return self.kind == "lumped"
+
+    @property
+    def is_complete(self) -> bool:
+        """A complete mechanism with its own inorganic core, used as a whole (no MCM subset is cut from it)."""
+        return self.kind in ("gecko", "lumped")
 
     def path(self, role: str) -> str:
         return os.path.join(self.folder, self.files[role]) if role in self.files else ""
@@ -127,7 +139,7 @@ def load_bases(base_dir: str = "") -> Dict[str, BaseMechanism]:
         for d in sorted(os.listdir(root)):
             folder = os.path.join(root, d)
             m = _read_manifest(folder)
-            if m and m.get("kind", "base") in ("base", "gecko"):
+            if m and m.get("kind", "base") in ("base", "gecko", "lumped"):
                 keys = {k for k in BaseMechanism.__dataclass_fields__} - {"folder"}
                 out[m["id"]] = BaseMechanism(folder=folder, **{k: v for k, v in m.items() if k in keys})
     return out
@@ -155,6 +167,20 @@ def base(base_id: str = "") -> BaseMechanism:
     return bases[bid]
 
 
+def is_lumped(base_id: str) -> bool:
+    try:
+        return base(base_id).is_lumped
+    except KeyError:
+        return False
+
+
+def is_complete(base_id: str) -> bool:
+    try:
+        return base(base_id).is_complete
+    except KeyError:
+        return False
+
+
 def is_gecko(base_id: str) -> bool:
     try:
         return base(base_id).is_gecko
@@ -163,22 +189,26 @@ def is_gecko(base_id: str) -> bool:
 
 
 def species_names(base_id: str) -> Dict[str, str]:
-    """NAME -> formula of a GECKO-A base's species table ({} for an MCM base, whose species come from mcm_species_db)."""
+    """NAME -> formula of a complete base's species table: GECKO-A, or a lumped mechanism, whose MCM names
+    (ALIAS lines: C5H8 for ISO) count as species too ({} for an MCM base, whose species come from mcm_species_db)."""
     try:
         b = base(base_id)
     except KeyError:
         return {}
-    p = b.path("species_tsv") if b.is_gecko else ""
+    p = b.path("species_tsv") if b.is_complete else ""
     out: Dict[str, str] = {}
     if p and os.path.isfile(p):
         with open(p, encoding="utf-8", errors="replace") as fh:
             header = fh.readline().rstrip("\n").split("\t")
             i_name = header.index("Name") if "Name" in header else 0
             i_formula = header.index("Formula") if "Formula" in header else 4
+            i_mcm = header.index("MCM name") if "MCM name" in header else -1
             for line in fh:
                 cols = line.rstrip("\n").split("\t")
                 if len(cols) > max(i_name, i_formula) and cols[i_name]:
                     out[cols[i_name].upper()] = cols[i_formula]
+                    if 0 <= i_mcm < len(cols) and cols[i_mcm]:
+                        out[cols[i_mcm].upper()] = cols[i_formula]
     return out
 
 
@@ -220,12 +250,41 @@ def provenance_lines(base_id: str, addon_ids: List[str]) -> List[str]:
                  f"{g.get('n_reactions_organic', '?')} organic reactions, {g.get('n_partitioning', '?')} partitioning species; "
                  f"primary {g.get('primary_code', '?')} = {g.get('precursor', '?')}; options {b.source.get('options', {})}"]
         return [l.encode("ascii", "replace").decode() for l in lines]
+    if b.is_lumped:
+        src = b.source.get("files_sha256", {}) or {}
+        g = b.lumped or {}
+        lines = [f"; CHEMISTRY: base {b.id} ({b.name}; {b.version}) - {b.citation}",
+                 f"; CHEMISTRY:   from the F0AM chemistry library ({b.source.get('license', 'GPL-3.0')}); source files sha256[:12] "
+                 + ", ".join(f"{k} {v[:12]}" for k, v in src.items()),
+                 f"; CHEMISTRY:   {g.get('n_species', '?')} species, {g.get('n_reactions', '?')} reactions; status {b.status}"]
+        return [l.encode("ascii", "replace").decode() for l in lines]
     sha = b.checksums.get(b.files.get("fac", ""), "")[:12]
     lines = [f"; CHEMISTRY: base {b.id} ({b.name}, {b.version}; fac sha256 {sha or 'n/a'}; "
              f"source {b.source.get('url', '?')}, downloaded {b.source.get('downloaded', '?')})"]
     for a in addons_for(base_id, addon_ids):
         lines.append(f"; CHEMISTRY: add-on {a.id} v{a.version} [{a.status}] - {a.name}: {', '.join(a.files)}")
     return [l.encode("ascii", "replace").decode() for l in lines]      # EASY files stay ASCII
+
+
+def catalog() -> Dict[str, List[dict]]:
+    """Every chemistry JUICE offers or plans (mechanisms/catalog.json), each entry with 'status':
+    'available' (installed under mechanisms/base or mechanisms/addons) or 'planned' (not converted yet).
+    Installed chemistry the catalogue does not name (an imported GECKO-A base) is not listed here."""
+    try:
+        with open(CATALOG, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        data = {}
+    have = {"bases": set(load_bases()), "addons": set(load_addons())}
+    out: Dict[str, List[dict]] = {}
+    for key in ("bases", "addons"):
+        out[key] = [{**e, "status": "available" if e.get("id") in have[key] else "planned"} for e in data.get(key, [])]
+    return out
+
+
+def planned(kind: str = "bases") -> List[dict]:
+    """The catalogue entries of `kind` ('bases' | 'addons') that are not installed yet."""
+    return [e for e in catalog().get(kind, []) if e["status"] == "planned"]
 
 
 def write_manifest(folder: str, data: dict) -> str:

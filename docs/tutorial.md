@@ -12,6 +12,9 @@ right-hand column that always shows what the experiment contains and, under *Nee
 still missing or doubtful. You can click an entry there: the step it belongs to opens and the field is
 pointed out.
 
+Everything here can also be done from Python: see [JUICE from code](juice_from_code.md). Each run folder
+the windows prepare contains a `<name>_run.py` with the experiment written out as code.
+
 ---
 
 ## 0. Install and start (10 minutes)

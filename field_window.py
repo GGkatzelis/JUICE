@@ -417,6 +417,13 @@ class FieldRunPage(QWidget):
         for n in res.get("notes", []):
             self.log.append("note: " + n)
         out = os.path.dirname(self.json_path)
+        script = ""
+        try:                                   # the same case as code
+            import juice
+            script = juice.write_script(spec, os.path.join(out, spec.name + "_run.py"), solver=self.solver.currentData(),
+                                        toml=self.win.toml, kv_pd=self.kvpd.isChecked(), origin="the JUICE field window")
+        except Exception as e:
+            self.log.append(f"note: the case script was not written ({e})")
         missing = []
         try:
             with open(os.path.join(out, spec.name + "_juice.elog"), encoding="utf-8", errors="replace") as fh:
@@ -426,7 +433,7 @@ class FieldRunPage(QWidget):
         if missing:
             self.log.append(f"✖ {len(missing)} include file(s) not found: " + ", ".join(missing)
                             + "\n  Add the folder that holds them under 'Include folders' on the Chemistry step.")
-        self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path)))
+        self.files.setText("Written: " + ", ".join(os.path.basename(p) for p in (res["enz"], res["easy"], res["spec_path"], self.json_path, script) if p))
         self.log.append(f"Inputs ready in {out}")
         self.bar.setValue(100); self.bar.setFormat("inputs ready" if not missing else f"inputs ready — {len(missing)} include(s) missing")
         self.run_btn.setEnabled(True); self.view_btn.setEnabled(os.path.isfile(self.cs_path()))

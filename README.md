@@ -47,6 +47,10 @@ table, the mechanism include sets) is in the repository; no other download is ne
 New here? [docs/tutorial.md](docs/tutorial.md) walks through a chamber experiment, the same under UV
 lamps, a field case and a study, step by step, without archive access.
 
+Prefer code? [docs/juice_from_code.md](docs/juice_from_code.md) runs the same experiments from Python
+(`import juice`), and every experiment the windows prepare also gets a `<name>_run.py` that rebuilds
+and runs it. Examples: [examples/](examples).
+
 ### Desktop icon (Windows)
 ```bash
 python make_shortcut.py              # the JUICE icon on the Desktop
