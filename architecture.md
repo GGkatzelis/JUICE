@@ -51,6 +51,22 @@ under `mechanisms/base/GECKOA_<name>/` (git-ignored, regenerated from the genera
 `experiment_spec.gecko_form` writes the physics include, the aliases, the chosen inorganic core and the
 organic/partitioning includes into the `.easy` like any other include set (A4).
 
+Two more since 10–11 November 2026. A mechanism of the F0AM chemistry library enters as a base of kind
+`lumped` (`f0am_import.py`: the three F0AM files → physics, aliases, chemistry, photolysis-name and
+dilution includes under `mechanisms/base/<ID>/`, with the F0AM originals in `f0am_source/`; CRACMM2,
+CRACMM1_aq, RACM2), used as a whole; `experiment_spec.lumped_form` writes its includes and defines the
+J<n> (MCM numbers) and JN<k> (F0AM channels, `photolysis/f0am_jn_clear_sky.csv`) its photolysis names refer
+to, for sun, measured J or lamps. A modified MCM of the library enters as an add-on built from the
+difference to F0AM's own MCM (`f0am_import.build_addon`; `mechanisms/addons/NOAA_BB/`); add-ons may now
+carry RO2 species (appended to the run's `.ro2.incl`) and JN channels. `mechanisms/catalog.json` lists
+every chemistry offered or planned; the Chemistry step shows the planned ones greyed out.
+
+And every box of Fig. 1 is callable from Python (`juice.py`): `new_experiment` / `new_field_case`,
+`write`, `prepare`, `solve`, `results`, `run`, plus `write_script`, which writes an experiment as
+`<name>_run.py`. The chamber window's Run step, the wizard's Finish and the field window's Run step write
+that script next to every prepared run; `tests/test_juice_api.py` requires that the script's `build()`
+returns the window's spec field by field and that its ENZ/EASY are byte-identical.
+
 ## A2. Modules
 
 | Area | Modules |
@@ -59,7 +75,8 @@ organic/partitioning includes into the `.easy` like any other include set (A4).
 | Experiment → input files | `experiment_spec.py`, `easy_builder.py` (EASY form ↔ scene), `easy_scene.py` (lossless EASY document model and writer), `facsimile_import.py` (FACSIMILE `.easy` + ENZ → `ExperimentSpec`), `injection_calc.py` (µl / syringe / MFC → ppb, mixtures), `oh_reactivity.py` |
 | Conditions | `enz_builder.py` (SAPHIR archive NetCDF → ENZ, solar zenith angle), `saphir_wiki.py` (action log import), `measured_inputs.py` (user's own conditions file), `load_saphir_environment.py` (ENZ → interpolators) |
 | Chamber and light | `chambers.py` + `chambers/<id>.chamber.json`, `lamp_photolysis.py` + `photolysis/` (σ·φ at 298 K, lamp J ratios) |
-| Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons, imported GECKO-A bases), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py`, `gecko_import.py` + Franz Rohrer's converter (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`, `gecko_to_easy.py`, `make_soa_condensation.py`, `gecko_data/`) for GECKO-A generator output |
+| Python interface | `juice.py` (experiments and field cases in code, the four steps, `<name>_run.py` scripts), `examples/` |
+| Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons, imported GECKO-A bases, converted F0AM mechanisms, `catalog.json`), `f0am_import.py` (F0AM `_AllRxns/_K/_J.m` → base of kind `lumped`; F0AM MCM variant → add-on), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py`, `gecko_import.py` + Franz Rohrer's converter (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`, `gecko_to_easy.py`, `make_soa_condensation.py`, `gecko_data/`) for GECKO-A generator output |
 | Parsing and evaluation | `elog_generator.py`, `idl_parser.py`, `easy_parser.py`, `evaluator.py`, `mcm_kinetics.py`, `mechanism.py` |
 | Solver | `scenario_prep.py`, `scenario_runner.py`, `twostep_solver.py` (Verwer's TWOSTEP, F. Rohrer) |
 | Results | `results_viewer.py`, `overview_tab.py`, `timeseries_tab.py`, `plot_interaction.py`, `report_basket.py`, `report_dock.py`, `column_file_reader.py` |
@@ -196,6 +213,14 @@ against analytic solutions (`tests/test_field_scenario.py`, slow) and against F0
 a dark night; the GECKO-A path by `tests/test_gecko_import.py` and `tests/test_gecko_front_door.py` on
 the ethanol generator output in `tests/fixtures/gecko_ethanol`, including a run of the GECKO-A
 mechanism on the MCM core against the MCM subset of the same experiment (within 5–10 %).
+
+The converted F0AM mechanisms are checked by `tests/test_f0am_import.py` (converter constructs on a
+synthetic file, installed counts, no undefined name in any rate, the corrections of the library files,
+one run each for CRACMM2 and NOAA_BB) and, outside the suite, against F0AM running its own files with
+identical constant J (dark / lit, every species above 1 ppt: CRACMM2 0.39 / 0.23 %, CRACMM1 0.30 / 0.26 %
+without F0AM's marine O3 sink, RACM2 0.40 / 1.0 %; RACM2's 16 K-file constants equal MATLAB's to six
+digits). They have not been run in FACSIMILE yet; CRACMM writes negative yields for its DELTA_C/DELTA_N
+counters, which FACSIMILE has to accept.
 
 ## A6. Known limitations (November 2026)
 

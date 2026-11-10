@@ -128,6 +128,13 @@ and in how closely they follow FACSIMILE:
 | `precise` | the same at a tighter tolerance | the closest agreement with FACSIMILE |
 | `twostep` | Verwer's TWOSTEP, no Jacobian | very large mechanisms (GECKO-A); also the fastest for the complete MCM |
 
+Other chemistry is one field away:
+
+```python
+exp.base_mechanism, exp.precursors = "CRACMM2", []   # CRACMM2 | CRACMM1_aq | RACM2: used as a whole
+exp.addons = ["NOAA_BB"]                             # with the MCM: furans, furfurals, phenolics
+```
+
 To start from a template instead of an empty experiment:
 
 ```python
@@ -225,7 +232,9 @@ juice.run(case, r"D:\runs\my_site")
 ```
 
 The input table is described in the main tutorial (Sect. 3.2). See
-[`examples/field_site.py`](../examples/field_site.py).
+[`examples/field_site.py`](../examples/field_site.py). The field window, too, writes `<name>_run.py`
+next to every case it prepares, and `juice.load("<case>.field.json")` reads a saved or shipped case
+(`field_spec.list_examples()` lists the three examples).
 
 ## 8. Functions
 

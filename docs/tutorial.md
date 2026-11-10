@@ -75,7 +75,10 @@ whether it is measured, constant or modelled; *Needs attention* says "No problem
 
 ### Step 2 — Chemistry
 
-1. Base mechanism: **MCM v3.3.1** (shipped; its checksums are verified at start).
+1. Base mechanism: **MCM v3.3.1** (shipped; its checksums are verified at start). The same list offers
+   the lumped mechanisms CRACMM 2, CRACMM 1 and RACM2 (used as a whole: no compounds to pick; MCM names such
+   as `C5H8` still work for injections) and, greyed out, the mechanisms not converted yet. Add-ons such as
+   the NOAA biomass-burning chemistry (furans, furfurals, guaiacol, syringol) are ticked below it.
 2. Precursors: type `C5H8` (isoprene) and add it. JUICE extracts the MCM subset for this precursor
    (about 600 species) when the run is prepared; the review panel shows the size.
 3. Leave add-ons and rate adjustments empty.
