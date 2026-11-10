@@ -409,7 +409,11 @@ than the difference between two runs with the same profile.
 sweeps y ← (w + gP)/(1 + gL) on the production/loss form instead of Newton iterations with an LU
 factorisation — at least three sweeps, more (up to ten) until the iterate has converged to a tenth of
 the tolerance, because an unconverged iterate pollutes the error estimate and forces needless small
-steps (isoprene peroxy radicals did exactly that with a fixed count). No Jacobian is built, so the cost
+steps (isoprene peroxy radicals did exactly that with a fixed count). Species that interconvert by
+first-order reactions much faster than the step (CH3SO + O2 ⇌ CH3SOO2 in the DMS chemistry of the complete
+MCM, the isoprene–OH adducts and their peroxy radicals) are found in the mechanism and solved as exact pairs
+inside every sweep; without that, TWOSTEP sat at its minimum step on the complete MCM (since 10 Nov 2026:
+complete MCM in 72 s against 555 s with fast, median deviation from FACSIMILE 0.027 %). No Jacobian is built, so the cost
 per step is three to five rate evaluations and the run time grows with the number of reactions rather
 than with the fill-in of the Jacobian factorisation
 — the term that stops BDF in GECKO-A mechanisms (on this laptop, toluene GECKO-A without partitioning,
@@ -420,7 +424,7 @@ where BDF did not finish in 20 h; α-pinene GECKO-A, 284 234 species / 1.45 M re
 every ENZ row (implicit Euler), rtol 1e-3 with Verwer's max-norm error test, atol floor 100. Written
 by Franz Rohrer ([twostep_solver.py](twostep_solver.py), an independent Python implementation of the
 published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026, adaptive iteration):
-every species above 1 ppt in scenes 04–09 within 0.72 % except ISOPBO2 in scene_08 at 1.6 % (fast:
+every species above 1 ppt in scenes 04–09 within 0.72 % except ISOPBO2 in scene_08 at 1.6 %, 1.1 % with the pair solve (fast:
 0.56 %), and in scenes 06, 07 and 09 *more* species within 0.1 % than fast; the median deviation from
 fast over all species above 1e7 molecules/cm³ is 0.05–0.07 %.
 Species below about 30 × the absolute-tolerance floor (3000 molecules/cm³ ≈ 1e-13 ppb at the default

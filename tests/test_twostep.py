@@ -83,3 +83,65 @@ def test_twostep_profile_resolves_to_the_verwer_solver():
     # a TOML override of the numbers is honoured, strings included
     r = sp.resolve_profile({"profiles": {"twostep": {"twostep_numit": "4", "twostep_dtmin": "0.01", "rtol": "1e-4"}}}, "twostep")
     assert (r["twostep_numit"], r["twostep_dtmin"], r["rtol"]) == (4, 0.01, 1e-4)
+
+
+def _exchange_mechanism():
+    """S -> A (slow source); A + O2 <-> B fast both ways (as CH3SO + O2 <-> CH3SOO2, ~3e5 s-1); B -> C slow."""
+    species = ["S", "A", "B", "C"]
+    rx = [([("S", 1)], [], [("A", 1)], 1e-3),
+          ([("A", 1)], [("O2", 1)], [("B", 1)], 3e5 / 5e18),
+          ([("B", 1)], [], [("A", 1)], 1e5),
+          ([("B", 1)], [], [("C", 1)], 0.5)]
+    sp_i = {s: i for i, s in enumerate(species)}
+    a = {k: [] for k in ("orx", "osp", "oc", "erx", "ei", "ec", "srx", "ssp", "ssc")}
+    k = np.array([r[3] for r in rx])
+    for i, (reac, env, prod, _k) in enumerate(rx):
+        for n, c in reac:
+            a["orx"].append(i); a["osp"].append(sp_i[n]); a["oc"].append(float(c))
+            a["srx"].append(i); a["ssp"].append(sp_i[n]); a["ssc"].append(-float(c))
+        for _n, c in env:
+            a["erx"].append(i); a["ei"].append(0); a["ec"].append(float(c))
+        for n, c in prod:
+            a["srx"].append(i); a["ssp"].append(sp_i[n]); a["ssc"].append(float(c))
+    i32 = lambda v: np.array(v, np.int32)
+    arrays = (i32(a["orx"]), i32(a["osp"]), np.array(a["oc"]), i32(a["erx"]), i32(a["ei"]), np.array(a["ec"]),
+              i32(a["srx"]), i32(a["ssp"]), np.array(a["ssc"]))
+    y0 = np.array([1e12, 1.0, 1.0, 1.0])
+    return species, k, np.array([5e18]), arrays, y0
+
+
+def test_exchange_pairs_are_found_in_the_stoichiometry():
+    species, k, env, arrays, _y0 = _exchange_mechanism()
+    ia, ib, rx_ab, _sab, rx_ba, _sba = ts.find_exchange_pairs(arrays, len(species))
+    assert [species[i] for i in ia] == ["A"] and [species[i] for i in ib] == ["B"]
+    assert rx_ab.tolist() == [1] and rx_ba.tolist() == [2]
+    assert ts.PLSystem(len(species), k, env, arrays, pairs=False).pairs is None
+    # the mini mechanism has no such pair, so TWOSTEP is unchanged there
+    sp2, k2, _e, arrays2, _y, _M = ts._mini_mechanism()
+    assert ts.PLSystem(len(sp2), k2, np.array([1.0, 1.0]), arrays2).pairs is None
+
+
+def test_a_fast_exchange_pair_no_longer_forces_tiny_steps():
+    """Full MCM, 10 Nov 2026: CH3SO + O2 <-> CH3SOO2 kept the Jacobi iteration from converging, and TWOSTEP sat at
+    dtmin for hours. Solving the pair exactly inside each sweep restores normal steps and the right answer."""
+    from scipy.linalg import expm
+    species, k, env, arrays, y0 = _exchange_mechanism()
+    sysm = ts.PLSystem(len(species), k, env, arrays)
+    kab, kba = k[1] * env[0], k[2]
+    J = np.array([[-k[0], 0.0, 0.0, 0.0],                  # the system is linear: exact solution by expm
+                  [k[0], -kab, kba, 0.0],
+                  [0.0, kab, -kba - k[3], 0.0],
+                  [0.0, 0.0, k[3], 0.0]])
+    ref = expm(J * 600.0) @ y0
+    st_pair, st_jac = {}, {}
+    y = ts.twostep(sysm, y0, 0.0, 600.0, dtmin=1e-4, dtmax=60.0, atol=100.0, rtol=1e-3, numit=3,
+                   numit_max=10, stats=st_pair)
+    mask = ref > 1e3
+    assert np.max(np.abs(y[mask] / ref[mask] - 1.0)) < 2e-3
+    # the plain Jacobi sweep on the same system: five times the work, and A, B and C end far off (the unconverged
+    # iterate does not conserve the pair's mass)
+    jac = ts.PLSystem(len(species), k, env, arrays, pairs=False)
+    y_jac = ts.twostep(jac, y0, 0.0, 600.0, dtmin=1e-4, dtmax=60.0, atol=100.0, rtol=1e-3, numit=3, numit_max=10,
+                       stats=st_jac)
+    assert st_jac["nfcn"] > 3 * st_pair["nfcn"]
+    assert np.max(np.abs(y_jac[mask] / ref[mask] - 1.0)) > 1.0

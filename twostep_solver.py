@@ -28,6 +28,13 @@ Iteration type: boxmodel4gecko's `iterfirst` evaluates ALL rates from the previo
 all species at once -- that is a JACOBI sweep, not Gauss-Seidel (despite the comment in the Fortran).  This
 prototype does the same (vectorised, order-independent).  A true Gauss-Seidel sweep (species-ordered,
 incremental rate updates) is a possible later refinement, see the design note.
+
+Exchange pairs (JUICE, 10 Nov 2026): a Jacobi sweep cannot converge on a pair A <-> B that interconverts by
+first-order reactions much faster than 1/step (complete MCM: CH3SO + O2 <-> CH3SOO2, ~3.5e5 s-1 each way); the
+error test then fails at every step and TWOSTEP sits at dtmin.  `find_exchange_pairs` detects such pairs in the
+stoichiometry and `PLSystem.pair_solve` solves each pair's 2x2 implicit system exactly inside every sweep.
+Mechanisms without such pairs are integrated bit for bit as before; PLSystem(..., pairs=False) restores the plain
+sweep everywhere.
 """
 from __future__ import annotations
 
@@ -79,13 +86,82 @@ def pl_kernel(k_buf, y, env_vals,
             L_out[s] += (-sc) * v / y[s]        # reactant: linearised loss frequency (coeff 2 -> 2 k y)
 
 
+def find_exchange_pairs(arrays, n_species):
+    """Reversible first-order pairs A <-> B in the stoichiometry arrays.
+
+    A reaction r is a first-order exchange A -> B when its only ODE reactant is A with exponent 1 (env
+    reactants such as O2 or M are allowed), A's net coefficient is -1 and B's is +1.  A pair needs both
+    directions.  Each species joins at most one pair (greedy, in species order).  Returns
+    (ia, ib, rx_ab, seg_ab, rx_ba, seg_ba): pair species, and the reactions of each direction with the
+    pair index they belong to."""
+    (ode_r_rxn, ode_r_sp, ode_r_coeff, _er, _en, _ec, stoich_rxn, stoich_sp, stoich_sc) = arrays
+    reac = {}
+    for r, sp, c in zip(np.asarray(ode_r_rxn).tolist(), np.asarray(ode_r_sp).tolist(), np.asarray(ode_r_coeff).tolist()):
+        reac.setdefault(r, []).append((sp, c))
+    net = {}
+    for r, sp, sc in zip(np.asarray(stoich_rxn).tolist(), np.asarray(stoich_sp).tolist(), np.asarray(stoich_sc).tolist()):
+        net.setdefault(r, {})
+        net[r][sp] = net[r].get(sp, 0.0) + sc
+    edges = {}                                     # (a, b) -> [reactions a -> b]
+    for r, lst in reac.items():
+        if len(lst) != 1 or lst[0][1] != 1.0:
+            continue
+        a = lst[0][0]
+        st = net.get(r, {})
+        if st.get(a, 0.0) != -1.0:
+            continue
+        for b, sc in st.items():
+            if b != a and sc == 1.0:
+                edges.setdefault((a, b), []).append(r)
+    used = set()
+    ia, ib, rx_ab, seg_ab, rx_ba, seg_ba = [], [], [], [], [], []
+    for (a, b) in sorted(edges):
+        if a >= b or (b, a) not in edges or a in used or b in used:
+            continue
+        k = len(ia)
+        ia.append(a); ib.append(b); used.update((a, b))
+        rx_ab += edges[(a, b)]; seg_ab += [k] * len(edges[(a, b)])
+        rx_ba += edges[(b, a)]; seg_ba += [k] * len(edges[(b, a)])
+    as_i = lambda v: np.asarray(v, dtype=np.int64)
+    return as_i(ia), as_i(ib), as_i(rx_ab), as_i(seg_ab), as_i(rx_ba), as_i(seg_ba)
+
+
+@_NJIT
+def pair_kernel(ia, ib, rx_ab, seg_ab, rx_ba, seg_ba, v_buf, P, L, y, w, g, ynext, smallc, vab, vba):
+    """Exact 2x2 implicit solve of the exchange pairs (see PLSystem.pair_solve); vab/vba are scratch."""
+    n = ia.size
+    for k in range(n):
+        vab[k] = 0.0
+        vba[k] = 0.0
+    for j in range(rx_ab.size):
+        vab[seg_ab[j]] += v_buf[rx_ab[j]]
+    for j in range(rx_ba.size):
+        vba[seg_ba[j]] += v_buf[rx_ba[j]]
+    for k in range(n):
+        a = ia[k]
+        b = ib[k]
+        kab = vab[k] / y[a]
+        kba = vba[k] / y[b]
+        if kab <= 0.0 and kba <= 0.0:
+            continue
+        if L[a] < kab * (1.0 - 1e-9) or L[b] < kba * (1.0 - 1e-9):
+            continue                                   # held species (P = L = 0) or inconsistent: leave alone
+        ra = w[a] + g * max(P[a] - vba[k], 0.0)
+        rb = w[b] + g * max(P[b] - vab[k], 0.0)
+        Aa = 1.0 + g * L[a]
+        Ab = 1.0 + g * L[b]
+        D = Aa * Ab - (g * g) * kab * kba
+        ynext[a] = max(smallc, (ra * Ab + g * kba * rb) / D)
+        ynext[b] = max(smallc, (rb * Aa + g * kab * ra) / D)
+
+
 class PLSystem:
     """Convenience wrapper: production/loss function from JUICE-style arrays + optional extra terms.
 
     extra_P(t, y, P) / extra_L(t, y, L) may add continuous sources, bursts, analytical dilution ...
     k_buf and env_vals are OWNED by the caller (the runner refreshes them per ENZ row)."""
 
-    def __init__(self, n_species, k_buf, env_vals, arrays, extra_P=None, extra_L=None):
+    def __init__(self, n_species, k_buf, env_vals, arrays, extra_P=None, extra_L=None, pairs=True):
         (self.ode_r_rxn, self.ode_r_sp, self.ode_r_coeff,
          self.env_r_rxn, self.env_r_name_idx, self.env_r_coeff,
          self.stoich_rxn, self.stoich_sp, self.stoich_sc) = arrays
@@ -97,6 +173,13 @@ class PLSystem:
         self.extra_P = extra_P
         self.extra_L = extra_L
         self.ncall = 0
+        # reversible first-order pairs A <-> B, solved together inside each TWOSTEP iteration (pair_solve)
+        self.pairs = find_exchange_pairs(arrays, n_species) if pairs else None
+        if self.pairs is not None and self.pairs[0].size == 0:
+            self.pairs = None
+        if self.pairs is not None:
+            self._vab = np.zeros(self.pairs[0].size)
+            self._vba = np.zeros(self.pairs[0].size)
 
     def __call__(self, t, y):
         self.P[:] = 0.0
@@ -112,6 +195,24 @@ class PLSystem:
             self.extra_L(t, y, self.L)
         self.ncall += 1
         return self.P, self.L
+
+    def pair_solve(self, y, w, g, ynext):
+        """Overwrite ynext for the exchange pairs with the exact solution of the 2x2 implicit system.
+
+        The Jacobi sweep y_new = (w + g P(y)) / (1 + g L(y)) takes A's production from B at the OLD iterate;
+        for a pair exchanging at k >> 1/g each sweep only moves the pair by a factor ~1/(g k), so it never
+        converges (DMS: CH3SO + O2 <-> CH3SOO2, ~3.5e5 s-1 each way).  With P and L from the last call at
+        state y, the pair's own terms are taken out of P and the two linear equations
+            a (1 + g La) - g kba b = w_a + g (Pa - vba)
+            b (1 + g Lb) - g kab a = w_b + g (Pb - vab)
+        are solved exactly (La >= kab and Lb >= kba, so the determinant is positive).  Every other term
+        stays at the iterate, as in the Jacobi sweep.  A pair whose L does not contain its exchange rate
+        (held species: P = L = 0) is left alone."""
+        if self.pairs is None:
+            return
+        ia, ib, rx_ab, seg_ab, rx_ba, seg_ba = self.pairs
+        pair_kernel(ia, ib, rx_ab, seg_ab, rx_ba, seg_ba, self.v_buf, self.P, self.L, y,
+                    np.asarray(w, dtype=np.float64), float(g), ynext, SMALLC, self._vab, self._vba)
 
     def rhs(self, t, y):
         """dy/dt for scipy (reference runs)"""
@@ -164,12 +265,16 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
     failer = restart = False
     eps_end = 1e-9 * max(1e-3, te)
 
+    pair_solve = getattr(pl_fn, "pair_solve", None)
+
     def iterate(w, g, ynew, t_eval):
         nonlocal nfcn
         for it in range(numit_max):
             P, L = pl_fn(t0_abs + t_eval, ynew)
             nfcn += 1
             ynext = np.maximum(smallc, (w + g * P) / (1.0 + g * L))
+            if pair_solve is not None:
+                pair_solve(ynew, w, g, ynext)      # fast reversible pairs A <-> B solved exactly
             if it + 1 >= numit and it + 1 < numit_max:
                 # converged? (max-norm change relative to the tolerance)
                 if float(np.max(np.abs(ynext - ynew) / (atol_v + rtol * np.abs(ynext)))) < conv:
