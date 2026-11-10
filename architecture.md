@@ -42,6 +42,15 @@ file, `measured_inputs.read_enz`), checks that the regenerated EASY and ENZ equa
 the experiment is then edited and run like any other. A study (`study.py`) is the same pipeline
 repeated over a grid: it modifies the `ExperimentSpec`, never a generated file.
 
+Two more entries since November 2026. The start window asks *Chamber experiment* or *Field
+observations*: a field case (`field_window.py`, a `.field.json` through `field_spec.py`) enters at the
+first box too, `field_scenario.py` writing its emissions, dilution, background and held species as EASY
+statements plus an ENZ, so the rest of the path — and FACSIMILE — is unchanged. And a GECKO-A generator
+folder enters through the Chemistry step: `gecko_import.py` files it as a base mechanism of kind `gecko`
+under `mechanisms/base/GECKOA_<name>/` (git-ignored, regenerated from the generator output), and
+`experiment_spec.gecko_form` writes the physics include, the aliases, the chosen inorganic core and the
+organic/partitioning includes into the `.easy` like any other include set (A4).
+
 ## A2. Modules
 
 | Area | Modules |
@@ -50,11 +59,12 @@ repeated over a grid: it modifies the `ExperimentSpec`, never a generated file.
 | Experiment → input files | `experiment_spec.py`, `easy_builder.py` (EASY form ↔ scene), `easy_scene.py` (lossless EASY document model and writer), `facsimile_import.py` (FACSIMILE `.easy` + ENZ → `ExperimentSpec`), `injection_calc.py` (µl / syringe / MFC → ppb, mixtures), `oh_reactivity.py` |
 | Conditions | `enz_builder.py` (SAPHIR archive NetCDF → ENZ, solar zenith angle), `saphir_wiki.py` (action log import), `measured_inputs.py` (user's own conditions file), `load_saphir_environment.py` (ENZ → interpolators) |
 | Chamber and light | `chambers.py` + `chambers/<id>.chamber.json`, `lamp_photolysis.py` + `photolysis/` (σ·φ at 298 K, lamp J ratios) |
-| Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py` |
+| Chemistry | `mechanism_registry.py` + `mechanisms/` (unmodified MCM download with checksums, add-ons, imported GECKO-A bases), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py`, `gecko_import.py` + Franz Rohrer's converter (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`, `gecko_to_easy.py`, `make_soa_condensation.py`, `gecko_data/`) for GECKO-A generator output |
 | Parsing and evaluation | `elog_generator.py`, `idl_parser.py`, `easy_parser.py`, `evaluator.py`, `mcm_kinetics.py`, `mechanism.py` |
-| Solver | `scenario_prep.py`, `scenario_runner.py` |
+| Solver | `scenario_prep.py`, `scenario_runner.py`, `twostep_solver.py` (Verwer's TWOSTEP, F. Rohrer) |
 | Results | `results_viewer.py`, `overview_tab.py`, `timeseries_tab.py`, `plot_interaction.py`, `report_basket.py`, `report_dock.py`, `column_file_reader.py` |
 | Studies | `study.py`, `study_runner.py` (command line), `study_window.py` |
+| Field observations | `field_window.py` (five steps + run page), `field_spec.py` (`.field.json`: one table of E_/B_/C_/O_ columns, deposition, dilution), `field_scenario.py` (case → ENZ + EASY → scenario, observations file, skill table), `field_examples/` |
 | Checks | `run_benchmark.py`, `compare_juice_facsimile.py`, `check_easy_roundtrip.py`, `check_lamp_chamber.py`, `tests/` |
 
 `mechanism_solver.py` is a leftover stub; its logic lives in `scenario_runner.py`.
@@ -74,8 +84,14 @@ every scenario JSON.
 - `fast`: rtol 1e-4 with warm BDF continuation across ENZ rows (`perstep_warm`). The default since
   2 November 2026.
 - `precise`: rtol 1e-6 with a cold restart at every ENZ row, the set used before 2 November.
+- `twostep`: Verwer's TWOSTEP (`solver_method = "TWOSTEP"`, rtol 1e-3, restart at every ENZ row;
+  `twostep_numit` 3, `twostep_numit_max` 10, `twostep_conv` 0.1, `twostep_dtmin` 1e-4), since
+  9 November 2026, for the mechanisms BDF cannot factorise. A profile may carry its own
+  `solver_method`; the BDF profiles leave it unset. `jac_mode`, `perstep_warm` and `first_step` are
+  ignored under TWOSTEP.
 
-The JSON records `rtol`, `perstep_warm` and `solver_profile`. Choices:
+The JSON records `rtol`, `perstep_warm` and `solver_profile` (and, for twostep, `solver_method` and
+the `twostep_*` keys). Choices:
 
 - per run in the Run step, or with `scenario_runner.py --solver`
 - per study, frozen in the `.study.json`; a study refuses to change it once runs have finished
@@ -93,6 +109,9 @@ Rules learned on the way (benchmark of 4 November 2026, see the README table):
 - **Fast costs accuracy only in large mechanisms.** In scene_06–09, main species are 0.1–0.25 % off
   under fast vs 0.02–0.03 % under precise. In scene_04/05, fast is slightly tighter.
 - **Results from the two profiles differ by up to ~0.5 %.** Compare runs within one profile.
+- **TWOSTEP against the others:** species above 1 ppt within 0.72 % of FACSIMILE in scenes 04–09
+  (ISOPBO2 in scene_08 1.6 %) and within 0.57 % of the BDF solution on a GECKO-A toluene case
+  (A5); species below ~30 × `atol_floor` are numerical zero in its output (A6).
 - **A pre-profile TOML** (with `rtol_default` and no `profile` key) is used exactly as written
   (profile `custom`). Example: the 2 November file `f91383b^:FR_GUI.toml` is rtol 1e-6, cold.
 - **A pre-profile scenario JSON** (with `rtol` and no `perstep_warm`) gets the TOML's profile when its
@@ -127,6 +146,28 @@ any key.
   `saphir.jmeasured_02.incl` — about 40 % apart. scene_01/02 and campaign runs made before 2026 are
   5.96b, scene_03–09 are 6.00; JUICE's own experiments (no `.fac`) use the 6.00 rule.
 - **`#include` names may contain spaces**; the name runs to the end of the line or a `;` comment.
+- **TWOSTEP restarts at every ENZ row** with an implicit Euler step and integrates the row relative to
+  its start; rate constants and held species are frozen at the row start exactly as in the BDF per-row
+  mode (`JUICE_TS_CHECK=1` verifies at every row that P − L·y equals the BDF right-hand side,
+  `JUICE_TS_ROWS=a,b` integrates those rows with BDF at rtol 1e-8 for comparison). The error test is
+  Verwer's max-norm at rtol 1e-3 with the same `atol_floor`; the fixed-point iteration runs at least
+  `twostep_numit` sweeps and up to `twostep_numit_max` until the change is below `twostep_conv` ×
+  tolerance — an unconverged iterate pollutes the error estimate, and with a fixed count the isoprene
+  peroxy radicals forced sub-second steps for a whole day. The BDF path is bit-identical with and
+  without the TWOSTEP code (checked on all nine scenes after every runner change).
+- **Held species** (field mode): `X = CONST(<expression of an INPUT>)` makes X a held species
+  (`idl_parser.held_species`). The runner sets it per ENZ row, zeroes its derivative and drops its
+  Jacobian rows (BDF) or its P/L entries (TWOSTEP), and restores it exactly after each row.
+- **A GECKO-A base brings its own physics.** An MCM include set defines `CONST`, `DENSITY`, `M`, `O2`
+  and `N2` in its `.saphir.incl`; a GECKO-A mechanism has no such file, so the import writes
+  `geckoa.physics.incl` and the writer loads it first. Without it every termolecular rate (the MCM
+  `KMT` fall-offs as much as GECKO-A's `TBODY`/`OXYGEN`) is zero and OH has no sink — the symptom to
+  recognise is OH at 1e8–1e9 and HONO near zero.
+- **Photolysis anchors.** GECKO-A's `GPHOT` ratios anchor on the six SAPHIR-measured J names (jo1d,
+  jno2, jh2o2, jhono, jhcho_r, jhcho_m). A run that does not measure them gets them as the MCM
+  clear-sky `PHTFKT(l,m,n)` under the sun or from the lamp `J<n>` in a lamp chamber — never as
+  `CONST(J<n>)` under the sun, because `J1…J61` exist only with the MCM photolysis include, and an
+  undefined name in a rate expression evaluates as 1 s⁻¹, not 0 (A6).
 - **Two FACSIMILE habits JUICE reproduces with a warning.** A plain name in a parameter expression
   that is in no reaction (a truncated include: `COHM2CO` for `COHM2CO3` in an RO2 sum) is kept as a
   species without chemistry holding `INITIAL[*]`, as FACSIMILE does; only a missed `NAME(` call
@@ -144,6 +185,17 @@ max(max|FAC|, 100 molec/cm³), the solver's absolute tolerance. The current tabl
 scene_04 against FACSIMILE, and the UV-lamp chamber check, which has no FACSIMILE reference and is
 checked against physics instead (photostationary state, H2O2 loss, dark chemistry) and against a
 pinned run.
+
+TWOSTEP has the same gates: `run_benchmark.py --solver twostep` (scenes 04–09, 9 Nov 2026: every
+species above 1 ppt within 0.72 % of FACSIMILE, ISOPBO2 in scene_08 1.6 %; the 100-molecule floor FAILs
+on floor species, A6), `tests/test_twostep.py`, and the BDF path checked bit-identical. At GECKO-A
+sizes the reference is the BDF solution of the same scenario: the 2-h toluene case without partitioning
+(57 814 species, 348 108 reactions, 10 Nov 2026) agrees within 0.57 % of each species' run maximum for
+all 291 species above 1 ppt (median 0.14 %) — 2 min 26 s against 9 h 1 min. The field mode is verified
+against analytic solutions (`tests/test_field_scenario.py`, slow) and against F0AM's Lagrangian core on
+a dark night; the GECKO-A path by `tests/test_gecko_import.py` and `tests/test_gecko_front_door.py` on
+the ethanol generator output in `tests/fixtures/gecko_ethanol`, including a run of the GECKO-A
+mechanism on the MCM core against the MCM subset of the same experiment (within 5–10 %).
 
 ## A6. Known limitations (November 2026)
 
@@ -169,6 +221,22 @@ pinned run.
    0.8–1.4 % away from the sum of its own member radicals (scene_04, 06, 09), while JUICE prints
    exactly the sum of its members at the output time, and the member sums of the two programs
    agree within 0.25 %. Nothing to correct in JUICE; the RO2 column stays inside the ±2 % tolerance.
+6. **Floor species under TWOSTEP.** Species below about 30 × `atol_floor` (3 000 molec/cm³) are
+   numerical zero in its output: after every restart the BDF2 history carries the last increment on by
+   an amount the absolute tolerance permits (SA 3 → 2 458 molec/cm³ in scene_08, DHPMPAL in scene_07).
+   `run_benchmark.py` at its 100-molecule floor therefore FAILs scenes 04–09 for twostep; at the 1-ppt
+   floor all pass. Lower `atol_floor` if sub-ppt species matter.
+7. **An undefined name in a rate expression evaluates as 1, not 0.** Met as `jo1d = CONST(J1)` in a
+   run on the GECKO-A inorganic core (O3 stuck at 1 ppb); the writer now avoids it, the parser does not
+   yet warn. A warning for undefined J names in `idl_parser` is the fix.
+8. **The runner builds the analytic Jacobian structure under TWOSTEP** (1.86 M terms for toluene)
+   although the solver never uses it — wasted set-up time at GECKO-A sizes; skip it when
+   `_use_twostep`.
+9. **Output size above ~10⁵ species.** The `.cs` of the 24-h toluene run is 2.2 GB, the α-pinene 6-h one
+   1.35 GB (more with the `.kv` export); the output and the analysis tools need a species selection at
+   that size. Mechanisms of 10⁶ reactions run (α-pinene: 1.45 M reactions in the ODE system, 49 min for
+   six chamber hours), but the solver is validated against BDF only up to 3.5·10⁵ reactions and against
+   FACSIMILE up to the full MCM; beyond that there is no reference yet.
 
 ---
 

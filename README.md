@@ -362,8 +362,18 @@ them. Verified 9 Nov 2026 on the isoprene mechanism (9 909 species, 44 204
 generator reactions → 31 340 EASY reactions): regenerated from the raw output, the includes are byte for
 byte those of Franz's run; JUICE parses them to the same 49 741 reactions; with the twostep profile the
 SAPHIR day 18.07.2023 runs in 3 min 17 s (12 015 species with partitioning) and agrees with his BDF run to
-0.035 % (median over species; O₃ 0.04 %, OH 0.34 %). Generator output for six precursors (ethanol to
-α-pinene, 243 000 species / 1.23 M reactions) exists; the monoterpenes have not been run yet. GECKO-A
+0.035 % (median over species; O₃ 0.04 %, OH 0.34 %). The monoterpenes followed on 10 Nov 2026 (a
+synthetic SAPHIR day, 20 ppb precursor + 5 ppb NO, MCM core, partitioning on, laptop): limonene (183 861
+species / 936 583 reactions in the generator output; 213 110 species and 1 058 353 reactions in the ODE
+system) imports in 1.3 min and integrates six chamber hours in 35 min, α-pinene (243 071 / 1 229 688;
+284 234 species and 1 453 782 reactions in the ODE) imports in 1.6 min and takes 49 min — about 17 000
+steps each, none rejected, 3.0 sweeps per step, the same step count as toluene, so the cost is linear in
+the number of reactions. The toluene mechanism (118 165 species) runs a full 24-h day in 29.5 min. The
+direct test of the solver against BDF on identical input is the 2-h toluene case without partitioning
+(57 814 species, 348 108 reactions): TWOSTEP 2 min 26 s, BDF fast 9 h 1 min (1.64 M Jacobian terms); all
+291 species above 1 ppt agree within 0.57 % of their run maximum (median 0.14 %; at the end O₃ 0.005 %,
+OH 0.09 %, toluene 0.03 %). Output size is the next limit: the 24-h toluene `.cs` is 2.2 GB, the
+α-pinene 6-h one 1.35 GB. GECKO-A
 itself is GPL-3.0; JUICE reads its output and ships none of its code (the test fixture
 `tests/fixtures/gecko_ethanol` is a small generator output folder).
 
@@ -399,8 +409,11 @@ the tolerance, because an unconverged iterate pollutes the error estimate and fo
 steps (isoprene peroxy radicals did exactly that with a fixed count). No Jacobian is built, so the cost
 per step is three to five rate evaluations and the run time grows with the number of reactions rather
 than with the fill-in of the Jacobian factorisation
-— the term that stops BDF in GECKO-A mechanisms (toluene GECKO-A, 79 000 species: 73 min against
-15 h; 118 000 species / 469 000 reactions: 2.5 h, where BDF did not finish in 20 h). It restarts at
+— the term that stops BDF in GECKO-A mechanisms (on this laptop, toluene GECKO-A without partitioning,
+57 814 species / 348 108 reactions, two chamber hours: 2 min 26 s against 9 h 1 min with fast; on
+F. Rohrer's machine 79 000 species: 73 min against 15 h, 118 000 species / 469 000 reactions: 2.5 h,
+where BDF did not finish in 20 h; α-pinene GECKO-A, 284 234 species / 1.45 M reactions: six hours in
+49 min). It restarts at
 every ENZ row (implicit Euler), rtol 1e-3 with Verwer's max-norm error test, atol floor 100. Written
 by Franz Rohrer ([twostep_solver.py](twostep_solver.py), an independent Python implementation of the
 published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026, adaptive iteration):
