@@ -1,0 +1,37 @@
+; cracmm1_aq.aliases.incl -- CRACMM 1 (with aqueous chemistry) from the F0AM chemistry library (Chem/CRACMM1), converted by f0am_import.py 2026-11-10
+; Place et al. (2023); F0AM version of the CMAQ mech.def by B. Place (EPA).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
+; source files sha256[:16]: CRACMM1_aq_AllRxns.m f0da69db5027b018, CRACMM1_aq_K.m 5dcfc89020cac14c, CRACMM1_aq_J.m efe7c9010e7f2ecb
+; ALIAS[canonical] = alternatives: the parsers replace every alternative by the canonical name in reactions
+;   and k[] keys. First the standard SAPHIR names, then the MCM names of this mechanism's explicit species
+;   (the canonical name is the mechanism's own, which the output carries).
+ALIAS[HV] = hv
+ALIAS[OH] = HO
+ALIAS[HCHO] = H2CO CH2O
+ALIAS[O] = O3P
+ALIAS[CH3OOH] = CH3O2H MOOH
+ALIAS[HONO] = HNO2
+ALIAS[HNO3] = HONO2
+ALIAS[HNO4] = HO2NO2
+ALIAS[SA] = SULF H2SO4
+ALIAS[ISO] = C5H8
+ALIAS[TOL] = TOLUENE
+ALIAS[BEN] = BENZENE
+ALIAS[EOH] = C2H5OH
+ALIAS[MOH] = CH3OH
+ALIAS[ETH] = C2H6
+ALIAS[ETE] = C2H4
+ALIAS[API] = APINENE
+ALIAS[LIM] = LIMONENE
+ALIAS[ACE] = C2H2
+ALIAS[ACD] = CH3CHO
+ALIAS[ACT] = CH3COCH3
+ALIAS[ORA1] = HCOOH
+ALIAS[ORA2] = CH3CO2H
+ALIAS[GLY] = GLYOX
+ALIAS[MGLY] = MGLYOX
+ALIAS[BDE13] = C4H6
+ALIAS[ACRO] = ACR
+ALIAS[MO2] = CH3O2
+ALIAS[ACO3] = CH3CO3
+ALIAS[PAA] = CH3CO3H
+ALIAS[ETHP] = C2H5O2

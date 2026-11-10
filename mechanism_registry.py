@@ -116,6 +116,9 @@ class AddOn:
     overrides: List[str] = field(default_factory=list)             # base reactions it re-rates or switches off
     references: List[str] = field(default_factory=list)
     notes: str = ""
+    ro2: List[str] = field(default_factory=list)                   # its peroxy radicals: added to the run's RO2 sum
+    j_f0am: List[int] = field(default_factory=list)                # F0AM photolysis channels JN<k> it uses
+    source: Dict = field(default_factory=dict)
 
     def paths(self) -> List[str]:
         return [os.path.join(self.folder, f) for f in self.files]

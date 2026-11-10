@@ -1,0 +1,129 @@
+{
+ "kind": "addon",
+ "id": "NOAA_BB",
+ "name": "NOAA biomass burning: furans, furfurals, phenolics",
+ "version": "F0AM Chem/MCMv331/NOAA_BiomassBurning, built 2026-11-10",
+ "status": "draft",
+ "compatible_with": [
+  "MCM_v3.3.1"
+ ],
+ "files": [
+  "noaa_bb.incl"
+ ],
+ "description": "78 reactions of FURAN, M2F, M3F, DIMEFURAN, FURFURAL, MEFURFURAL, GUAIACOL, MGUAIACOL, SYRINGOL, DBUTANOL and their first products; 2 MCM rates changed (BENZAL photolysis on IUPAC cross sections, CISOPCO2 + RO2). Source: F0AM Chem/MCMv331/NOAA_BiomassBurning.",
+ "adds_species": {
+  "FURAN": "C4H4O",
+  "HYDFURANO2": "",
+  "HYDFURANOOH": "",
+  "M2F": "C5H6O",
+  "HYDMEFURANO2": "",
+  "C5HYDCARBO2": "",
+  "HYDMEFURANOOH": "",
+  "C5HYDCARBOOH": "",
+  "DIMEFURAN": "C6H8O",
+  "HYDDIMEFURANO2": "",
+  "HYDDIMEFURANOOH": "",
+  "FURFURAL": "C5H4O2",
+  "FURFURALO2": "",
+  "HYDFURFURALO2": "",
+  "ALDFURFURALO2": "",
+  "FURFURALOOH": "",
+  "HYDFURFURALOOH": "",
+  "FURANO2": "",
+  "ALDFURFURALOOH": "",
+  "CARBFURANO2": "",
+  "FURANOOH": "",
+  "CARBFURANOOH": "",
+  "FURFC3H4": "",
+  "MEFURFURAL": "C6H6O2",
+  "MEFURFURALO2": "",
+  "HYDMEFURFURALO2": "",
+  "C5MCO3DB": "",
+  "MEFURFURALOOH": "",
+  "HYDMEFURFURALOOH": "",
+  "DBUTANOL": "",
+  "DBUTANOLPROD": "",
+  "GUAIACOL": "C7H8O2",
+  "GUAIACOLO": "",
+  "PPGUAIACOL": "",
+  "NGUAIACOL": "",
+  "RGUAIACOL": "",
+  "NRGUAIACOL": "",
+  "MGUAIACOL": "C8H10O2",
+  "RMGUAIACOL": "",
+  "NRMGUAIACOL": "",
+  "NMGUAIACOL": "",
+  "SYRINGOL": "C8H10O3",
+  "RSYRINGOL": "",
+  "NRSYRINGOL": "",
+  "NSYRINGOL": "",
+  "FURFUR3AL": "",
+  "PPM3FURAN": ""
+ },
+ "needs_base_species": [
+  "OH",
+  "MALDIAL",
+  "HO2",
+  "NO",
+  "MALDALCO2H",
+  "NO2",
+  "C5DICARB",
+  "C5CO14OH",
+  "CH3O2",
+  "C4DBDIKET",
+  "C5DIALCO",
+  "CO",
+  "MALANHY",
+  "C3MCOCO2H",
+  "NO3",
+  "HNO3",
+  "M3F",
+  "C4MDIAL"
+ ],
+ "precursors": [
+  "FURAN",
+  "M2F",
+  "DIMEFURAN",
+  "FURFURAL",
+  "MEFURFURAL",
+  "GUAIACOL",
+  "MGUAIACOL",
+  "SYRINGOL",
+  "DBUTANOL"
+ ],
+ "overrides": [
+  "BENZAL + hv  -->  C6H5CO3 + HO2",
+  "BENZAL + hv  -->  C6H5O2 + CO + HO2"
+ ],
+ "references": [
+  "Decker et al. (2019), ES&T; Coggon et al. (MCMUpdates_BiomassBurning_DeckerCoggon.pptx); F0AM version G. M. Wolfe"
+ ],
+ "notes": "CISOPCO2 = CISOPCO: the extension's rate 2.00D-12*0.8*RO2 is already JUICE's MCM v3.3.1 rate (F0AM's MCM copy has 2.40D-12*0.8*RO2); no override; CISOPCO2 = HC4CCHO: the extension's rate 2.00D-12*0.1*RO2 is already JUICE's MCM v3.3.1 rate (F0AM's MCM copy has 2.40D-12*0.1*RO2); no override; CISOPCO2 = ISOPAOH: the extension's rate 2.00D-12*0.1*RO2 is already JUICE's MCM v3.3.1 rate (F0AM's MCM copy has 2.40D-12*0.1*RO2); no override",
+ "ro2": [
+  "HYDFURANO2",
+  "HYDMEFURANO2",
+  "C5HYDCARBO2",
+  "HYDDIMEFURANO2",
+  "FURFURALO2",
+  "HYDFURFURALO2",
+  "MEFURFURALO2",
+  "HYDMEFURFURALO2",
+  "ALDFURFURALO2",
+  "FURANO2",
+  "CARBFURANO2",
+  "GUAIACOLO"
+ ],
+ "j_f0am": [
+  2,
+  52
+ ],
+ "source": {
+  "f0am_path": "Chem/MCMv331/NOAA_BiomassBurning",
+  "url": "https://github.com/AirChem/F0AM/tree/master/Chem/MCMv331/NOAA_BiomassBurning",
+  "files_sha256": {
+   "MCMv331_AllRxns.fac": "338e96ad0d86506e95956cc3d66667a109f94f0aa1d768aa681e21d198f4103d",
+   "MCMv331_AllRxns_NOAABB.fac": "9e3d1feca1b8984fa78379991340afda707da759cc124670cd1a8c1ab42a2c05",
+   "MCMv331_AllRxns_NOAABB.m": "471a4c0865cafb5e310ef7f46a18b52bccceec86f4f882c9f2702c820ad56523"
+  }
+ }
+}

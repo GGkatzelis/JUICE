@@ -69,6 +69,16 @@ PROFILES: Dict[str, dict] = {
         "fixed": {"SEAWATER": 0.0, "OPEN_OCEAN": 0.0, "SURF_ZONE": 0.0, "SEA_ICE": 0.0, "ILLUMINATED": 1.0},
     },
 }
+PROFILES["CRACMM1_aq"] = {
+    **PROFILES["CRACMM2"],
+    "name": "CRACMM 1 (with aqueous chemistry)",
+    "files": ("CRACMM1_aq_AllRxns.m", "CRACMM1_aq_K.m", "CRACMM1_aq_J.m"),
+    "citation": "Place et al. (2023); F0AM version of the CMAQ mech.def by B. Place (EPA)",
+    "f0am_path": "Chem/CRACMM1",
+    # CMAQ (and F0AM's CRACMM1) hold CH4 at 1850 ppb and H2 at 560 ppb; CH4 is not a species of the mechanism
+    "constants": {"CH4": "1.85E-6*M"},
+    "j_fixes": {"JHNO4_RACM2": ("JN21+JN22", "F0AM maps JHNO4_RACM2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM2")},
+}
 
 # the standard SAPHIR aliases (as geckoa.aliases.incl): canonical = what the SAPHIR includes and the outputs use
 STANDARD_ALIASES = [("HV", "hv"), ("OH", "HO"), ("HCHO", "H2CO CH2O"), ("O", "O3P"), ("CH3OOH", "CH3O2H MOOH"),
@@ -312,7 +322,8 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
         fh.write("\n".join(header(files["physics"]) + [
             "; physics: air density from the pressure and temperature settings, F0AM's constant species",
             "CONST=FUNCTION[%1]", "DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]", "M =DENSITY(P,T)",
-            "O2=CONST(0.2095*M)", "N2=CONST(0.7808*M)", "H2=CONST(5.6E-7*M)", ""]))
+            "O2=CONST(0.2095*M)", "N2=CONST(0.7808*M)", "H2=CONST(5.6E-7*M)"]
+            + [f"{n}=CONST({v})   ; held constant, as in F0AM and CMAQ" for n, v in prof.get("constants", {}).items()] + [""]))
 
     with open(os.path.join(out, files["aliases"]), "w", encoding="ascii", newline="\n") as fh:
         L = header(files["aliases"]) + [
@@ -386,10 +397,185 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
     return out
 
 
+
+# == Add-ons: what an F0AM variant of the MCM changes, as an EASY include on top of JUICE's MCM ==============
+# F0AM ships some MCM extensions as a complete modified MCM (FACSIMILE .fac and MATLAB .m).  The add-on is the
+# difference to F0AM's own MCM v3.3.1: new reactions, and k[...] = CONST(...) overrides for re-rated base
+# reactions (written on JUICE's reaction keys, after the base: last definition wins).  The reaction text comes
+# from the .fac (MCM conventions: RO2 in the rate, J<n> labels) and is converted with mcm_converter, exactly as
+# the base; corrections F0AM made later in the .m are applied by the profile and checked against the .m.
+ADDON_PROFILES: Dict[str, dict] = {
+    "NOAA_BB": {
+        "name": "NOAA biomass burning: furans, furfurals, phenolics",
+        "f0am_path": "Chem/MCMv331/NOAA_BiomassBurning",
+        "citation": "Decker et al. (2019), ES&T; Coggon et al. (MCMUpdates_BiomassBurning_DeckerCoggon.pptx); F0AM version G. M. Wolfe",
+        "f0am_base": ("MCMv331_AllRxns.fac", "MCMv331_AllRxns.m"),
+        "f0am_mod": ("MCMv331_AllRxns_NOAABB.fac", "MCMv331_AllRxns_NOAABB.m"),
+        "compatible_with": ["MCM_v3.3.1"],
+        # the .fac predates two corrections of the .m (GMW 2019): BENZAL photolysis on F0AM's Jn2 (IUPAC cross
+        # sections) instead of the placeholder J<59>; furfural photolysis on Jn52 with the product FURFC3H4
+        # (C3H4 is allene in the MCM)
+        "j_rename": {"J<59>": "JN2", "J<58>": "JN52"},
+        "product_rename": {("FURFURAL", "C3H4"): "FURFC3H4"},
+        "formulas": {"FURAN": "C4H4O", "M2F": "C5H6O", "M3F": "C5H6O", "DIMEFURAN": "C6H8O", "FURFURAL": "C5H4O2",
+                     "MEFURFURAL": "C6H6O2", "GUAIACOL": "C7H8O2", "MGUAIACOL": "C8H10O2", "SYRINGOL": "C8H10O3",
+                     "ACETONIT": "C2H3N"},
+        "precursors": ["FURAN", "M2F", "M3F", "DIMEFURAN", "FURFURAL", "MEFURFURAL", "GUAIACOL", "MGUAIACOL", "SYRINGOL",
+                       "DBUTANOL"],
+    },
+}
+
+
+def _fac_reactions(path: str) -> List[Tuple[str, str]]:
+    """(rate, reaction) of every `% rate : A + B = C ;` of a FACSIMILE file (continuations joined)."""
+    from pathlib import Path
+    import mcm_converter as mc
+    return mc._extract_reactions(mc._combine_continuations(mc._read_lines(Path(path))))
+
+
+def _fac_key(reaction: str) -> Tuple[tuple, tuple]:
+    lhs, rhs = reaction.split("=", 1)
+
+    def norm(side):
+        return tuple(sorted(re.sub(r"\s+", "", t) for t in side.split("+") if t.strip()))
+    return norm(lhs), norm(rhs)
+
+
+def _multiset(rx: List[Tuple[str, str]]) -> Dict[tuple, List[str]]:
+    out: Dict[tuple, List[str]] = {}
+    for rate, r in rx:
+        if "=" in r:
+            out.setdefault(_fac_key(r), []).append(re.sub(r"\s+", "", rate))
+    return out
+
+
+def _species_of(reactions: List[str], sep: str) -> List[str]:
+    out: List[str] = []
+    for r in reactions:
+        for t in re.split(r"\+|" + re.escape(sep), r):
+            t = re.sub(r"^\s*[0-9.]+\s*\*?\s*", "", t.strip())
+            if t and t.lower() != "hv" and t not in out:
+                out.append(t)
+    return out
+
+
+def _m_ro2(path: str) -> List[str]:
+    text = open(path, encoding="latin-1").read()
+    m = re.search(r"RO2ToAdd\s*=\s*\{(.*?)\};", text, re.S)
+    return re.findall(r"'([^']+)'", m.group(1)) if m else []
+
+
+def build_addon(addon_id: str, folder: str, juice_base_fac: str, out_root: str = "") -> str:
+    """Write mechanisms/addons/<addon_id>/ from the F0AM files in `folder` (see ADDON_PROFILES)."""
+    import csv
+    import shutil
+    import mcm_converter as mc
+    prof = ADDON_PROFILES[addon_id]
+    out = os.path.join(out_root or os.path.join(HERE, "mechanisms", "addons"), addon_id)
+    os.makedirs(out, exist_ok=True)
+    base_fac = os.path.join(folder, prof["f0am_base"][0])
+    mod_fac, mod_m = (os.path.join(folder, f) for f in prof["f0am_mod"])
+    mod_rx = _fac_reactions(mod_fac)
+    juice_all = _fac_reactions(juice_base_fac)
+    base, mod, juice = _multiset(_fac_reactions(base_fac)), _multiset(mod_rx), _multiset(juice_all)
+    juice_rx: Dict[tuple, list] = {}
+    for rate, r in juice_all:
+        if "=" in r:
+            juice_rx.setdefault(_fac_key(r), []).append((rate, r))
+
+    def fix(rate: str, reaction: str) -> Tuple[str, str]:
+        for a, b in prof.get("j_rename", {}).items():
+            rate = rate.replace(a, b)
+        lhs, rhs = reaction.split("=", 1)
+        for (reac, old), new in prof.get("product_rename", {}).items():
+            if reac in [t.strip() for t in lhs.split("+")]:
+                rhs = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(old) + r"(?![A-Za-z0-9_])", new, rhs)
+        return rate, f"{lhs}={rhs}"
+
+    added, changed, notes = [], [], []
+    for key, rates in mod.items():
+        if key not in base:
+            added += [fix(rt, r) for rt, r in mod_rx if "=" in r and _fac_key(r) == key]
+        elif sorted(rates) != sorted(base[key]):
+            if key not in juice_rx or len(juice_rx[key]) != 1 or len(rates) != 1:
+                raise ValueError(f"{addon_id}: cannot place the re-rated reaction {key} on JUICE's MCM")
+            if sorted(juice[key]) != sorted(base[key]):
+                notes.append(f"{' + '.join(key[0])}: JUICE's MCM rate {juice[key]} differs from F0AM's {base[key]}")
+            j_rate, j_rxn = juice_rx[key][0]
+            new_rate, _r = fix(rates[0], j_rxn)
+            if re.sub(r"\s+", "", new_rate) == re.sub(r"\s+", "", j_rate):
+                notes[-1:] = [f"{' + '.join(key[0])} = {' + '.join(key[1])}: the extension's rate {new_rate} is already "
+                              f"JUICE's MCM v3.3.1 rate (F0AM's MCM copy has {base[key][0]}); no override"]
+                continue
+            mech, rate_def = mc._convert_reaction(j_rate, j_rxn)[0]
+            rate_def = rate_def.split("=CONST(", 1)[0] + "=CONST(" + mc._normalise_rate_expr(new_rate) + ")"
+            changed.append((mech.strip(), rate_def, re.sub(r"\s+", "", j_rate), re.sub(r"\s+", "", new_rate)))
+    conv = [mc._convert_reaction(rt, r)[0] for rt, r in added]
+
+    juice_species = set(_species_of([r for _rt, r in juice_all if "=" in r], "="))
+    used = _species_of([m for m, _ in conv], "-->")
+    new_species = [s for s in used if s not in juice_species]
+    needs = [s for s in used if s in juice_species]
+    ro2 = [s for s in _m_ro2(mod_m) if s in new_species]
+    jn = sorted({int(x) for _m, rd in conv for x in re.findall(r"\bJN(\d+)\b", rd)}
+                | {int(x) for c in changed for x in re.findall(r"\bJN(\d+)\b", c[1])})
+    jtab = {}
+    with open(os.path.join(HERE, "photolysis", "f0am_jn_clear_sky.csv"), encoding="utf-8") as fh:
+        for r in csv.DictReader(l for l in fh if not l.startswith("#")):
+            jtab[r["J"]] = r
+    fn = f"{addon_id.lower()}.incl"
+    src = {os.path.basename(p): hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (base_fac, mod_fac, mod_m)}
+    L = [f"; {fn} -- {prof['name']}: the F0AM extension of the MCM v3.3.1 ({prof['f0am_path']}) as an add-on,",
+         f";   built by f0am_import.py {_dt.date.today().isoformat()} from the difference to F0AM's own MCM v3.3.1.",
+         f"; {prof['citation']}.  F0AM: github.com/AirChem/F0AM, GPL-3.0.",
+         "; source files sha256[:16]: " + ", ".join(f"{k} {v[:16]}" for k, v in src.items()),
+         f"; {len(conv)} new reactions, {len(changed)} re-rated MCM reactions, {len(new_species)} new species ({len(ro2)} in RO2).",
+         "; corrections of the later F0AM .m applied: " + "; ".join(f"{a} -> {b}" for a, b in prof.get("j_rename", {}).items())
+         + "; " + "; ".join(f"{k[1]} -> {v} (from {k[0]})" for k, v in prof.get("product_rename", {}).items())]
+    L += [f"; {n}" for n in notes]
+    L += ["", "; F0AM photolysis channels without an MCM number (sun: clear-sky fit, photolysis/f0am_jn_clear_sky.csv;",
+          ";   a lamp chamber redefines them after this file)"]
+    for k in jn:
+        r = jtab[f"Jn{k}"]
+        L.append(f"JN{k} = PHTFKT({float(r['l']):.4e},{float(r['m']):g},{-float(r['n']):g})   ; {r['reaction'][:60]}")
+    L += ["", "; ---- reactions ----"] + [m.strip() for m, _ in conv]
+    L += ["", "; ---- rates ----"] + [rd for _m, rd in conv]
+    L += ["", "; ---- MCM reactions re-rated by this extension (last definition wins) ----"]
+    for mech, rd, old, new in changed:
+        L += [f"; was {old}", rd]
+    with open(os.path.join(out, fn), "w", encoding="latin-1", newline="\n") as fh:
+        fh.write("\n".join(L) + "\n")
+    manifest = {
+        "kind": "addon", "id": addon_id, "name": prof["name"],
+        "version": f"F0AM {prof['f0am_path']}, built {_dt.date.today().isoformat()}", "status": "draft",
+        "compatible_with": prof["compatible_with"], "files": [fn],
+        "description": (f"{len(conv)} reactions of {', '.join(prof['precursors'])} and their first products; "
+                        f"{len(changed)} MCM rates changed (BENZAL photolysis on IUPAC cross sections, CISOPCO2 + RO2). "
+                        f"Source: F0AM {prof['f0am_path']}."),
+        "adds_species": {s: prof["formulas"].get(s, "") for s in new_species},
+        "needs_base_species": needs, "precursors": [p for p in prof["precursors"] if p in new_species],
+        "overrides": [c[0] for c in changed], "references": [prof["citation"]],
+        "notes": "; ".join(notes), "ro2": ro2, "j_f0am": jn,
+        "source": {"f0am_path": prof["f0am_path"], "url": "https://github.com/AirChem/F0AM/tree/master/" + prof["f0am_path"],
+                   "files_sha256": src},
+    }
+    with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(manifest, fh, indent=1)
+    return out
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) == 2 and argv[0] in ADDON_PROFILES:      # an add-on: python f0am_import.py NOAA_BB <folder with the F0AM files>
+        import mechanism_registry as mreg
+        out = build_addon(argv[0], argv[1], mreg.base(mreg.DEFAULT_BASE).fac)
+        m = json.load(open(os.path.join(out, "manifest.json")))
+        print(f"{m['id']}: {len(m['adds_species'])} new species, {len(m['overrides'])} re-rated MCM reactions -> {out}")
+        if m["notes"]:
+            print("  notes:", m["notes"])
+        return 0
     if len(argv) != 2 or argv[0] not in PROFILES:
-        print(__doc__); print("known:", ", ".join(PROFILES)); return 2
+        print(__doc__); print("bases:", ", ".join(PROFILES), "| add-ons:", ", ".join(ADDON_PROFILES)); return 2
     out = write_base(argv[0], argv[1])
     m = json.load(open(os.path.join(out, "manifest.json")))
     print(f"{m['id']}: {m['lumped']['n_species']} species, {m['lumped']['n_reactions']} reactions -> {out}")

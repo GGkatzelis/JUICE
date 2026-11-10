@@ -173,3 +173,79 @@ def test_cracmm2_runs_and_mcm_names_reach_its_species(cracmm2, tmp_path):
     iso = r.ppb("ISO")
     assert iso.max() > 5.0 and iso[-1] < 0.5 * iso.max()                  # injected as C5H8, oxidised as ISO
     assert r.ppb("O3")[-1] > 1.0
+
+
+# ── the NOAA biomass-burning add-on (F0AM Chem/MCMv331/NOAA_BiomassBurning) ─────────────────────────────────────
+# Built as the difference of F0AM's NOAA MCM to F0AM's own MCM v3.3.1 (78 reactions, as in the maintained .m);
+# of NOAA's five rate changes only the two BENZAL photolyses differ from JUICE's MCM download (the CISOPCO2 + RO2
+# rates NOAA corrects are already 2.0e-12 in the MCM v3.3.1 download).
+
+@pytest.fixture(scope="module")
+def noaa_bb():
+    if "NOAA_BB" not in mreg.load_addons():
+        pytest.skip("NOAA_BB not installed")
+    return mreg.load_addons()["NOAA_BB"]
+
+
+def test_noaa_bb_addon_contents(noaa_bb):
+    text = open(noaa_bb.paths()[0], encoding="latin-1").read()
+    mech = [l for l in text.splitlines() if "-->" in l and not l.startswith(("k[", ";"))]
+    rates = [l for l in text.splitlines() if l.startswith("k[")]
+    assert len(mech) == 78 and len(rates) == 80                            # 78 new + 2 re-rated
+    assert noaa_bb.overrides == ["BENZAL + hv  -->  C6H5CO3 + HO2", "BENZAL + hv  -->  C6H5O2 + CO + HO2"]
+    assert "k[BENZAL+hv-->C6H5CO3+HO2]=CONST(JN2*0.5)" in text
+    furf = [l for l in mech if l.startswith("FURFURAL") and "OH" not in l]
+    assert any("FURFC3H4" in l for l in furf) and not any(re.search(r"\bC3H4\b", l) for l in furf)   # the .m product, not allene
+    assert noaa_bb.j_f0am == [2, 52] and re.search(r"^JN52 = PHTFKT\(", text, re.M)
+    assert "HYDFURANO2" in noaa_bb.ro2 and len(noaa_bb.ro2) == 12
+    assert {"FURAN", "FURFURAL", "GUAIACOL", "SYRINGOL"} <= set(noaa_bb.precursors)
+    assert noaa_bb.adds_species["GUAIACOL"] == "C7H8O2"
+
+
+def _bb_spec(chamber="SAPHIR"):
+    exp = juice.new_experiment("bb_test", chamber=chamber)
+    c = exp.conditions
+    c.source, c.date, c.start, c.end = "manual", "2024-07-09", "08:00", "10:00"
+    c.temperature_mode, c.j_source, c.roof_open = "const", "clear_sky", [("08:10", "10:00")]
+    exp.precursors, exp.addons = ["TOLUENE"], ["NOAA_BB"]
+    exp.injections = [juice.Injection(name="NO", products="NO", total_ppb="5", start="08:05"),
+                      juice.Injection(name="furan", products="FURAN", total_ppb="10", start="08:15"),
+                      juice.Injection(name="guaiacol", products="GUAIACOL", total_ppb="5", start="08:15")]
+    return exp
+
+
+def test_noaa_bb_under_lamps_redefines_its_channels(noaa_bb):
+    text = es.render_easy(_bb_spec("generic_lamps"))
+    lines = text.splitlines()
+    assert any(l.startswith("JN52 = CONST(J18*") for l in lines)
+
+
+def test_noaa_bb_runs_with_the_mcm(noaa_bb, tmp_path):
+    exp = _bb_spec()
+    assert not [m for lvl, m in juice.check(exp) if lvl == "error"]
+    run = juice.run(exp, str(tmp_path / "bb"), solver="fast", kv_pd=False, script=False)
+    r = run.results()
+    assert r.ppb("FURAN").max() > 5 and r.ppb("FURAN")[-1] < 0.5 * r.ppb("FURAN").max()
+    assert r.ppb("NGUAIACOL")[-1] > 0.01
+    chem = os.path.join(run.out_dir, "chemistry")
+    ro2 = next(f for f in os.listdir(chem) if f.endswith(".ro2.incl"))
+    assert "HYDFURANO2" in open(os.path.join(chem, ro2)).read()
+    elog = open(os.path.join(run.out_dir, "bb_test_juice.canonical.elog"), encoding="utf-8", errors="replace").read()
+    assert "k[BENZAL+hv-->C6H5CO3+HO2]=CONST(JN2*0.5)" in elog
+
+
+def test_installed_cracmm1():
+    if "CRACMM1_aq" not in mreg.load_bases():
+        pytest.skip("CRACMM1_aq not installed")
+    b = mreg.base("CRACMM1_aq")
+    assert b.is_lumped and b.lumped["n_species"] == 178 and b.lumped["n_reactions"] == 501
+    assert "CH4=CONST(1.85E-6*M)" in open(b.path("physics")).read()          # held at 1850 ppb, as in CMAQ
+    assert "JHNO4_RACM2 = CONST(JN21+JN22)" in open(b.path("phot")).read()
+    assert any("OPEN_OCEAN" in d for d in b.lumped["dropped"])                 # F0AM's marine O3 sink: not in a chamber
+    text = open(b.path("chemistry")).read().replace(" $\n", "")
+    defined = set(re.findall(r"^(\w+)\s*=", open(b.path("phot")).read() + "\n" + text, re.M))
+    used = set()
+    for line in text.splitlines():
+        if line.startswith("k["):
+            used |= fi._identifiers(line.split("= CONST(", 1)[1])
+    assert used - defined - {"T", "M", "O2", "N2", "H2", "H2O", "CH4"} == set()

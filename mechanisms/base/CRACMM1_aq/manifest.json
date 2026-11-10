@@ -1,0 +1,109 @@
+{
+ "kind": "lumped",
+ "id": "CRACMM1_aq",
+ "name": "CRACMM 1 (with aqueous chemistry)",
+ "version": "F0AM Chem/CRACMM1, converted 2026-11-10",
+ "files": {
+  "physics": "cracmm1_aq.physics.incl",
+  "aliases": "cracmm1_aq.aliases.incl",
+  "chemistry": "cracmm1_aq.chem.incl",
+  "phot": "cracmm1_aq.phot.incl",
+  "dil_mech": "CRACMM1_aq.dil.mech",
+  "dil_rate": "CRACMM1_aq.dil.rate",
+  "species_tsv": "cracmm1_aq.species.tsv"
+ },
+ "checksums": {
+  "cracmm1_aq.physics.incl": "fd8721650b8d8d801c241f8e98f6b0a431edae3cb5906e1232e612c498e9ea60",
+  "cracmm1_aq.aliases.incl": "88ae69fb0174d585afafc439a0bd2bc343824304bc338dffa771b453b23e66c8",
+  "cracmm1_aq.chem.incl": "6c36219918dff7cbb1a9b4d9de57f0b6c313546ba9cf15e803e7c60e59c97df8",
+  "cracmm1_aq.phot.incl": "68d6d43d2c01b07dccd60d2f4c49ac2c3660e46478e74fa08b888424d62ddd98",
+  "CRACMM1_aq.dil.mech": "0c8923fd234793c5dceef7f0628398b6f3653ca910951d68322a33e85439eafa",
+  "CRACMM1_aq.dil.rate": "be8da4ea162664f2765225a932b5c96cdbc071adb363979ad05bb8ddbf153c71",
+  "cracmm1_aq.species.tsv": "c47fd67f9cdbae9e31ec691bd62aff325b13c45d4590022d6510bd585ce1c361"
+ },
+ "source": {
+  "f0am_path": "Chem/CRACMM1",
+  "url": "https://github.com/AirChem/F0AM/tree/master/Chem/CRACMM1",
+  "copy": "f0am_source/",
+  "files_sha256": {
+   "CRACMM1_aq_AllRxns.m": "f0da69db5027b018d6eaaffe835dcc32d982a0fbbf29a347aee97430a1bb968d",
+   "CRACMM1_aq_K.m": "5dcfc89020cac14c4d7418829457f096dc5ecc6751ccb1c02ec17491ff4e76d8",
+   "CRACMM1_aq_J.m": "efe7c9010e7f2ecb148f80b9fb63673d523d926c5d84c14fc35bb8702c91de9e"
+  },
+  "converted": "2026-11-10",
+  "converter": "f0am_import.py",
+  "license": "GPL-3.0 (F0AM)"
+ },
+ "citation": "Place et al. (2023); F0AM version of the CMAQ mech.def by B. Place (EPA)",
+ "status": "draft",
+ "notes": "JHNO4_RACM2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHNO4_RACM2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM2; O3 =: rate zero in a chamber or box (a.*ILLUMINATED.*OPEN_OCEAN)",
+ "lumped": {
+  "family": "lumped",
+  "n_species": 178,
+  "n_reactions": 501,
+  "j_mcm": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   11,
+   12,
+   13,
+   14,
+   18,
+   19,
+   21,
+   22,
+   23,
+   24,
+   31,
+   32,
+   33,
+   34,
+   41,
+   54
+  ],
+  "j_f0am": [
+   1,
+   2,
+   3,
+   4,
+   14,
+   15,
+   21,
+   22
+  ],
+  "mcm_names": {
+   "C5H8": "ISO",
+   "TOLUENE": "TOL",
+   "BENZENE": "BEN",
+   "C2H5OH": "EOH",
+   "CH3OH": "MOH",
+   "C2H6": "ETH",
+   "C2H4": "ETE",
+   "APINENE": "API",
+   "LIMONENE": "LIM",
+   "C2H2": "ACE",
+   "CH3CHO": "ACD",
+   "CH3COCH3": "ACT",
+   "HCOOH": "ORA1",
+   "CH3CO2H": "ORA2",
+   "GLYOX": "GLY",
+   "MGLYOX": "MGLY",
+   "STYRENE": "STY",
+   "C4H6": "BDE13",
+   "ACR": "ACRO",
+   "CH3O2": "MO2",
+   "CH3CO3": "ACO3",
+   "CH3CO3H": "PAA",
+   "C2H5O2": "ETHP"
+  },
+  "dropped": [
+   "O3 =: rate zero in a chamber or box (a.*ILLUMINATED.*OPEN_OCEAN)"
+  ]
+ }
+}

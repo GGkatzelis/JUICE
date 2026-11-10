@@ -312,6 +312,37 @@ known limitation in [architecture.md](architecture.md), section A6.
 
 The table is the **fast** solver profile, the default.
 
+### Mechanisms and add-ons from the F0AM chemistry library
+
+The Chemistry step lists every mechanism and add-on of the F0AM chemistry library
+([github.com/AirChem/F0AM](https://github.com/AirChem/F0AM), `Chem/`; GPL-3.0 like JUICE), in
+`mechanisms/catalog.json`. Those not converted yet are greyed out. `f0am_import.py` writes an F0AM
+mechanism as EASY includes, so it runs in FACSIMILE too. Each converted file names its source and
+authors.
+
+- **CRACMM 2** (Skipper et al., 2024): a base mechanism with 193 species and 526 reactions, used as a
+  whole.
+  - MCM names of its explicit species (`C5H8`, `TOLUENE`, `C2H5OH`, ...) work for injections; the
+    output carries CRACMM's own names (`ISO`, `TOL`, `EOH`).
+  - Its photolysis frequencies are the MCM J values (sun, measured or lamps). F0AM's channels without
+    an MCM number come from fits to F0AM's clear-sky table (`photolysis/f0am_jn_clear_sky.csv`).
+  - F0AM's map gives HNO4 the NO2 photolysis frequency; JUICE uses F0AM's own HO2NO2 channels instead.
+  - Against F0AM running its own CRACMM2 files, every species above 1 ppt agrees within 0.4 %
+    (median 0.1 %, dark and lit with the same J values).
+- **CRACMM 1 with aqueous chemistry** (Place et al., 2023): 178 species, 501 reactions. CH4 is held at
+  1850 ppb, as in CMAQ and F0AM. F0AM's version also applies a marine-halogen O3 sink (about 2e-6 s⁻¹,
+  0.7 % per hour) at any zenith angle; JUICE leaves it out (no ocean in a chamber). Without that sink in
+  both models, they agree within 0.3 % in the dark and 1.3 % lit (median 0.05–0.07 %).
+- **NOAA biomass burning** (Decker et al., 2019; Coggon et al.): an add-on to the MCM v3.3.1. It adds
+  furan, the methylfurans, furfural, methylfurfural, guaiacol, methylguaiacol and syringol: 78
+  reactions and 47 species, 12 of them counted in RO2. It is built as the difference between F0AM's
+  NOAA MCM and F0AM's own MCM, and matches F0AM's maintained version reaction for reaction.
+  - Benzaldehyde photolysis uses IUPAC cross sections.
+  - Furfural photolysis is integrated from F0AM's cross section and its TUV actinic fluxes, the way
+    F0AM computes it.
+
+All three are marked *draft* until reviewed.
+
 ### GECKO-A mechanisms
 
 JUICE reads the output of the GECKO-A mechanism generator (Aumont et al.; v1.0, 2026) and writes it as
@@ -471,10 +502,12 @@ twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BD
 gecko_to_easy.py             GECKO-A generator output → EASY includes (gecko_mechanism.py reader, gecko_photolysis.py J fits,
                              gecko_notation_to_smiles.py, make_soa_condensation.py partitioning include; gecko_data/solarlight.phot)
 gecko_import.py              a generator folder → base mechanism of the registry (kind 'gecko'); the Chemistry step's import dialog
+f0am_import.py               an F0AM mechanism → base mechanism (kind 'lumped': CRACMM2), an F0AM MCM variant → add-on (NOAA_BB)
+juice.py, examples/          JUICE from code (docs/juice_from_code.md); every prepared run also gets <name>_run.py
 scenario_runner.py           the solver
 chambers.py, chambers/       chamber profiles
 lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)
-mechanism_registry.py, mechanisms/   MCM v3.3.1 as downloaded (checksums) and add-on chemistry
+mechanism_registry.py, mechanisms/   MCM v3.3.1 as downloaded (checksums), converted mechanisms, add-ons, catalog.json
 mcm_converter.py             MCM subset → EASY include files
 run_benchmark.py, compare_juice_facsimile.py, check_*.py, tests/   checks
 templates/, mixtures/        experiment templates, injection mixtures

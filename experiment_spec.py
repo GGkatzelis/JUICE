@@ -683,7 +683,22 @@ def gecko_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False) -> None:
 
 # Lamp chambers: F0AM channels without an MCM number (JN<k>) take the lamp J of the MCM channel that absorbs in
 # the same region, times their clear-sky ratio at 30 deg (approximate; noted in the EASY file).
-JN_LAMP_REFERENCE = {1: 18, 2: 18, 3: 22, 4: 41, 14: 41, 15: 41, 16: 41, 17: 41, 21: 3, 22: 3}
+JN_LAMP_REFERENCE = {1: 18, 2: 18, 3: 22, 4: 41, 14: 41, 15: 41, 16: 41, 17: 41, 21: 3, 22: 3, 52: 18}
+
+
+def jn_lamp_lines(channels) -> List[str]:
+    """JN<k> under lamps: the lamp J of the MCM channel absorbing in the same region x the clear-sky ratio at 30 deg."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    mcm = _phtfkt_table(os.path.join(here, "photolysis", "mcm_photolysis.csv"), "J")
+    f0am = _phtfkt_table(os.path.join(here, "photolysis", "f0am_jn_clear_sky.csv"), "Jn")
+    out = []
+    for k in channels:
+        if k not in f0am:
+            out.append(f"JN{k} = CONST(0.0)   ; F0AM channel Jn{k} is zero in its clear-sky table"); continue
+        ref = JN_LAMP_REFERENCE.get(k, 41)
+        ratio = _clear_sky(f0am[k]) / _clear_sky(mcm[ref]) if ref in mcm else 0.0
+        out.append(f"JN{k} = CONST(J{ref}*{ratio:.4e})   ; approximate: lamp J{ref} x clear-sky Jn{k}/J{ref} at 30 deg")
+    return out
 
 
 def _phtfkt_table(path: str, key_prefix: str) -> Dict[int, Tuple[float, float, float]]:
@@ -740,15 +755,13 @@ def lumped_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False, lamp_lin
             lines.append(f"J{n} = PHTFKT({l_:.4e},{m_:g},{-n_:g})")
         else:
             lines.append(f"J{n} = CONST(0.0)   ; no MCM parameters for J{n}")
-    for k in info.get("j_f0am", []):
-        if k not in f0am:
-            lines.append(f"JN{k} = CONST(0.0)   ; F0AM channel Jn{k} is zero in its clear-sky table"); continue
-        l_, m_, n_ = f0am[k]
-        if lamps:
-            ref = JN_LAMP_REFERENCE.get(k, 41)
-            ratio = _clear_sky(f0am[k]) / _clear_sky(mcm[ref]) if ref in mcm else 0.0
-            lines.append(f"JN{k} = CONST(J{ref}*{ratio:.4e})   ; approximate: lamp J{ref} x clear-sky Jn{k}/J{ref} at 30 deg")
-        else:
+    if lamps:
+        lines += jn_lamp_lines(info.get("j_f0am", []))
+    else:
+        for k in info.get("j_f0am", []):
+            if k not in f0am:
+                lines.append(f"JN{k} = CONST(0.0)   ; F0AM channel Jn{k} is zero in its clear-sky table"); continue
+            l_, m_, n_ = f0am[k]
             lines.append(f"JN{k} = PHTFKT({l_:.4e},{m_:g},{-n_:g})   ; F0AM clear-sky table, fitted (photolysis/f0am_jn_clear_sky.csv)")
     if lamps:                                          # after the lamp J<n> they refer to
         return lamp_out + lines
@@ -831,6 +844,13 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
         gecko_form(f, spec, lamps=lamps)
     elif mreg.is_lumped(spec.base_mechanism):
         lamp_lines = lumped_form(f, spec, lamps=lamps, lamp_lines=lamp_lines)
+    if lamps and spec.addons:                          # add-ons with F0AM channels: their JN<k> under the lamps
+        try:
+            jn = sorted({k for a in mreg.addons_for(spec.base_mechanism, list(spec.addons)) for k in a.j_f0am})
+        except (KeyError, ValueError):
+            jn = []
+        if jn:
+            lamp_lines = list(lamp_lines) + ["; add-on photolysis channels under the lamps (last definition wins)"] + jn_lamp_lines(jn)
     try:                                               # every generated EASY states its chemistry
         f.extra_statements += mreg.provenance_lines(spec.base_mechanism, list(spec.addons))
     except Exception as e:
@@ -896,6 +916,16 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
             shutil.copy2(p, os.path.join(chem, os.path.basename(p)))
             if os.path.basename(p) not in spec.extra_includes:
                 spec.extra_includes.append(os.path.basename(p))
+    ro2_new = [s for a in addons for s in a.ro2]
+    if ro2_new:                                        # the add-ons' peroxy radicals count in RO2, as in their source
+        ro2_incl = os.path.join(chem, spec.mechanism_stem + ".ro2.incl")
+        if os.path.isfile(ro2_incl):
+            text = open(ro2_incl, encoding="latin-1").read().rstrip()
+            have = set(re.findall(r"[A-Za-z0-9_]+", text))
+            extra = [s for s in ro2_new if s not in have]
+            if extra and text.endswith(")"):
+                with open(ro2_incl, "w", encoding="latin-1", newline="\n") as fh:
+                    fh.write(text[:-1] + " + " + " + ".join(extra) + ")\n")
     res["addons"] = [a.id for a in addons]
     return res
 
