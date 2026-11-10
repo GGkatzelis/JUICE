@@ -44,6 +44,9 @@ table, the mechanism include sets) is in the repository; no other download is ne
 
 ## Quick start
 
+New here? [docs/tutorial.md](docs/tutorial.md) walks through a chamber experiment, the same under UV
+lamps, a field case and a study, step by step, without archive access.
+
 ### Desktop icon (Windows)
 ```bash
 python make_shortcut.py              # the JUICE icon on the Desktop
@@ -374,7 +377,7 @@ direct test of the solver against BDF on identical input is the 2-h toluene case
 291 species above 1 ppt agree within 0.57 % of their run maximum (median 0.14 %; at the end O₃ 0.005 %,
 OH 0.09 %, toluene 0.03 %). Output size is the next limit: the 24-h toluene `.cs` is 2.2 GB, the
 α-pinene 6-h one 1.35 GB. GECKO-A
-itself is GPL-3.0; JUICE reads its output and ships none of its code (the test fixture
+itself is open source (GPL-3.0-or-later on Zenodo, AGPL-3.0 in its GitLab repositories); JUICE reads its output and ships none of its code (the test fixture
 `tests/fixtures/gecko_ethanol` is a small generator output folder).
 
 ### Solver profiles: fast, precise or twostep

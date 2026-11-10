@@ -119,8 +119,8 @@ def site_day(folder: str) -> str:
     hcho_obs = 3.0 + 4.0 * bell(local_h, 15.5, 4.0)                # an invented measurement, compared with the model, not held
     header = COMMON.format(title="Constrained site: one diurnal cycle at a Pasadena-like site") + """
 # The measured species are HELD: at every output step the model takes the value of the table (interpolated);
-# radicals and everything not listed run free with the lifetime set in the case (24 h) and the first day
-# is repeated once as spin-up (case: spin_up_days = 1, lifetime of species not held 6 h).  HCHO is NOT held: its O_HCHO column is
+# radicals and everything not listed run free with the lifetime set in the case (6 h) and the first day
+# is repeated once as spin-up (case: spin_up_days = 1).  HCHO is NOT held: its O_HCHO column is
 # only compared with the model (results viewer, skill table of the Run step).  Column h is informative here.
 #"""
     cols = {"time": [stamp(s) for s in sec], "lat": np.full(49, lat), "lon": np.full(49, lon), "T": T, "p": np.full(49, 985.0),

@@ -358,7 +358,9 @@ class TimeseriesTab(QWidget):
                 import datetime as _dt
                 date = _dt.datetime.fromtimestamp(self.v._midnight_unix, _dt.timezone.utc).strftime("%Y-%m-%d")
             note: List[str] = []
-            self._obs = ep.load_observations(root, date, sorted(OBS_SPECIES), self.v._midnight_unix,
+            # every series of the day's observation file (keys=None), as the viewer itself loads them: a field
+            # case writes its O_/C_ columns there (e.g. HCHO), which a fixed SAPHIR list would never show
+            self._obs = ep.load_observations(root, date, None, self.v._midnight_unix,
                                              cache_dir=os.path.dirname(os.path.abspath(self.v.csv_path)) if getattr(self.v, "csv_path", "") else "",
                                              status=note)
             self._obs_note = note[0] if note else ""
