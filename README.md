@@ -332,7 +332,14 @@ authors.
 - **CRACMM 1 with aqueous chemistry** (Place et al., 2023): 178 species, 501 reactions. CH4 is held at
   1850 ppb, as in CMAQ and F0AM. F0AM's version also applies a marine-halogen O3 sink (about 2e-6 s⁻¹,
   0.7 % per hour) at any zenith angle; JUICE leaves it out (no ocean in a chamber). Without that sink in
-  both models, they agree within 0.3 % in the dark and 1.3 % lit (median 0.05–0.07 %).
+  both models, they agree within 0.3 % (median 0.06 %), dark and lit.
+- **RACM2** (Goliff et al., 2013): 116 species, 360 reactions. The rate constants of F0AM's K file
+  (fall-offs, equilibria) are written out and equal F0AM's values to six digits.
+  - F0AM's reaction R268 (RCO3 + MO2) consumes ACO3 instead of RCO3, copied from R267. JUICE uses
+    the stated reactants.
+  - H2 is a RACM2 species and starts at zero, as in F0AM.
+  - Against F0AM (with R268 corrected there too): dark max 0.4 %, lit max 1.0 % (HCHO, HO2;
+    medians 0.07 / 0.15 %).
 - **NOAA biomass burning** (Decker et al., 2019; Coggon et al.): an add-on to the MCM v3.3.1. It adds
   furan, the methylfurans, furfural, methylfurfural, guaiacol, methylguaiacol and syringol: 78
   reactions and 47 species, 12 of them counted in RO2. It is built as the difference between F0AM's
@@ -341,7 +348,8 @@ authors.
   - Furfural photolysis is integrated from F0AM's cross section and its TUV actinic fluxes, the way
     F0AM computes it.
 
-All three are marked *draft* until reviewed.
+All are marked *draft* until reviewed. The other mechanisms of the catalogue (CB05, CB6r2, CB7,
+SAPRC-07B, GEOS-Chem, MCM v3.2) are listed but not converted yet.
 
 ### GECKO-A mechanisms
 
@@ -502,7 +510,7 @@ twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BD
 gecko_to_easy.py             GECKO-A generator output → EASY includes (gecko_mechanism.py reader, gecko_photolysis.py J fits,
                              gecko_notation_to_smiles.py, make_soa_condensation.py partitioning include; gecko_data/solarlight.phot)
 gecko_import.py              a generator folder → base mechanism of the registry (kind 'gecko'); the Chemistry step's import dialog
-f0am_import.py               an F0AM mechanism → base mechanism (kind 'lumped': CRACMM2), an F0AM MCM variant → add-on (NOAA_BB)
+f0am_import.py               an F0AM mechanism → base mechanism (kind 'lumped': CRACMM2, CRACMM1, RACM2), an F0AM MCM variant → add-on (NOAA_BB)
 juice.py, examples/          JUICE from code (docs/juice_from_code.md); every prepared run also gets <name>_run.py
 scenario_runner.py           the solver
 chambers.py, chambers/       chamber profiles

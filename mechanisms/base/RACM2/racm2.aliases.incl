@@ -1,0 +1,35 @@
+; racm2.aliases.incl -- RACM2 from the F0AM chemistry library (Chem/RACM2), converted by f0am_import.py 2026-11-10
+; Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
+; source files sha256[:16]: RACM2_AllRxns.m 74850b8b2da16cc1, RACM2_K.m 6b2a19be13049eaf, RACM2_J.m 5074e56adce9cfee
+; ALIAS[canonical] = alternatives: the parsers replace every alternative by the canonical name in reactions
+;   and k[] keys. First the standard SAPHIR names, then the MCM names of this mechanism's explicit species
+;   (the canonical name is the mechanism's own, which the output carries).
+ALIAS[HV] = hv
+ALIAS[OH] = HO
+ALIAS[HCHO] = H2CO CH2O
+ALIAS[O] = O3P
+ALIAS[CH3OOH] = CH3O2H MOOH
+ALIAS[HONO] = HNO2
+ALIAS[HNO3] = HONO2
+ALIAS[HNO4] = HO2NO2
+ALIAS[SA] = SULF H2SO4
+ALIAS[ISO] = C5H8
+ALIAS[TOL] = TOLUENE
+ALIAS[BEN] = BENZENE
+ALIAS[EOH] = C2H5OH
+ALIAS[MOH] = CH3OH
+ALIAS[ETH] = C2H6
+ALIAS[ETE] = C2H4
+ALIAS[API] = APINENE
+ALIAS[LIM] = LIMONENE
+ALIAS[ACE] = C2H2
+ALIAS[ACD] = CH3CHO
+ALIAS[ACT] = CH3COCH3
+ALIAS[ORA1] = HCOOH
+ALIAS[ORA2] = CH3CO2H
+ALIAS[GLY] = GLYOX
+ALIAS[MGLY] = MGLYOX
+ALIAS[MO2] = CH3O2
+ALIAS[ACO3] = CH3CO3
+ALIAS[PAA] = CH3CO3H
+ALIAS[ETHP] = C2H5O2

@@ -249,3 +249,33 @@ def test_installed_cracmm1():
         if line.startswith("k["):
             used |= fi._identifiers(line.split("= CONST(", 1)[1])
     assert used - defined - {"T", "M", "O2", "N2", "H2", "H2O", "CH4"} == set()
+
+
+def test_installed_racm2():
+    if "RACM2" not in mreg.load_bases():
+        pytest.skip("RACM2 not installed")
+    b = mreg.base("RACM2")
+    assert b.is_lumped and b.lumped["n_species"] == 116 and b.lumped["n_reactions"] == 360
+    chem = open(b.path("chemistry")).read()
+    assert "RCO3 + MO2 --> 0.9*MO2 + 0.9*HO2 + 0.4*CO2 + HCHO + 0.1*ORA2" in chem      # F0AM's R268 consumed ACO3
+    assert "INCONSISTENT" not in chem
+    assert "H2=CONST" not in open(b.path("physics")).read()                          # H2 is a RACM2 species
+    assert "JHO2NO2 = CONST(JN21+JN22)" in open(b.path("phot")).read()
+    k_lines = re.findall(r"^(K_\w+) = CONST\(", chem, re.M)
+    assert len(k_lines) == 16                                                      # the K file's fall-offs, written out
+
+
+def test_comment_lines_of_a_block_are_ignored(tmp_path):
+    src = SYNTH.replace("fB(i)=fB(i)-1.0;fHO(i)=fHO(i)-1.0;\nfD(i)=fD(i)+  1.0000;",
+                        "fB(i)=fB(i)-1.0;fHO(i)=fHO(i)-1.0;\n% Gstr{i,3}='C'; fC(i)=fC(i)-1.0;\nfD(i)=fD(i)+  1.0000;")
+    assert src != SYNTH
+    p = tmp_path / "c_AllRxns.m"
+    p.write_text(src)
+    _sp, rx, _dr = fi.read_allrxns(str(p), fixed={"SEAWATER": 0.0})
+    assert "B + HO --> D" in {fi.easy_reaction(r) for r in rx}
+
+
+def test_arithmetic_stoichiometry():
+    assert fi._arith("-1+0.9") == pytest.approx(-0.1) and fi._arith("+0.5*2") == 1.0
+    with pytest.raises(ValueError):
+        fi._arith("+x")

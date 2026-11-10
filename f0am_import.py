@@ -79,6 +79,18 @@ PROFILES["CRACMM1_aq"] = {
     "constants": {"CH4": "1.85E-6*M"},
     "j_fixes": {"JHNO4_RACM2": ("JN21+JN22", "F0AM maps JHNO4_RACM2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM2")},
 }
+PROFILES["RACM2"] = {
+    "name": "RACM2",
+    "files": ("RACM2_AllRxns.m", "RACM2_K.m", "RACM2_J.m"),
+    "citation": "Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header)",
+    "f0am_path": "Chem/RACM2",
+    "family": "lumped",
+    "mcm_names": PROFILES["CRACMM2"]["mcm_names"],          # only the names of species RACM2 has are written
+    "j_fixes": {"JHO2NO2": ("JN21+JN22", "F0AM maps JHO2NO2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM")},
+    # R268 (RCO3 + MO2) in F0AM's file consumes ACO3 instead of RCO3 (copied from R267): its reactants are RCO3 + MO2
+    "block_fixes": {"RCO3+MO2=0.9HO2+0.9MO2+0.4CO2+HCHO+0.1ORA2": [("fACO3(i)=fACO3(i)-1; fMO2", "fRCO3(i)=fRCO3(i)-1; fMO2")]},
+    "fixed": {},
+}
 
 # the standard SAPHIR aliases (as geckoa.aliases.incl): canonical = what the SAPHIR includes and the outputs use
 STANDARD_ALIASES = [("HV", "hv"), ("OH", "HO"), ("HCHO", "H2CO CH2O"), ("O", "O3P"), ("CH3OOH", "CH3O2H MOOH"),
@@ -145,9 +157,28 @@ def _num(text: str) -> float:
 
 
 # ── reading the three files ─────────────────────────────────────────────────────────────────────
-def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None) -> Tuple[List[str], List[Reaction], List[str]]:
-    """(species, reactions, dropped) of an F0AM <mech>_AllRxns.m."""
+_ARITH = re.compile(r"^[0-9.EeDd+\-*/ ()]+$")
+
+
+def _arith(text: str) -> float:
+    """A stoichiometric increment written as arithmetic ('1+0.9', '-1', '0.5*2'): numbers and + - * / only."""
+    t = text.strip().replace("D", "E").replace("d", "e")
+    if not _ARITH.match(t):
+        raise ValueError(f"not a number: {text!r}")
+    return float(eval(t, {"__builtins__": {}}, {}))
+
+
+def _strip_comments(blk: str) -> str:
+    return "\n".join(l.split("%", 1)[0] for l in blk.split("\n"))
+
+
+def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None,
+                 block_fixes: Optional[Dict[str, List[Tuple[str, str]]]] = None) -> Tuple[List[str], List[Reaction], List[str]]:
+    """(species, reactions, dropped) of an F0AM <mech>_AllRxns.m.  Comment text is ignored (F0AM files keep
+    superseded stoichiometry as % lines).  block_fixes: {Rnames text: [(old, new), ...]} replacements in that block,
+    for errors of the source file (each one is listed in the reaction's notes)."""
     fixed = dict(fixed or {})
+    block_fixes = dict(block_fixes or {})
     text = open(path, encoding="latin-1").read()
     m = re.search(r"SpeciesToAdd\s*=\s*\{(.*?)\};", text, re.S)
     species = re.findall(r"'([^']+)'", m.group(1)) if m else []
@@ -155,11 +186,20 @@ def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None) -> Tuple[L
     reactions: List[Reaction] = []
     dropped: List[str] = []
     rate_by_index: Dict[int, str] = {}                 # F0AM reaction number -> EASY rate (k(:,n) refers to it)
-    for index, blk in enumerate(blocks, start=1):
-        label_m = re.search(r"Rnames\{\s*(\d+)\s*\}\s*=\s*'([^']*)'", blk)
+    for index, raw_blk in enumerate(blocks, start=1):
+        label_m = re.search(r"Rnames\{\s*([^}]*?)\s*\}\s*=\s*'([^']*)'", raw_blk)
         name = label_m.group(2).strip() if label_m else "?"
-        if label_m:
+        if label_m and label_m.group(1).isdigit():
             index = int(label_m.group(1))
+        fixes_here = block_fixes.get(name, [])
+        for old, new in fixes_here:
+            if old not in raw_blk:
+                raise ValueError(f"block fix for '{name}' does not apply: {old!r} not found")
+            raw_blk = raw_blk.replace(old, new)
+        tag = re.match(r"\s*%\s*(R\w+)", raw_blk)          # RACM2 style: i=i+1; %R266
+        if tag:
+            name = f"{tag.group(1)}: {name}"
+        blk = _strip_comments(raw_blk)
         local: Dict[str, str] = {}
         rate = None
         notes: List[str] = []
@@ -191,8 +231,9 @@ def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None) -> Tuple[L
         rate_by_index[index] = e
         reac = re.findall(r"Gstr\{i,\s*\d+\}\s*=\s*'([^']+)'", blk)
         net: "OrderedDict[str, float]" = OrderedDict()
-        for sp_, sign, val in re.findall(r"f([A-Za-z0-9_]+)\(i\)\s*=\s*f\1\(i\)\s*([-+])\s*([0-9.Ee+-]+)", blk):
-            net[sp_] = net.get(sp_, 0.0) + (1 if sign == "+" else -1) * float(val)
+        for sp_, val in re.findall(r"f([A-Za-z0-9_]+)\(i\)\s*=\s*f\1\(i\)\s*([-+][0-9.EeDd+\-*/ ]*?)\s*(?:;|$)", blk, re.M):
+            net[sp_] = net.get(sp_, 0.0) + _arith(val)
+        notes += [f"source corrected: {old.strip()} -> {new.strip()}" for old, new in fixes_here]
         prods: "OrderedDict[str, float]" = OrderedDict()
         for sp_, v in net.items():
             c = v + reac.count(sp_)
@@ -201,6 +242,9 @@ def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None) -> Tuple[L
         for sp_ in reac:
             if net.get(sp_, 0.0) + reac.count(sp_) < -1e-12:
                 notes.append(f"{sp_}: consumed more than the reactants say")
+        bad = [s for s, c in prods.items() if c < 0 and not s.startswith("DELTA_")]   # CMAQ's DELTA_C/N: bookkeeping, negative by design
+        if bad:                                        # the f-lines consume a species that is not a reactant
+            notes.append("INCONSISTENT: consumes " + ", ".join(bad) + " which the reactants (Gstr) do not list")
         if _is_zero(e):
             dropped.append(f"{name}: rate zero in a chamber or box ({rate.strip()})"); continue
         if unsupported:
@@ -215,13 +259,31 @@ def _is_zero(e: str) -> bool:
 
 
 def read_k(path: str) -> Dict[str, str]:
-    """Named rate constants of <mech>_K.m (constant values only)."""
+    """Named rate constants of <mech>_K.m: one block per constant (Knames{i} = 'X'; helper assignments;
+    krx(:,i) = expression), translated like a reaction block."""
     out: Dict[str, str] = {}
     if not os.path.isfile(path):
         return out
     text = open(path, encoding="latin-1").read()
-    for name, val in re.findall(r"Knames\{i\}\s*=\s*'([^']+)';\s*\n\s*krx\(:,i\)\s*=\s*([^;]+);", text):
-        out[name] = matlab_to_easy(val)
+    for blk in re.split(r"\n\s*i\s*=\s*i\s*\+\s*1\s*;", text)[1:]:
+        blk = _strip_comments(blk)
+        mname = re.search(r"Knames\{i\}\s*=\s*'([^']+)'", blk)
+        if not mname:
+            continue
+        local: Dict[str, str] = {}
+        value = None
+        for line in blk.split("\n"):
+            for stmt in (s.strip() for s in line.split(";")):
+                if not stmt or stmt.startswith("Knames"):
+                    continue
+                mk = re.match(r"krx\(:,i\)\s*=\s*(.+)$", stmt)
+                if mk:
+                    value = _substitute(matlab_to_easy(mk.group(1)), local); continue
+                ma = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$", stmt)
+                if ma:
+                    local[ma.group(1)] = _substitute(matlab_to_easy(ma.group(2)), local)
+        if value is not None:
+            out[mname.group(1)] = value
     return out
 
 
@@ -237,7 +299,7 @@ def read_j(path: str) -> Dict[str, str]:
 
 def read(folder: str, profile: dict) -> Mechanism:
     rx, k, j = (os.path.join(folder, f) for f in profile["files"])
-    species, reactions, dropped = read_allrxns(rx, profile.get("fixed"))
+    species, reactions, dropped = read_allrxns(rx, profile.get("fixed"), profile.get("block_fixes"))
     jm = read_j(j)
     notes = []
     for name, (expr, why) in (profile.get("j_fixes") or {}).items():
@@ -322,8 +384,11 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
         fh.write("\n".join(header(files["physics"]) + [
             "; physics: air density from the pressure and temperature settings, F0AM's constant species",
             "CONST=FUNCTION[%1]", "DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]", "M =DENSITY(P,T)",
-            "O2=CONST(0.2095*M)", "N2=CONST(0.7808*M)", "H2=CONST(5.6E-7*M)"]
-            + [f"{n}=CONST({v})   ; held constant, as in F0AM and CMAQ" for n, v in prof.get("constants", {}).items()] + [""]))
+            "O2=CONST(0.2095*M)", "N2=CONST(0.7808*M)"]
+            # H2 is a constant (560 ppb) where the mechanism has no H2 species (CRACMM); RACM2 solves for H2
+            + ([] if "H2" in species else ["H2=CONST(5.6E-7*M)"])
+            + [f"{n}=CONST({v})   ; held constant, as in F0AM and CMAQ" for n, v in prof.get("constants", {}).items()
+               if n not in species] + [""]))
 
     with open(os.path.join(out, files["aliases"]), "w", encoding="ascii", newline="\n") as fh:
         L = header(files["aliases"]) + [
@@ -347,7 +412,7 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
         if mech.k_names:
             L.append("; named rate constants (F0AM " + prof["files"][1] + "; heterogeneous uptake is off in F0AM: 1e-60)")
             for n, v in mech.k_names.items():
-                L.append(f"{n} = CONST({v})")
+                L.append(wrap(f"{n} = CONST({v})"))
             L.append("")
         for r in mech.reactions:
             rx = easy_reaction(r)
