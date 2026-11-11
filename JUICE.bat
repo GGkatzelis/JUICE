@@ -10,5 +10,7 @@ set "HERE=%~dp0"
 set "PYW=%HERE%.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=%HERE%..\..\.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" set "PYW=pythonw.exe"
-start "" "%PYW%" "%HERE%juice_start.py" %*
+rem the 'juice' package is in this folder
+set "PYTHONPATH=%HERE:~0,-1%;%PYTHONPATH%"
+start "" "%PYW%" -m juice.gui.juice_start %*
 endlocal

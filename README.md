@@ -33,8 +33,8 @@ git clone https://github.com/GGkatzelis/JUICE.git
 cd JUICE
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
-python experiment_spec.py --selftest; if ($?) { python check_lamp_chamber.py }   # quick sanity check
+pip install -e .                 # JUICE and its dependencies (requirements.txt), in place
+python -m juice.core.experiment_spec --selftest; if ($?) { python -m juice.tools.check_lamp_chamber }   # quick sanity check
 ```
 macOS / Linux: the same, with `source .venv/bin/activate` and `&&` instead of `; if ($?) { … }`.
 The desktop launchers look for the virtual environment first as `.venv` inside the repository, then
@@ -53,10 +53,10 @@ and runs it. Examples: [examples/](examples).
 
 ### Desktop icon (Windows)
 ```bash
-python make_shortcut.py              # the JUICE icon on the Desktop
-python make_shortcut.py --startmenu  # also in the Start menu
+python -m juice.tools.make_shortcut              # the JUICE icon on the Desktop
+python -m juice.tools.make_shortcut --startmenu  # also in the Start menu
 ```
-The **JUICE** icon ([JUICE.bat](JUICE.bat) → [juice_start.py](juice_start.py)) first asks
+The **JUICE** icon ([JUICE.bat](JUICE.bat) → [juice_start.py](juice/gui/juice_start.py)) first asks
 whether you model a chamber experiment or field observations. The chamber path opens this menu:
 
 | Model an experiment | Look at results |
@@ -73,14 +73,12 @@ whether you model a chamber experiment or field observations. The chamber path o
   `.elog` in the experiment window with the FACSIMILE import open on it.
 - **Shortcuts are not in git.** They hold this PC's paths, so run the script once after cloning.
   It also removes the separate "JUICE Results" icon of earlier versions.
-- **[JUICE Results.bat](JUICE%20Results.bat)** still opens the viewer directly. Started without a
-  file, it first asks: one experiment, or a study?
 
 ### The experiment window
 ```powershell
-python juice_gui.py
+python -m juice.gui.juice_gui
 ```
-The window behind "New experiment" in the start menu (`python juice_gui.py <name>.experiment.json`
+The window behind "New experiment" in the start menu (`python -m juice.gui.juice_gui <name>.experiment.json`
 opens a saved one). Five steps down the left, a review panel on the right that
 always shows what the experiment contains:
 
@@ -99,8 +97,8 @@ are generated from it and can be opened from the review panel.
 
 ### Field observations
 ```powershell
-python field_window.py                     # or: JUICE icon → Field observations → New field case
-python field_scenario.py case.field.json --run   # the same without the window
+python -m juice.gui.field_window                     # or: JUICE icon → Field observations → New field case
+python -m juice.core.field_scenario case.field.json --run   # the same without the window
 ```
 The field path has the same five steps as the chamber window, with one input table in place of the
 chamber's archive: one row per time with the conditions (T, p, H2O or RH, lat/lon, boundary-layer
@@ -123,9 +121,9 @@ height h, kdil), photolysis columns (jNO2 …) and species columns `E_<species>`
    observation format and the log reports bias, NMB, RMSE and R² against them (`<name>_skill.csv`).
    "Many tables as a study…" runs the case with a folder of input tables (one per trajectory or day),
    optionally over NOx and VOC emission factors, in the study window: a field study (`field_case` and
-   `tables` in the `.study.json`; `python study_runner.py` runs it from the command line as well).
+   `tables` in the `.study.json`; `python -m juice.core.study_runner` runs it from the command line as well).
 
-Three synthetic examples, one per kind of run, are in [field_examples/](field_examples/) with a commented
+Three synthetic examples, one per kind of run, are in [examples/field/](examples/field/) with a commented
 table each ("Load an example" copies one into your project folder; the README there explains the columns).
 
 Everything the field adds is written as ordinary EASY statements, so the generated files run in
@@ -140,12 +138,12 @@ the analytic solutions for emission, dilution towards a background, a held ramp 
 
 ### Experiments set up for FACSIMILE
 ```powershell
-python juice_gui.py path\to\<name>.easy      # the experiment window, import dialog open on the file
+python -m juice.gui.juice_gui path\to\<name>.easy      # the experiment window, import dialog open on the file
 ```
 "Import a FACSIMILE experiment" (start menu, the Experiment step, or the File menu): an experiment
 modelled with FACSIMILE earlier becomes an ordinary JUICE experiment. The dialog takes the `.easy`
 (an `.elog` is accepted when its `.easy` lies next to it), finds the ENZ the `FILES[ENZ]` line names,
-and reads both back into the experiment description ([facsimile_import.py](facsimile_import.py)):
+and reads both back into the experiment description ([facsimile_import.py](juice/importers/facsimile_import.py)):
 
 - the ENZ gives the date, time window and step, the roof times, and the start and duration of every
   injection (its pulse columns); it is copied into the experiment folder as
@@ -175,29 +173,29 @@ the 6.00 rule, as for its own experiments.
 
 ### Results without the window
 ```powershell
-python results_viewer.py path\to\<name>.cs
+python -m juice.gui.results_viewer path\to\<name>.cs
 ```
 or drop a `.cs` file on the **JUICE** icon. Without a file, the viewer first asks whether you want
 the results of one experiment or of a study (a study opens in the study window).
 
 ### Command line
 ```powershell
-python scenario_runner.py path\to\<name>.json --toml FR_GUI.toml          # one prepared run
-python study_runner.py path\to\<name>.study.json --workers 4 --yes        # a study
-python scenario_runner.py path\to\<name>.json --solver precise            # the same run, precise profile
-python run_benchmark.py --workers 4                                       # JUICE vs FACSIMILE, scene_01..09
-python run_benchmark.py --workers 4 --solver precise                      # ... with the precise profile
-python run_benchmark.py --workers 4 --solver twostep                      # ... with Verwer's TWOSTEP (no Jacobian)
-python compare_juice_facsimile.py scene_04 --tol 0.02 --no-stop --juice-dir "MCM_tested_scenarios\JUICE archive\JUICE\benchmark\fast\scene_04"
+python -m juice.core.scenario_runner path\to\<name>.json --toml settings.toml          # one prepared run
+python -m juice.core.study_runner path\to\<name>.study.json --workers 4 --yes        # a study
+python -m juice.core.scenario_runner path\to\<name>.json --solver precise            # the same run, precise profile
+python -m juice.tools.run_benchmark --workers 4                                       # JUICE vs FACSIMILE, scene_01..09
+python -m juice.tools.run_benchmark --workers 4 --solver precise                      # ... with the precise profile
+python -m juice.tools.run_benchmark --workers 4 --solver twostep                      # ... with Verwer's TWOSTEP (no Jacobian)
+python -m juice.tools.compare_juice_facsimile scene_04 --tol 0.02 --no-stop --juice-dir "runs\benchmark\fast\scene_04"
 ```
 `<name>.json` is the scenario the Run step writes next to the experiment's EASY and ENZ files. The
-benchmark writes its runs to `MCM_tested_scenarios\JUICE archive\JUICE\benchmark\<profile>\` (not in
+benchmark writes its runs to `runs\benchmark\<profile>\` (not in
 git); the last line compares one of them again and lists every column.
 
 ### Tests
 ```powershell
-pip install -r requirements-dev.txt
-python -m pytest                  # 62 tests, about 1.5 minutes
+pip install -e .[dev]             # adds pytest
+python -m pytest                  # about 200 tests, about 3 minutes
 python -m pytest -m "not slow"    # input-side tests only, without solver runs
 ```
 The tests check the MCM download against its checksums, the EASY round-trip and builder for every
@@ -208,12 +206,12 @@ FACSIMILE, and the UV-lamp chamber. They also run on GitHub for every push to `m
 
 ## Chambers other than SAPHIR
 
-The chamber is a profile, `chambers/<id>.chamber.json`: volume, leak flow (the `DILUTE` expression is built
+The chamber is a profile, `setups/chambers/<id>.chamber.json`: volume, leak flow (the `DILUTE` expression is built
 from them), wall material, light source (`sun` with latitude/longitude, `lamps` with their jNO2, or `dark`),
 a data archive JUICE can read (SAPHIR only, so far), the default chamber effects, and per-species wall
 losses. Choose the chamber on *Where and when*; picking another one applies that profile's switches and
-`DILUTE` to the *Chamber* step, loading a saved experiment never does. `chambers/` ships SAPHIR (identical
-to the built-in profile, checked by `python chambers.py --selftest`) and ~18 chambers from
+`DILUTE` to the *Chamber* step, loading a saved experiment never does. `setups/chambers/` ships SAPHIR (identical
+to the built-in profile, checked by `python -m juice.core.chambers --selftest`) and ~18 chambers from
 [docs/chamber_survey.md](docs/chamber_survey.md) with public numbers, marked `verified: false`. *Edit …* next
 to the chamber list changes a profile (volume, leak flow, light source, archive, default effects, wall losses,
 injection standards), *New …* adds your own chamber pre-filled with a copy of the selected one; both write the
@@ -224,8 +222,8 @@ measured column of your conditions file or from the profile's jNO2 at full power
 (a `lights` column may be 0–1 for dimmed lamps); every other photolysis frequency is
 `J<n> = jNO2 × ∫σφF dλ / ∫σφF dλ (NO2)` with F the relative lamp spectrum — the method of Carter/SAPRC,
 of the MCM's own chamber evaluations and of F0AM (see [docs/lamp_photolysis_practice.md](docs/lamp_photolysis_practice.md)).
-σ·φ at 298 K for the MCM J numbers is `photolysis/sigma_phi_298K.csv`, built from the NCAR tuv-x data
-(JPL/IUPAC) by `photolysis/build_sigma_phi.py`. The profile gives the spectrum as a two-column file
+σ·φ at 298 K for the MCM J numbers is `chemistry/photolysis/sigma_phi_298K.csv`, built from the NCAR tuv-x data
+(JPL/IUPAC) by `chemistry/photolysis/build_sigma_phi.py`. The profile gives the spectrum as a two-column file
 (`light.spectrum`), a synthetic stand-in (`light.spectrum_builtin`: `blacklight_350`, `blacklight_365` — a
 Gaussian guess; j(O1D) and j(H2O2) hinge on the lamps' 300–320 nm tail, which only a measured spectrum
 settles), `solar_like` for a Pyrex-filtered Xe/Ar arc (MCM clear-sky ratios at `effective_sza`), and
@@ -233,7 +231,7 @@ measured ratios `light.j_ratios` that override everything. The generated EASY st
 the clear-sky ones. Measured J columns (jO1D, jHONO, …) always win. Literature values per lamp type:
 [docs/lamp_photolysis_literature.md](docs/lamp_photolysis_literature.md). First-order wall losses of a
 profile (`wall_loss_s1`) become `k[X --> ] = CONST(k)` lines, switchable on the *Chamber* step.
-`python lamp_photolysis.py --selftest` prints the ratios of the stand-ins and of every lamp profile.
+`python -m juice.chemistry.lamp_photolysis --selftest` prints the ratios of the stand-ins and of every lamp profile.
 Indoor chambers have no SAPHIR-like wall HONO source and blacklights give little j(O¹D), so experiments
 add an OH precursor: typically ~1 ppm H₂O₂ (UCR, Caltech, GTEC; J3 photolysis), HONO from NaNO₂ + H₂SO₄
 (tens to hundreds of ppb, low-NOx) or CH₃ONO with NO (ppm, high-NOx; needs an add-on mechanism). The
@@ -244,7 +242,7 @@ UV-chamber template starts with 1 ppm H₂O₂ as an initial value.
 JUICE needs the physical conditions of the chamber over time. At SAPHIR they are read from the
 archive; anywhere else, choose **Measured — from a file you provide** on the *Where and when*
 step and give one table (CSV or Excel, first sheet). `Template …` writes an example with the
-recognised columns, units and time formats; `templates/measured_inputs_template.csv` is the same file.
+recognised columns, units and time formats; `setups/templates/measured_inputs_template.csv` is the same file.
 
 | column | aliases | unit in the file | notes |
 |---|---|---|---|
@@ -267,7 +265,7 @@ viewer are a separate file, `<date>.observations.csv` next to the result (`hour_
 
 ## Studies: many experiments at once, or a parameter sweep
 
-File → "Study: several experiments at once, or a sweep …" (or `python study_window.py`). A study takes
+File → "Study: several experiments at once, or a sweep …" (or `python -m juice.gui.study_window`). A study takes
 your saved experiments and runs them all with one consistent change — a reaction rate (expression or
 × factor), an extra add-on chemistry, a chamber parameter, scaled injections, initial values — and/or
 a sweep over one or two axes (e.g. initial NO 0.1 … 20 ppb log × injected VOC × 0.5 … 4) to draw an
@@ -276,11 +274,11 @@ lines in its `.easy`; the base experiments are never modified. "Run pilot, then 
 first case alone, measures it and asks before starting the rest; finished runs are skipped when a
 study is repeated or extended. Results: a table and CSV of metrics (O3 maximum, Ox gain while lit,
 OH mean, NOx at the end, …), an isopleth plot for two axes, lines with normalised sensitivities for
-one axis. Headless: `python study_runner.py <name>.study.json --workers 4 --yes`.
+one axis. Headless: `python -m juice.core.study_runner <name>.study.json --workers 4 --yes`.
 
 ## Validation
 
-`python run_benchmark.py` takes every reference scene in `MCM_tested_scenarios/IDL Input` that has
+`python -m juice.tools.run_benchmark` takes every reference scene in `validation/IDL Input` that has
 the IDL-written `.easy`, its `.enz` and the FACSIMILE result `.cs`, runs it through the full JUICE
 pipeline with the validated solver settings, and compares **every column** of the result with
 FACSIMILE: the maximum relative deviation over the whole run, not a median. Concentrations are
@@ -308,7 +306,7 @@ species.
 ² scene_01–03 are small hand-written tests whose ENZ has only a few rows (lights on at 3600 s, the
 next row an hour later) while results are written every 10 s. JUICE applies each new row one output
 step (10 s) later than FACSIMILE does; that shift alone produces these deviations. It is the first
-known limitation in [architecture.md](architecture.md), section A6.
+known limitation in [architecture.md](docs/architecture.md), section A6.
 
 The table is the **fast** solver profile, the default.
 
@@ -316,7 +314,7 @@ The table is the **fast** solver profile, the default.
 
 The Chemistry step lists every mechanism and add-on of the F0AM chemistry library
 ([github.com/AirChem/F0AM](https://github.com/AirChem/F0AM), `Chem/`; GPL-3.0 like JUICE), in
-`mechanisms/catalog.json`. Those not converted yet are greyed out. `f0am_import.py` writes an F0AM
+`chemistry/mechanisms/catalog.json`. Those not converted yet are greyed out. `f0am_import.py` writes an F0AM
 mechanism as EASY includes, so it runs in FACSIMILE too. Each converted file names its source and
 authors.
 
@@ -325,7 +323,7 @@ authors.
   - MCM names of its explicit species (`C5H8`, `TOLUENE`, `C2H5OH`, ...) work for injections; the
     output carries CRACMM's own names (`ISO`, `TOL`, `EOH`).
   - Its photolysis frequencies are the MCM J values (sun, measured or lamps). F0AM's channels without
-    an MCM number come from fits to F0AM's clear-sky table (`photolysis/f0am_jn_clear_sky.csv`).
+    an MCM number come from fits to F0AM's clear-sky table (`chemistry/photolysis/f0am_jn_clear_sky.csv`).
   - F0AM's map gives HNO4 the NO2 photolysis frequency; JUICE uses F0AM's own HO2NO2 channels instead.
   - Against F0AM running its own CRACMM2 files, every species above 1 ppt agrees within 0.4 %
     (median 0.1 %, dark and lit with the same J values).
@@ -356,7 +354,7 @@ SAPRC-07B, GEOS-Chem, MCM v3.2) are listed but not converted yet.
 JUICE reads the output of the GECKO-A mechanism generator (Aumont et al.; v1.0, 2026) and writes it as
 EASY includes, so a GECKO-A mechanism runs like any other chemistry — in FACSIMILE as well as in JUICE.
 The importer is Franz Rohrer's (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`,
-`gecko_to_easy.py`, `make_soa_condensation.py`, table `gecko_data/solarlight.phot`), taken over from the
+`gecko_to_easy.py`, `make_soa_condensation.py`, table `chemistry/photolysis/solarlight.phot`), taken over from the
 MCM_SAPHIR_Tool branch `easy-start-gui` on 9 Nov 2026 with his notes. From a generator folder
 (`dictionary.out`, `reactionswithcom.dum`, `pvap.nan.dat`, `pero*.dat`, `scheme.log`) it writes:
 
@@ -378,7 +376,7 @@ MCM_SAPHIR_Tool branch `easy-start-gui` on 9 Nov 2026 with his notes. From a gen
 **In the app:** the Chemistry step has *Import GECKO-A output…* next to the base-mechanism chooser. Pick the
 generator folder, name its primary species (the MCM name the Injections step will use, suggested where
 known), optionally a generation cut, a C* limit and the wall scheme; the converter runs in the background
-and files the result under `mechanisms/base/GECKOA_<name>/` with a manifest (`kind: gecko`, the generator
+and files the result under `chemistry/mechanisms/base/GECKOA_<name>/` with a manifest (`kind: gecko`, the generator
 files' SHA-256, the options). From then on it is a base mechanism like the MCM download: choose
 "GECKO-A: …", and the page leaves two decisions — the **inorganic core** (GECKO-A's own, with its photolysis
 anchored on the measured jNO₂/jO¹D; or the MCM v3.3.1 core with the SAPHIR measured-J include, GECKO-A's
@@ -396,14 +394,14 @@ the ethanol generator output: with either core O₃, OH, HONO and the ethanol de
 run of the same experiment within a few per cent. The same import works from the command line:
 
 ```
-python gecko_import.py <generator folder> --id GECKOA_isoprene --voc C5H8 [--maxgen N] [--cstar-max X] [--wall krechmer|gecko]
-python gecko_to_easy.py <generator folder> --template <SAPHIR .easy> --name Isopren_GECKOA --mode pure --out <EASY root>
+python -m juice.importers.gecko_import <generator folder> --id GECKOA_isoprene --voc C5H8 [--maxgen N] [--cstar-max X] [--wall krechmer|gecko]
+python -m juice.importers.gecko_to_easy <generator folder> --template <SAPHIR .easy> --name Isopren_GECKOA --mode pure --out <EASY root>
 ```
 
 The second form is Franz's original converter: a complete scenario from a SAPHIR template EASY (`--mode
 pure` = GECKO-A core, `--mode mcmcore` = the template's MCM core with only the organic includes replaced).
 Every generated file carries the SHA of the generator files it came from. Imported mechanisms are
-git-ignored (`mechanisms/base/GECKOA_*/`): regenerate them from the generator output rather than share
+git-ignored (`chemistry/mechanisms/base/GECKOA_*/`): regenerate them from the generator output rather than share
 them. Verified 9 Nov 2026 on the isoprene mechanism (9 909 species, 44 204
 generator reactions → 31 340 EASY reactions): regenerated from the raw output, the includes are byte for
 byte those of Franz's run; JUICE parses them to the same 49 741 reactions; with the twostep profile the
@@ -428,7 +426,7 @@ itself is open source (GPL-3.0-or-later on Zenodo, AGPL-3.0 in its GitLab reposi
 JUICE has three validated ways to solve the same chemistry. Choose one in the Run step of the
 experiment or field window, in the study window (one profile per study), or with
 `--solver fast|precise|twostep` on `scenario_runner.py` and `run_benchmark.py`. The default is
-`profile` in `FR_GUI.toml [solver]`. Fast and precise are scipy's BDF with the exact sparse Jacobian;
+`profile` in `settings.toml [solver]`. Fast and precise are scipy's BDF with the exact sparse Jacobian;
 twostep is Verwer's TWOSTEP, which needs no Jacobian (see below).
 
 | | **fast** (default) | **precise** |
@@ -465,7 +463,7 @@ F. Rohrer's machine 79 000 species: 73 min against 15 h, 118 000 species / 469 0
 where BDF did not finish in 20 h; α-pinene GECKO-A, 284 234 species / 1.45 M reactions: six hours in
 49 min). It restarts at
 every ENZ row (implicit Euler), rtol 1e-3 with Verwer's max-norm error test, atol floor 100. Written
-by Franz Rohrer ([twostep_solver.py](twostep_solver.py), an independent Python implementation of the
+by Franz Rohrer ([twostep_solver.py](juice/core/twostep_solver.py), an independent Python implementation of the
 published algorithm, no code from boxmodel4gecko). Against FACSIMILE (9 Nov 2026, adaptive iteration):
 every species above 1 ppt in scenes 04–09 within 0.72 % except ISOPBO2 in scene_08 at 1.6 %, 1.1 % with the pair solve (fast:
 0.56 %), and in scenes 06, 07 and 09 *more* species within 0.1 % than fast; the median deviation from
@@ -483,47 +481,70 @@ is the mechanism BDF cannot run. Per-ENZ-row mode only;
 that P − L·y equals the BDF right-hand side, `JUICE_TS_ROWS=430,431` additionally integrates those rows
 with BDF at rtol 1e-8 and prints the largest deviations.
 
-Lamp chambers have no FACSIMILE reference; `python check_lamp_chamber.py` is their gate: a fixed
+Lamp chambers have no FACSIMILE reference; `python -m juice.tools.check_lamp_chamber` is their gate: a fixed
 experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
 is run headless and checked against physics that must hold (every J = 0 in the dark, dilution rate,
 extended photostationary state jNO₂[NO₂] = [NO](k[O₃]+k[HO₂]+k[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
 production only while lit, N₂O₅ at night) and against the pinned result in
-`MCM_tested_scenarios/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
+`validation/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
 
-See [architecture.md](architecture.md) for how JUICE is built, the solver conventions, the known
+See [architecture.md](docs/architecture.md) for how JUICE is built, the solver conventions, the known
 limitations, and the development history.
 
 ## Repository layout
 
 ```
-juice_start.py               start menu (the JUICE icon): opens one of the windows below
-juice_gui.py                 experiment window; step pages in experiment_wizard.py
-field_examples/              three synthetic field cases (site, plume, Lagrangian parcel) with commented tables; make_examples.py writes them
-field_window.py              field observations window: five steps like the chamber window (field_spec.py: the case and its table;
-                             field_scenario.py: case → ENZ + EASY → scenario, emissions / dilution / held species / deposition)
-results_viewer.py            results viewer; tabs in overview_tab.py, timeseries_tab.py
-study_window.py, study.py    studies; study_runner.py runs one from the command line
-facsimile_import.py          reads an experiment set up for FACSIMILE (.easy + ENZ) into the experiment description
-experiment_spec.py           experiment description → ENZ + EASY (easy_builder.py, easy_scene.py)
-scenario_prep.py             EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py)
-twostep_solver.py            Verwer's TWOSTEP integrator (profile 'twostep'): BDF2 with fixed-point sweeps, no Jacobian
-gecko_to_easy.py             GECKO-A generator output → EASY includes (gecko_mechanism.py reader, gecko_photolysis.py J fits,
-                             gecko_notation_to_smiles.py, make_soa_condensation.py partitioning include; gecko_data/solarlight.phot)
-gecko_import.py              a generator folder → base mechanism of the registry (kind 'gecko'); the Chemistry step's import dialog
-f0am_import.py               an F0AM mechanism → base mechanism (kind 'lumped': CRACMM2, CRACMM1, RACM2), an F0AM MCM variant → add-on (NOAA_BB)
-juice.py, examples/          JUICE from code (docs/juice_from_code.md); every prepared run also gets <name>_run.py
-scenario_runner.py           the solver
-chambers.py, chambers/       chamber profiles
-lamp_photolysis.py, photolysis/   photolysis frequencies under lamps (σ·φ table and its build script)
-mechanism_registry.py, mechanisms/   MCM v3.3.1 as downloaded (checksums), converted mechanisms, add-ons, catalog.json
-mcm_converter.py             MCM subset → EASY include files
-run_benchmark.py, compare_juice_facsimile.py, check_*.py, tests/   checks
-templates/, mixtures/        experiment templates, injection mixtures
-MCM_tested_scenarios/        reference scenes with their FACSIMILE results, include files,
-                             UV-lamp reference; JUICE archive/ holds your own runs (not in git)
-docs/                        chamber survey, lamp-photolysis literature and practice
-architecture.md              how JUICE is built
-FR_GUI.toml                  settings: the validated solver set; your own paths in FR_GUI.local.toml
+juice/                       the Python package
+  api.py                     JUICE from code: "import juice" (docs/juice_from_code.md); every prepared run also gets <name>_run.py
+  core/                      the run path
+    experiment_spec.py       experiment description → ENZ + EASY (easy_builder.py, easy_scene.py, enz_builder.py)
+    field_spec.py, field_scenario.py   a field case and its table → ENZ + EASY → scenario
+    chambers.py              chamber profiles (data in setups/chambers/)
+    measured_inputs.py, injection_calc.py   your own conditions file; µl / syringe / MFC → ppb, mixtures
+    scenario_prep.py         EASY + ENZ → scenario JSON (elog_generator.py, idl_parser.py, easy_parser.py, evaluator.py)
+    scenario_runner.py       the solver; twostep_solver.py is Verwer's TWOSTEP (profile 'twostep')
+    study.py, study_runner.py   studies; study_runner runs one from the command line
+  chemistry/
+    mechanism_registry.py    which chemistry, which version (data in chemistry/mechanisms/)
+    mcm_converter.py         MCM subset → EASY include files; mcm_species_db.py, species_db.py
+    lamp_photolysis.py       photolysis frequencies under lamps (σ·φ table in chemistry/photolysis/); oh_reactivity.py
+  importers/
+    f0am_import.py           an F0AM mechanism → base mechanism (CRACMM2, CRACMM1, RACM2) or add-on (NOAA_BB)
+    f0am_export.py           a JUICE scenario as an F0AM run
+    gecko_import.py          a GECKO-A generator folder → base mechanism (gecko_to_easy.py, gecko_mechanism.py,
+                             gecko_photolysis.py, gecko_notation_to_smiles.py, make_soa_condensation.py)
+    facsimile_import.py      an experiment set up for FACSIMILE (.easy + ENZ) → experiment description
+    saphir_wiki.py           a SAPHIR wiki action log → injections
+  gui/
+    juice_start.py           start menu (the JUICE icon): opens one of the windows below
+    juice_gui.py             experiment window; step pages in experiment_wizard.py, chamber_editor.py
+    field_window.py          field observations window
+    study_window.py          study window
+    results_viewer.py        results viewer; tabs in overview_tab.py, timeseries_tab.py; figure list in report_dock.py
+  tools/
+    run_benchmark.py, compare_juice_facsimile.py   JUICE vs FACSIMILE on the reference scenes
+    check_easy_roundtrip.py, check_lamp_chamber.py   checks of the written input files
+    make_shortcut.py         the desktop icon
+examples/
+  chamber/                   chamber experiments as scripts (SAPHIR, UV-lamp chamber)
+  field/                     a field case as a script (field_site.py) and three synthetic field cases
+                             (site, plume, Lagrangian parcel); make_examples.py writes them
+docs/                        tutorial, JUICE from code, the run path, architecture, chamber survey, lamp photolysis
+tests/                       the test suite (python -m pytest)
+chemistry/                   the chemistry JUICE can run
+  mechanisms/                MCM v3.3.1 as downloaded (checksums), CRACMM, RACM2, a GECKO-A example (ethanol),
+                             add-ons, catalog.json
+  photolysis/                cross sections x quantum yields for lamps (and their build script), the clear-sky
+                             J parametrisations of the MCM and of the F0AM-library mechanisms, GECKO-A's table
+setups/                      what an experiment starts from
+  chambers/                  one profile per chamber (<id>.chamber.json): volume, light, wall processes
+  templates/                 starting experiments per experiment type
+  mixtures/                  injection mixtures
+validation/                  the reference scenes with their FACSIMILE results and include files (IDL Input/),
+                             the UV-lamp reference (UV lamps/)
+runs/                        your own experiments and results (not in git; another place: settings.local.toml)
+settings.toml                the validated solver settings; your own paths in settings.local.toml
+JUICE.bat, pyproject.toml    the launcher; the package description for "pip install -e ."
 ```
 
 ## Citation and collaboration

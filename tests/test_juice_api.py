@@ -11,10 +11,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-import experiment_spec as es
-import field_spec as fs
+from juice.core import experiment_spec as es
+from juice.core import field_spec as fs
 import juice
-from check_lamp_chamber import lamp_spec
+from juice.tools.check_lamp_chamber import lamp_spec
 
 
 def _chamber_specs():
@@ -56,7 +56,7 @@ def test_script_writes_byte_identical_files(tmp_path, key):
 
 def test_scripts_explain_the_lamps_and_compare_a_field_case(tmp_path):
     lamp = juice.script_text(lamp_spec())
-    assert "chambers/generic_lamps.chamber.json" in lamp and "jNO2 at full power" in lamp
+    assert "setups/chambers/generic_lamps.chamber.json" in lamp and "jNO2 at full power" in lamp
     assert "chamber.json" not in juice.script_text(es.spec_scene_05())         # SAPHIR: the sun, nothing to explain
     field = juice.script_text(_field_specs()["site_day"])
     assert "juice.skill(case, cs_path)" in field and "# STEP 4 — MIXING AND DEPOSITION" in field
@@ -66,7 +66,7 @@ def test_scripts_explain_the_lamps_and_compare_a_field_case(tmp_path):
 def test_examples_build_what_they_describe():
     import importlib.util
     def build(name):
-        s = importlib.util.spec_from_file_location("_ex_" + name, os.path.join(juice.HERE, "examples", name + ".py"))
+        s = importlib.util.spec_from_file_location("_ex_" + name, os.path.join(juice.HERE, "examples", "field" if name.startswith("field") else "chamber", name + ".py"))
         m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
         return m.build()
     site = build("field_site")
@@ -105,7 +105,7 @@ def app():
 
 
 def test_chamber_window_prepare_writes_the_script(app, tmp_path):
-    import juice_gui
+    from juice.gui import juice_gui
     w = juice_gui.JuiceWindow("")
     w.load_spec(lamp_spec(), keep_name=True)
     w.page_start.out_edit.setText(str(tmp_path))
@@ -126,7 +126,7 @@ def test_chamber_window_prepare_writes_the_script(app, tmp_path):
 
 
 def test_field_window_prepare_writes_the_script(app, tmp_path):
-    import field_window as fw
+    from juice.gui import field_window as fw
     w = fw.FieldWindow()
     w.folder.setText(str(tmp_path))
     w.examples.setCurrentIndex(w.examples.findData("site_day"))
@@ -143,7 +143,7 @@ def test_field_window_prepare_writes_the_script(app, tmp_path):
 
 
 def test_catalogue_lists_every_planned_chemistry():
-    import mechanism_registry as mreg
+    from juice.chemistry import mechanism_registry as mreg
     cat = mreg.catalog()
     by_id = {e["id"]: e for e in cat["bases"]}
     assert by_id["MCM_v3.3.1"]["status"] == "available"
@@ -155,12 +155,12 @@ def test_catalogue_lists_every_planned_chemistry():
 
 
 def test_chemistry_step_shows_planned_entries_greyed_out(app):
-    import juice_gui
-    import mechanism_registry as mreg
+    from juice.gui import juice_gui
+    from juice.chemistry import mechanism_registry as mreg
     w = juice_gui.JuiceWindow("")
     combo = w.page_chem.base_combo if hasattr(w, "page_chem") else None
     if combo is None:
-        from experiment_wizard import ChemistryPage
+        from juice.gui.experiment_wizard import ChemistryPage
         combo = w.findChildren(ChemistryPage)[0].base_combo
     labels = [combo.itemText(i) for i in range(combo.count())]
     for e in mreg.planned("bases"):
@@ -171,8 +171,8 @@ def test_chemistry_step_shows_planned_entries_greyed_out(app):
 
 
 def test_species_search_lists_addon_species_and_ticks_the_addon(app):
-    import juice_gui
-    from experiment_wizard import ChemistryPage
+    from juice.gui import juice_gui
+    from juice.gui.experiment_wizard import ChemistryPage
     w = juice_gui.JuiceWindow("")
     page = w.findChildren(ChemistryPage)[0]
     page.search.setText("FURAN")
@@ -187,9 +187,9 @@ def test_species_search_lists_addon_species_and_ticks_the_addon(app):
 
 
 def test_species_lookup_is_per_base_mechanism():
-    import species_db as sdb
+    from juice.chemistry import species_db as sdb
     assert sdb.load_species_db().get("G2T70GE") is None                 # GECKO-A codes are not global names
-    import mechanism_registry as mreg
+    from juice.chemistry import mechanism_registry as mreg
     bases = mreg.load_bases()
     if {"GECKOA_toluene", "GECKOA_apinene"} <= set(bases):
         assert sdb.load_species_db(base_id="GECKOA_toluene").get("G2T70GE").formula == "C7H8NO10"

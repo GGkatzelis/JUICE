@@ -1,0 +1,8 @@
+; geckoa.physics.incl -- physics, not chemistry: what an MCM include set defines in its <stem>.saphir.incl and a
+;   GECKO-A mechanism has to bring itself. Air density from the pressure and temperature settings, O2 and N2 for
+;   the termolecular rates (GECKO-A TBODY/OXYGEN, MCM KMT fall-off). Written by gecko_import.py.
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[(%1)/((%2)*1.379E-19)]
+M =DENSITY(P,T)
+O2=CONST(0.20946*M)
+N2=CONST(0.78084*M)

@@ -9,9 +9,9 @@ import os
 import numpy as np
 import pytest
 
-import field_scenario as fsc
-import field_spec as fs
-from scenario_prep import load_paths, solver_from_toml
+from juice.core import field_scenario as fsc
+from juice.core import field_spec as fs
+from juice.core.scenario_prep import load_paths, solver_from_toml
 
 INCLUDE_DIR = load_paths("")["include_dir"]
 INORGANIC = {"inorganic_only": True, "base_mechanism": "MCM_v3.3.1"}
@@ -128,7 +128,7 @@ def test_written_files_and_parsed_scenario(tmp_path):
 def test_held_species_are_not_misread_in_a_chamber_scenario(tmp_path):
     """A SAPHIR scenario defines settings from INPUTs (SHONO, H2O, T) but holds no species."""
     import shutil
-    from scenario_prep import prepare_scenario
+    from juice.core.scenario_prep import prepare_scenario
     from conftest import IDL_INPUT
     src = os.path.join(IDL_INPUT, "scene_05")
     for ext in (".easy", ".enz"):
@@ -144,7 +144,7 @@ def test_held_species_are_not_misread_in_a_chamber_scenario(tmp_path):
 def test_night_matches_the_analytic_solutions(tmp_path, profile):
     """Dark inorganic chemistry: CO = B + E/k + (C0 - B - E/k) e^-kt, HNO3 decays with 1/tau + k, NO follows the
     held ramp with FACSIMILE's row convention (the value of a row is the one read at its start)."""
-    import run_benchmark as rb
+    from juice.tools import run_benchmark as rb
     spec = night_spec(night_table(tmp_path / "n.csv"))
     table = _checked(spec)
     path, _res = fsc.prepare(spec, table, str(tmp_path / profile), INCLUDE_DIR, "", solver_from_toml("", profile), export_kv_pd=False)
@@ -180,7 +180,7 @@ def test_without_jno2_the_clear_sky_frequencies_are_used(tmp_path):
 
 
 def test_observation_file_is_written_for_the_viewer(tmp_path):
-    import experiment_plots as ep
+    from juice.gui import experiment_plots as ep
     spec = night_spec(night_table(tmp_path / "n.csv"))
     table = _checked(spec)
     res = fsc.write_case(spec, table, str(tmp_path / "out"))

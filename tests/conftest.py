@@ -8,7 +8,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-IDL_INPUT = os.path.join(REPO, "MCM_tested_scenarios", "IDL Input")
+IDL_INPUT = os.path.join(REPO, "validation", "IDL Input")
 SCENES = sorted(d for d in os.listdir(IDL_INPUT)
                 if d.startswith("scene_") and os.path.isdir(os.path.join(IDL_INPUT, d)))
 

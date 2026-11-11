@@ -48,8 +48,8 @@ dist/
 # mcm_full result CSVs exceed GitHub's 50 MB recommended / 100 MB hard limit
 # (5842 species × 18 h × 2020 timesteps = 75 MB linear / 275 MB piecewise).
 # Regenerate via `python scenario_runner.py scenario_config.json`.
-MCM_tested_scenarios/IDL Input/mcm_full/simulation_results_linear.csv
-MCM_tested_scenarios/IDL Input/mcm_full/simulation_results_piecewise.csv
+validation/IDL Input/mcm_full/simulation_results_linear.csv
+validation/IDL Input/mcm_full/simulation_results_piecewise.csv
 
 # Large chemistry rendering artefacts (can be regenerated from .fac/.cs)
 **/chemspace_animation.mp4
@@ -72,14 +72,14 @@ MCM_database/MCM_3.3.1/Limonene/
 **/*.html
 **/*.hd
 **/*.elog
-# Allow canonical elogs committed under MCM_tested_scenarios for benchmark reproducibility
-!MCM_tested_scenarios/**/*.elog
+# Allow canonical elogs committed under validation/ for benchmark reproducibility
+!validation/**/*.elog
 
 # Machine-local TOML overrides (last_easy_dir, etc.) — never committed
 *.local.toml
 
 # JUICE simulation output directory when output_root is inside the repo (Georgios layout)
-MCM_tested_scenarios/JUICE archive/
+/runs/
 
 # Local logs / scratch
 *.log
@@ -90,34 +90,36 @@ lecture/
 
 # Test-scenario folders: keep inputs (.easy/.enz/.fac/.elog/.json/include files) and
 # the FACSIMILE .cs references; large derived outputs stay local (GitHub 100 MB limit)
-MCM_tested_scenarios/IDL Input/**/*.kv
-MCM_tested_scenarios/IDL Input/**/*.pd
-MCM_tested_scenarios/IDL Input/**/*.ps
-MCM_tested_scenarios/IDL Input/**/*.sav
-MCM_tested_scenarios/IDL Input/**/*.hd
-MCM_tested_scenarios/IDL Input/**/*.html
-MCM_tested_scenarios/IDL Input/**/*.out
-MCM_tested_scenarios/IDL Input/**/*.npz
-MCM_tested_scenarios/IDL Input/**/*.png
-MCM_tested_scenarios/IDL Input/**/*.svg
-MCM_tested_scenarios/IDL Input/**/*.log
-MCM_tested_scenarios/IDL Input/**/*_juice.*
-MCM_tested_scenarios/IDL Input/**/*_reactions.csv
-MCM_tested_scenarios/IDL Input/**/flowchart*
-MCM_tested_scenarios/IDL Input/**/* - Kopie.*
+validation/IDL Input/**/*.kv
+validation/IDL Input/**/*.pd
+validation/IDL Input/**/*.ps
+validation/IDL Input/**/*.sav
+validation/IDL Input/**/*.hd
+validation/IDL Input/**/*.html
+validation/IDL Input/**/*.out
+validation/IDL Input/**/*.npz
+validation/IDL Input/**/*.png
+validation/IDL Input/**/*.svg
+validation/IDL Input/**/*.log
+validation/IDL Input/**/*_juice.*
+validation/IDL Input/**/*_reactions.csv
+validation/IDL Input/**/flowchart*
+validation/IDL Input/**/* - Kopie.*
 
 # machine-specific shortcut (absolute paths); recreate with: python make_shortcut.py --here
 JUICE.lnk
 JUICE Results.lnk
 
 # per-day observation extracts next to results (regenerated from the archive; keep the reference scene folders clean in git)
-MCM_tested_scenarios/IDL Input/**/*.observations.csv
+validation/IDL Input/**/*.observations.csv
 
 # figure lists of the results viewer next to reference results (regenerated on demand)
-MCM_tested_scenarios/IDL Input/**/*.figures/
+validation/IDL Input/**/*.figures/
 
 # Paper in preparation: local only, never on GitHub (replaced by the published paper after release)
 paper/
 
 # GECKO-A mechanisms imported into the registry (large, regenerated from the generator output)
-mechanisms/base/GECKOA_*/
+chemistry/mechanisms/base/GECKOA_*/
+# ... except the small ethanol example, which is shipped
+!chemistry/mechanisms/base/GECKOA_ethanol/

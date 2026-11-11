@@ -1,0 +1,47 @@
+# Lagrangian air parcel: 4 h from Santa Monica Bay to Pasadena on the sea breeze
+# A SYNTHETIC JUICE field case: every number is invented (plausible for Los Angeles in August), nothing
+# was measured.  Written by examples/field/make_examples.py; copy it and replace the numbers with yours.
+#
+# One row per time, UTC.  Lines starting with # are ignored.  Comma, semicolon or tab separated; a
+# decimal comma is understood in semicolon tables.  Column names are matched ignoring case.
+#   time      'YYYY-MM-DD HH:MM' (UTC); also 'HH:MM' or hours of day together with the date of the
+#             case, unix seconds, or seconds since 2000-01-01
+#   lat, lon  position in degrees, per row (a trajectory) or constant (a site); may also be typed
+#             once in the case instead of a column
+#   T         air temperature, K (degC is recognised when below 150)
+#   p         pressure, hPa (Pa is recognised when above 5000)
+#   RH        relative humidity, %  (or H2O in vol-% instead)
+#   h         boundary-layer height, m
+#   jNO2      measured NO2 photolysis frequency, 1/s: the clear-sky frequencies of the mechanism are
+#             scaled by it; without the column the clear-sky values for time and position are used.
+#             jO1D, jHONO, jH2O2, jHCHO_r, jHCHO_m are read the same way.
+#   E_<species> [unit]   emission (units: ppb/s, molec/cm3/s, molec/cm2/s, mol/km2/s, mol/km2/h,
+#                        mol/s, molec/s; the last two need the footprint area of the case)
+#   B_<species> [unit]   background mixing ratio the air is diluted towards (ppb, ppt, ppm, molec/cm3)
+#   C_<species> [unit]   measured mixing ratio the species is held to (same units)
+#   Species names are those of the mechanism (MCM: C5H8 isoprene, TOLUENE, C2H5OH ethanol, ...).
+#
+# EMISSIONS are the inventory totals of the 8 x 8 km box around the parcel, mol/s (case: area_km2 = 64); they
+# are mixed into the boundary layer h and held from one row to the next.  The growth of h dilutes the parcel
+# with the background air of the B_ columns (case: dilution = 'pbl'); when h stops growing the rate of the
+# case (0.3 per hour) applies.  Deposition: O3 0.4 cm/s and HNO3 2 cm/s over the layer (case).
+# Initial values (case) are the air at the coast.  lat/lon per row give the sun's position along the way.
+#
+time,lat,lon,T,p,RH,h,jNO2,E_NO [mol/s],E_NO2 [mol/s],E_CO [mol/s],E_C5H8 [mol/s],E_TOLUENE [mol/s],E_C2H5OH [mol/s],B_O3 [ppb],B_CO [ppb],B_NO2 [ppb],B_HCHO [ppb]
+2021-08-15 17:00,33.9500,-118.4500,293.0,1010.0,70.0,400,6.987e-03,1.2,0.18,10.5,0.02,0.15,0.6,35,150,1,1
+2021-08-15 17:15,33.9619,-118.4300,293.6,1008.4,68.1,408,7.201e-03,1.746,0.2619,15.28,0.02625,0.2183,0.8731,35,150,1,1
+2021-08-15 17:30,33.9738,-118.4100,294.1,1006.9,66.2,430,7.390e-03,2.272,0.3407,19.88,0.0325,0.2839,1.136,35,150,1,1
+2021-08-15 17:45,33.9856,-118.3900,294.7,1005.3,64.4,467,7.556e-03,2.756,0.4133,24.11,0.03875,0.3444,1.378,35,150,1,1
+2021-08-15 18:00,33.9975,-118.3700,295.2,1003.8,62.5,517,7.701e-03,3.18,0.477,27.82,0.045,0.3975,1.59,35,150,1,1
+2021-08-15 18:15,34.0094,-118.3500,295.8,1002.2,60.6,578,7.827e-03,3.528,0.5292,30.87,0.05125,0.441,1.764,35,150,1,1
+2021-08-15 18:30,34.0213,-118.3300,296.4,1000.6,58.8,647,7.933e-03,3.787,0.568,33.14,0.0575,0.4734,1.893,35,150,1,1
+2021-08-15 18:45,34.0331,-118.3100,296.9,999.1,56.9,722,8.021e-03,3.946,0.5919,34.53,0.06375,0.4933,1.973,35,150,1,1
+2021-08-15 19:00,34.0450,-118.2900,297.5,997.5,55.0,800,8.092e-03,4,0.6,35,0.07,0.5,2,35,150,1,1
+2021-08-15 19:15,34.0569,-118.2700,298.1,995.9,53.1,878,8.146e-03,3.946,0.5919,34.53,0.07625,0.4933,1.973,35,150,1,1
+2021-08-15 19:30,34.0688,-118.2500,298.6,994.4,51.2,953,8.184e-03,3.787,0.568,33.14,0.0825,0.4734,1.893,35,150,1,1
+2021-08-15 19:45,34.0806,-118.2300,299.2,992.8,49.4,1022,8.205e-03,3.528,0.5292,30.87,0.08875,0.441,1.764,35,150,1,1
+2021-08-15 20:00,34.0925,-118.2100,299.8,991.2,47.5,1083,8.210e-03,3.18,0.477,27.82,0.095,0.3975,1.59,35,150,1,1
+2021-08-15 20:15,34.1044,-118.1900,300.3,989.7,45.6,1133,8.199e-03,2.756,0.4133,24.11,0.1013,0.3444,1.378,35,150,1,1
+2021-08-15 20:30,34.1163,-118.1700,300.9,988.1,43.8,1170,8.173e-03,2.272,0.3407,19.88,0.1075,0.2839,1.136,35,150,1,1
+2021-08-15 20:45,34.1281,-118.1500,301.4,986.6,41.9,1192,8.129e-03,1.746,0.2619,15.28,0.1138,0.2183,0.8731,35,150,1,1
+2021-08-15 21:00,34.1400,-118.1300,302.0,985.0,40.0,1200,8.070e-03,1.2,0.18,10.5,0.12,0.15,0.6,35,150,1,1

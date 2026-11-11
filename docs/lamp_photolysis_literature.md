@@ -1,6 +1,6 @@
 # Photolysis frequencies of lamp-lit simulation chambers — literature survey
 
-Compiled 2026-11-02 for JUICE chamber profiles (`chambers/<id>.chamber.json`).
+Compiled 2026-11-02 for JUICE chamber profiles (`setups/chambers/<id>.chamber.json`).
 Scope: published j(NO2) and ratios j(X)/j(NO2) for artificial light sources
 (blacklights, 254/185 nm Hg lamps, Xe/Ar arcs, LEDs), plus clear-sky reference values.
 

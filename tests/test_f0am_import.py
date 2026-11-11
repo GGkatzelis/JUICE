@@ -10,10 +10,10 @@ import re
 
 import pytest
 
-import experiment_spec as es
-import f0am_import as fi
+from juice.core import experiment_spec as es
+from juice.importers import f0am_import as fi
 import juice
-import mechanism_registry as mreg
+from juice.chemistry import mechanism_registry as mreg
 
 SYNTH = r"""
 SpeciesToAdd = {'A'; 'B'; 'C'; 'HO'; 'D'};

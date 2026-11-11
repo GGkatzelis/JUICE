@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-import scenario_prep as sp
+from juice.core import scenario_prep as sp
 
-TOML = os.path.join(sp.HERE, "FR_GUI.toml")
+TOML = os.path.join(sp.HERE, "settings.toml")
 
 
 def test_repository_toml_default_is_fast():
@@ -19,7 +19,7 @@ def test_precise_profile():
 
 
 def test_toml_numbers_match_the_reference_profiles():
-    """FR_GUI.toml [solver.profiles.*] must not drift from the benchmarked SOLVER_PROFILES."""
+    """settings.toml [solver.profiles.*] must not drift from the benchmarked SOLVER_PROFILES."""
     for name, p in sp.solver_profiles(TOML).items():
         ref = sp.SOLVER_PROFILES[name]
         assert (p["rtol"], p["perstep_warm"]) == (ref["rtol"], ref["perstep_warm"]), name

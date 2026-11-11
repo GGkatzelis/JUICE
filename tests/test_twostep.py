@@ -5,10 +5,10 @@ import os
 import numpy as np
 import pytest
 
-import scenario_prep as sp
-import twostep_solver as ts
+from juice.core import scenario_prep as sp
+from juice.core import twostep_solver as ts
 
-TOML = os.path.join(sp.HERE, "FR_GUI.toml")
+TOML = os.path.join(sp.HERE, "settings.toml")
 
 
 def _reference(sysm, y0, rows, env):

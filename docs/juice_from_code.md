@@ -10,17 +10,24 @@ There are two ways in:
   files. That file is the experiment written out as code. Run it, change it, copy it.
 - **Start from scratch.** Write a script with `import juice`, as in the examples below.
 
-All of it is in one module, [`juice.py`](../juice.py). The examples are in [`examples/`](../examples).
+All of it is in one module, [`juice/api.py`](../juice/api.py), which `import juice` gives you. The examples are in [`examples/`](../examples).
 [`run_path.md`](run_path.md) follows one run through the files it calls, and shows where you can step in.
 
 ## 1. Setup
 
-JUICE's own Python environment (the one the windows use) has everything. A script only needs to find the
-JUICE folder:
+JUICE's own Python environment (the one the windows use) has everything. Install JUICE into it once, in
+place, from the JUICE folder:
+
+```
+pip install -e .
+```
+
+After that `import juice` works in any script, in any folder. Without the install, a script has to say
+where the JUICE folder is:
 
 ```python
 import sys
-sys.path.insert(0, r"C:\path\to\JUICE")   # the folder that holds juice.py
+sys.path.insert(0, r"C:\path\to\JUICE")   # the folder that holds the 'juice' package
 import juice
 ```
 
@@ -29,7 +36,7 @@ Run scripts with that environment's Python, e.g. `<venv>\Scripts\python.exe my_e
 ## 2. A first experiment
 
 Isoprene in SAPHIR under the open roof, with invented conditions
-([`examples/saphir_isoprene.py`](../examples/saphir_isoprene.py)):
+([`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py)):
 
 ```python
 exp = juice.new_experiment("saphir_isoprene", chamber="SAPHIR")
@@ -110,7 +117,7 @@ For a field case, `juice.skill(case, cs_path)` compares the model with the `O_` 
 (bias, normalised mean bias, RMSE, R² per species) and writes `<name>_skill.csv`. `juice.run` writes it
 for every field case, as the field window's Run step does (`run.skill_path`).
 
-The results open in the results viewer like any other run: `python results_viewer.py <name>.cs`.
+The results open in the results viewer like any other run: `python -m juice.gui.results_viewer <name>.cs`.
 
 ## 5. What can be chosen
 
@@ -186,7 +193,7 @@ def main():
   settings, so the file documents the experiment completely.
 - Running the file again in its own folder overwrites that run. Change `OUT` to keep both.
 
-[`examples/saphir_isoprene.py`](../examples/saphir_isoprene.py) is the same structure written by hand,
+[`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py) is the same structure written by hand,
 with longer notes: where a conditions file goes and how to hold NO2 or O3 to it, injections from a liquid
 volume or a flow, the solver choice, and an off-road section (loops, your own chemistry, editing the input
 files, another chamber).
@@ -204,7 +211,7 @@ juice.run(exp, r"D:\runs\my_day_no_hono")
 
 Code makes it easy to do things the window does one at a time.
 
-**Loops.** For example the same day at three NO levels (`python examples/saphir_isoprene.py --scan`):
+**Loops.** For example the same day at three NO levels (`python examples/chamber/saphir_isoprene.py --scan`):
 
 ```python
 for no in (1, 5, 20):
@@ -214,7 +221,7 @@ for no in (1, 5, 20):
 ```
 
 For large sweeps with parallel workers and summary tables, use the study runner
-(`python study_runner.py <name>.study.json`).
+(`python -m juice.core.study_runner <name>.study.json`).
 
 **Changing a rate constant.** Give the reaction exactly as the mechanism writes it, the new expression, and a
 comment. `"0"` removes the reaction:
@@ -239,7 +246,7 @@ input table (`c.source = "file"` or `"archive"`).
 
 **A lamp chamber.** Use `chamber="generic_lamps"` or a chamber profile of your own (made with the chamber
 editor). `roof_open` then means lights on. The lamps (jNO2 at full power, spectrum) are set in the profile,
-not in the experiment. See [`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py): the same steps as
+not in the experiment. See [`examples/chamber/uv_lamp_chamber.py`](../examples/chamber/uv_lamp_chamber.py): the same steps as
 the base case, with the light, the OH source, the walls and a profile of your own written out.
 
 **Field cases.** A site, a plume or a Lagrangian air parcel:
@@ -252,7 +259,7 @@ juice.run(case, r"D:\runs\my_site")
 ```
 
 The input table is described in the main tutorial (Sect. 3.2).
-[`examples/field_site.py`](../examples/field_site.py) writes the shipped `site_day` case out in the field
+[`examples/field/field_site.py`](../examples/field/field_site.py) writes the shipped `site_day` case out in the field
 window's steps, with the table's columns, the dilution choices and the skill table. The field window, too, writes `<name>_run.py`
 next to every case it prepares, and `juice.load("<case>.field.json")` reads a saved or shipped case
 (`field_spec.list_examples()` lists the three examples).

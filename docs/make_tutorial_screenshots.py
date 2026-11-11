@@ -27,11 +27,11 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 app = QApplication(sys.argv)
 try:
-    from juice_theme import apply_theme; apply_theme(app)
+    from juice.gui.juice_theme import apply_theme; apply_theme(app)
 except Exception:
     pass
 W, H = 1400, 900
-TOML = os.path.join(ROOT, "FR_GUI.toml")
+TOML = os.path.join(ROOT, "settings.toml")
 made = []
 
 
@@ -92,7 +92,7 @@ def grab(w, name, size=(W, H)):
         e.blockSignals(True); e.setText(t); e.blockSignals(False); print(f"{name:42s} {'ok' if ok else 'FAILED'} {w.width()}x{w.height()}")
 
 
-import experiment_spec as es, scenario_prep as sp
+from juice.core import experiment_spec as es; from juice.core import scenario_prep as sp
 
 
 def tutorial_isoprene():
@@ -111,12 +111,12 @@ def tutorial_isoprene():
 
 
 # ── 0. the two start windows ──
-import juice_start
+from juice.gui import juice_start
 grab(juice_start.FirstChoice(TOML), "00_first_choice.png", (900, 520))
 grab(juice_start.StartWindow(TOML), "01_start_menu.png", (1000, 640))
 
 # ── 1. the experiment window, every step, on the tutorial experiment ──
-import juice_gui
+from juice.gui import juice_gui
 spec = tutorial_isoprene()
 w = juice_gui.JuiceWindow(TOML); w.load_spec(spec, keep_name=True); settle()
 set_field(w, "e.g. isoprene", "tutorial_isoprene"); show_template(w, "VOC photo-oxidation at low NOx")
@@ -136,14 +136,14 @@ if not (args.no_run and os.path.isfile(cs)):
     js = sp.prepare_scenario(res, sp.load_paths(TOML)["include_dir"], export_kv_pd=True, toml_path=TOML,
                              solver=sp.solver_from_toml(TOML, "fast"))
     print("running", js)
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "scenario_runner.py"), js], cwd=ROOT,
+    r = subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js], cwd=ROOT,
                        capture_output=True, text=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     if r.returncode:
         print(r.stdout[-2000:], r.stderr[-2000:]); sys.exit("the tutorial run failed")
     cs = next(iter(glob.glob(os.path.join(exp_dir, "*.cs"))), cs)
 
 # ── 2. the results viewer, one picture per tab ──
-import results_viewer as rv
+from juice.gui import results_viewer as rv
 v = rv.ResultsViewer(rv.load_column_file(cs), csv_path=cs, toml_path=TOML)
 from PyQt6.QtWidgets import QCheckBox
 
@@ -181,8 +181,8 @@ w.steps.setCurrentRow(3); grab(w, "31_uv_lamps_chamber.png")
 w.close()
 
 # ── 4. the field window on a copy of the site_day example, every step ──
-import field_window as fw, field_spec as fs
-case = fs.copy_case(os.path.join(ROOT, "field_examples", "site_day", "site_day.field.json"), args.work)
+from juice.gui import field_window as fw; from juice.core import field_spec as fs
+case = fs.copy_case(os.path.join(ROOT, "examples", "field", "site_day", "site_day.field.json"), args.work)
 f = fw.FieldWindow(case, TOML); settle(); show_template(f, "site_day")
 for row, name in enumerate(["40_field_step1_case.png", "41_field_step2_chemistry.png",
                             "42_field_step3_emissions_constraints.png", "43_field_step4_mixing.png",
@@ -195,7 +195,7 @@ fr_dir = os.path.join(args.work, "site_day_run")
 fcs = os.path.join(fr_dir, "site_day.cs")
 if not (args.no_run and os.path.isfile(fcs)):
     shutil.rmtree(fr_dir, ignore_errors=True)
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "field_scenario.py"), case, "--out", fr_dir, "--run"],
+    r = subprocess.run([sys.executable, "-m", "juice.core.field_scenario", case, "--out", fr_dir, "--run"],
                        cwd=ROOT, capture_output=True, text=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     print("field run rc", r.returncode, "".join(l + "\n" for l in r.stdout.splitlines() if "HCHO" in l or "skill" in l))
     if r.returncode:
@@ -216,14 +216,14 @@ v.close()
 # ── 4c. the two other kinds of run: a plume and a Lagrangian air parcel ──
 for key, shots in (("plume_ageing", [(0, "46_plume_case.png"), (3, "47_plume_mixing.png")]),
                    ("la_parcel", [(0, "48_parcel_case.png"), (2, "49_parcel_emissions.png")])):
-    c2 = fs.copy_case(os.path.join(ROOT, "field_examples", key, f"{key}.field.json"), args.work)
+    c2 = fs.copy_case(os.path.join(ROOT, "examples", "field", key, f"{key}.field.json"), args.work)
     f = fw.FieldWindow(c2, TOML); settle(); show_template(f, key)
     for row, name in shots:
         f.steps.setCurrentRow(row); settle(); grab(f, name)
     f.close()
 
 # ── 5. the study of Sect. 4: initial NO x isoprene amount on the tutorial experiment, run once ──
-import study as S, study_window as sw
+from juice.core import study as S; from juice.gui import study_window as sw
 st_dir = os.path.join(args.work, "tutorial_isopleth")
 st_path = os.path.join(st_dir, "tutorial_isopleth.study.json")
 if not (args.no_run and os.path.isfile(st_path)):
@@ -237,7 +237,7 @@ if not (args.no_run and os.path.isfile(st_path)):
     s0 = sw.StudyWindow(TOML, study_path=st_path); settle(20)
     s0._save(st_path); s0.close()        # saved as the window plans it, so its run names are the window's
     print("running the study (36 runs)")
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "study_runner.py"), st_path, "--workers", "4", "--yes"],
+    r = subprocess.run([sys.executable, "-m", "juice.core.study_runner", st_path, "--workers", "4", "--yes"],
                        cwd=ROOT, capture_output=True, text=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     print("study runner rc", r.returncode, r.stdout[-400:])
 s = sw.StudyWindow(TOML, study_path=st_path); settle(20)

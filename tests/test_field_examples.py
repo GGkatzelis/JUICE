@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-import field_scenario as fsc
-import field_spec as fs
-from scenario_prep import load_paths
+from juice.core import field_scenario as fsc
+from juice.core import field_spec as fs
+from juice.core.scenario_prep import load_paths
 
 EXAMPLES = fs.list_examples()
 

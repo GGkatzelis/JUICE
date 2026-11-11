@@ -13,15 +13,15 @@ from conftest import SCENES
 
 def test_mcm_download_unmodified():
     """Every base mechanism file matches the sha256 recorded when it was downloaded."""
-    import mechanism_registry as mreg
+    from juice.chemistry import mechanism_registry as mreg
     bases = mreg.load_bases()
-    assert bases, "no base mechanism installed under mechanisms/base"
+    assert bases, "no base mechanism installed under chemistry/mechanisms/base"
     problems = [p for b in bases.values() for p in b.verify()]
     assert not problems, "\n".join(problems)
 
 
 def test_addons_declare_a_compatible_base():
-    import mechanism_registry as mreg
+    from juice.chemistry import mechanism_registry as mreg
     bases = mreg.load_bases()
     for a in mreg.load_addons().values():
         assert any(a.compatible(b) for b in bases), f"add-on {a.id} fits no installed base"
@@ -31,7 +31,7 @@ def test_addons_declare_a_compatible_base():
 @pytest.mark.parametrize("scene", SCENES)
 def test_easy_roundtrip(scene, tmp_path):
     """parse → render is byte-identical; extract → write is statement-equivalent; same scenario JSON."""
-    import check_easy_roundtrip as rt
+    from juice.tools import check_easy_roundtrip as rt
     msg = rt.check(scene, str(tmp_path))
     assert msg.startswith("OK"), msg
 
@@ -39,7 +39,7 @@ def test_easy_roundtrip(scene, tmp_path):
 @pytest.mark.parametrize("scene", SCENES)
 def test_easy_builder_form(scene):
     """Loading a scene into the EASY builder form and writing it back is statement-equivalent."""
-    import easy_builder as eb
+    from juice.core import easy_builder as eb
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = eb._selftest([scene])
@@ -48,7 +48,7 @@ def test_easy_builder_form(scene):
 
 def test_experiment_spec_goldens():
     """scene_05 and scene_09 rebuilt from experiment descriptions give the IDL-written EASY and ENZ."""
-    import experiment_spec as es
+    from juice.core import experiment_spec as es
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = es._selftest()
@@ -56,11 +56,11 @@ def test_experiment_spec_goldens():
 
 
 def test_chamber_profiles_load():
-    """Every chambers/*.chamber.json parses into a profile with a positive volume."""
+    """Every setups/chambers/*.chamber.json parses into a profile with a positive volume."""
     import glob
     import os
-    import chambers
-    files = glob.glob(os.path.join("chambers", "*.chamber.json"))
+    from juice.core import chambers
+    files = glob.glob(os.path.join("setups", "chambers", "*.chamber.json"))
     loaded = chambers.load_dir()
     assert files and len(loaded) >= len(files), f"{len(files)} files, {len(loaded)} profiles loaded"
     for cid, p in loaded.items():
@@ -68,7 +68,7 @@ def test_chamber_profiles_load():
 
 
 def test_chambers_selftest():
-    import chambers
+    from juice.core import chambers
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = chambers._selftest()
@@ -78,7 +78,7 @@ def test_chambers_selftest():
 def test_easy_version_from_cs_header(tmp_path):
     """A FACSIMILE reference that comes only as a .cs result still tells which EASY wrote it;
     a .fac next to it wins, and JUICE's own .cs header names no EASY version."""
-    import elog_generator as eg
+    from juice.core import elog_generator as eg
     (tmp_path / "ref.cs").write_text(" * Facsimile-Output / EASY Ver. 5.96b 2010-5-19\n header created at ...\n",
                                      encoding="latin-1")
     assert eg.easy_version(str(tmp_path), stem="ref") == "5.96b"

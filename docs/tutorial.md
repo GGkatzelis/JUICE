@@ -25,8 +25,8 @@ cd JUICE
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python experiment_spec.py --selftest     # must end with 2/2 passed
-python make_shortcut.py                  # the JUICE icon on the Desktop (Windows)
+python -m juice.core.experiment_spec --selftest     # must end with 2/2 passed
+python -m juice.tools.make_shortcut                  # the JUICE icon on the Desktop (Windows)
 ```
 
 Python 3.11 or newer; Windows is the tested platform, macOS and Linux run the same code with
@@ -56,7 +56,7 @@ is needed.
 
 ### Step 1 — Experiment
 
-1. *New experiment* from the menu, or `python juice_gui.py`.
+1. *New experiment* from the menu, or `python -m juice.gui.juice_gui`.
 2. Under *Template (optional)* choose **VOC photo-oxidation at low NOx**. The template fills the chamber
    effects and three injection slots (H2O, VOC, O3) and leaves the rest to you.
 3. Name: `tutorial_isoprene`. Folder: anywhere you like — the experiment and everything it generates go
@@ -197,7 +197,7 @@ photooxidation under blacklights**:
 
 ![Chamber step of the lamp chamber: the SAPHIR wall sources off, 1 ppm H2O2 as initial value](img/tutorial/31_uv_lamps_chamber.png)
 
-`python check_lamp_chamber.py` runs a fixed experiment of this kind headless and checks it against
+`python -m juice.tools.check_lamp_chamber` runs a fixed experiment of this kind headless and checks it against
 physics that must hold (every J zero in the dark, the dilution rate, the H2O2 loss) — the gate for the
 lamp code.
 
@@ -211,7 +211,7 @@ measurements, diluted towards background air, or fed by emissions. The window ha
 as the chamber window. Everything the field adds is written as ordinary EASY statements, so a field
 case runs in FACSIMILE as well (Sect. 3.7).
 
-JUICE ships three synthetic examples in `field_examples/`, one per kind of run. Their numbers are
+JUICE ships three synthetic examples in `examples/field/`, one per kind of run. Their numbers are
 invented (plausible for Los Angeles in August); nothing in them was measured. This section walks
 through all three.
 
@@ -258,7 +258,7 @@ product you want to evaluate must not be held.
 
 ### 3.3 Walkthrough 1: a constrained site (`site_day`)
 
-1. JUICE icon → *Field observations* → *New field case*, or `python field_window.py`.
+1. JUICE icon → *Field observations* → *New field case*, or `python -m juice.gui.field_window`.
 2. Step 1, *Field case*: choose `site_day` under *Examples* and click **Load an example**. The case and
    its table are copied into your project folder; the copy is yours to change. The table has 49 rows
    over one day with `C_NO`, `C_NO2`, `C_O3`, `C_CO`, `C_C5H8` and `C_TOLUENE` held, and `O_HCHO` observed
@@ -359,8 +359,8 @@ A 4-h sea-breeze trajectory from Santa Monica Bay to Pasadena, the kind of run u
 
 *Many tables as a study…* on the Run step runs one case over a folder of input tables (one per day or
 per trajectory) and, optionally, over NOx and VOC emission factors, in the study window (Sect. 4).
-`python study_runner.py <name>.study.json` runs it from the command line. Without the window:
-`python field_scenario.py <case>.field.json --run` prepares and runs one case.
+`python -m juice.core.study_runner <name>.study.json` runs it from the command line. Without the window:
+`python -m juice.core.field_scenario <case>.field.json --run` prepares and runs one case.
 
 ### 3.7 What a field case writes
 
@@ -382,7 +382,7 @@ The ENZ has one row per output step; pressure may vary along the path (`P = INPU
 
 A study runs saved experiments with one consistent change, or sweeps one or two axes.
 
-1. Menu → *New study*, or File → *Study…* in the experiment window, or `python study_window.py`.
+1. Menu → *New study*, or File → *Study…* in the experiment window, or `python -m juice.gui.study_window`.
 2. Base experiment: `tutorial_isoprene.experiment.json`.
 3. Axes. Axis 1: *+ initial value…* → NO, values `log 0.1 20 6` (six log-spaced values from 0.1 to
    20 ppb). Axis 2: in the table, set *Vary on* of the row *All VOC injections together* to *Axis 2*,
@@ -404,7 +404,7 @@ A study runs saved experiments with one consistent change, or sweeps one or two 
 
 ![The isopleth of the ozone production](img/tutorial/52_study_plot.png)
 
-Headless: `python study_runner.py <name>.study.json --workers 4 --yes`.
+Headless: `python -m juice.core.study_runner <name>.study.json --workers 4 --yes`.
 
 ---
 
@@ -424,7 +424,7 @@ Measurements for comparison in the viewer are a second file, `<date>.observation
 
 ## 6. Experiments set up for FACSIMILE
 
-*Import a FACSIMILE experiment* (menu, Step 1, or `python juice_gui.py path\to\<name>.easy`) reads an
+*Import a FACSIMILE experiment* (menu, Step 1, or `python -m juice.gui.juice_gui path\to\<name>.easy`) reads an
 EASY file and the ENZ it names back into an experiment description, regenerates both and compares them
 statement by statement with the originals; what did not round-trip is listed under *Needs attention*.
 When the FACSIMILE result (`<name>.cs`) lies next to the inputs, the Run step offers **Compare with
@@ -435,7 +435,7 @@ FACSIMILE** after the run.
 ## 7. Large mechanisms: GECKO-A and the twostep profile
 
 A GECKO-A generator output folder (`dictionary.out`, `reactionswithcom.dum`, `pvap.nan.dat`, …) is
-imported on the Chemistry step with *Import GECKO-A output…* (or `python gecko_import.py <folder>
+imported on the Chemistry step with *Import GECKO-A output…* (or `python -m juice.importers.gecko_import <folder>
 --id GECKOA_toluene --voc TOLUENE`). It becomes a base mechanism like the MCM: choose it, decide on the
 inorganic core (GECKO-A's own, or the MCM core for a like-for-like comparison) and whether the
 gas–particle–wall partitioning include is loaded, and set up the experiment as usual. Imported
@@ -461,6 +461,6 @@ pick the species you need in the viewer rather than plotting all of them.
 | a species at a few molecules cm⁻³ looks noisy | below the absolute tolerance floor (100 molecules cm⁻³ in fast/precise, 30× that in twostep); not chemistry |
 | results differ from an earlier run by ~0.5 % | different solver profiles; compare runs within one profile |
 
-The gates the developers run after any change are `python experiment_spec.py --selftest`,
-`python check_easy_roundtrip.py`, `python check_lamp_chamber.py` and `python run_benchmark.py` (JUICE
+The gates the developers run after any change are `python -m juice.core.experiment_spec --selftest`,
+`python -m juice.tools.check_easy_roundtrip`, `python -m juice.tools.check_lamp_chamber` and `python -m juice.tools.run_benchmark` (JUICE
 against FACSIMILE on nine reference experiments); `python -m pytest` runs the unit tests.

@@ -5,13 +5,13 @@ import os
 import numpy as np
 import pytest
 
-import facsimile_import as fi
-import measured_inputs as mi
-from experiment_spec import enz_columns, render_easy, spec_from_dict, spec_to_dict
-from easy_scene import statements_equivalent
+from juice.importers import facsimile_import as fi
+from juice.core import measured_inputs as mi
+from juice.core.experiment_spec import enz_columns, render_easy, spec_from_dict, spec_to_dict
+from juice.core.easy_scene import statements_equivalent
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IDL = os.path.join(HERE, "MCM_tested_scenarios", "IDL Input")
+IDL = os.path.join(HERE, "validation", "IDL Input")
 
 
 def _scene(name):

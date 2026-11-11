@@ -1,5 +1,5 @@
 """Plots say 'injection' instead of the Q column names; the files keep the Q names."""
-import experiment_spec as es
+from juice.core import experiment_spec as es
 
 
 def test_label_without_spec():

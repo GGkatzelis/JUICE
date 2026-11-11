@@ -1,0 +1,29 @@
+# JUICE is used from its folder: the data (setups/chambers/, chemistry/mechanisms/, setups/mixtures/, chemistry/photolysis/, setups/templates/) sits next to
+# the 'juice' package, not inside it. Install it in place, once per Python environment:
+#
+#     pip install -e .
+#
+# After that "import juice" and "python -m juice...." work from any folder.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "juice"
+description = "JUICE: chamber and field box modelling with the MCM and other mechanisms, validated against FACSIMILE"
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version", "dependencies"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]          # the test suite: pip install -e .[dev], then python -m pytest
+
+[project.scripts]
+juice = "juice.gui.juice_start:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "juice.version.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["juice*"]

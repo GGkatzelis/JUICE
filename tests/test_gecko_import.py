@@ -6,10 +6,10 @@ import re
 
 import pytest
 
-import gecko_mechanism as gm
-import gecko_photolysis as gp
-import gecko_to_easy as g
-from evaluator import fortran_d_to_e
+from juice.importers import gecko_mechanism as gm
+from juice.importers import gecko_photolysis as gp
+from juice.importers import gecko_to_easy as g
+from juice.core.evaluator import fortran_d_to_e
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ETHANOL = os.path.join(HERE, "fixtures", "gecko_ethanol")
@@ -70,7 +70,7 @@ def test_photolysis_labels_are_fitted():
 
 def test_generated_chemistry_parses_in_juice(mech, tmp_path):
     """A minimal EASY that includes the generated files goes through elog_generator with every reaction kept."""
-    from elog_generator import generate_both
+    from juice.core.elog_generator import generate_both
     _conv, n_an, n_org, _soa, _n = _write_all(mech, str(tmp_path))
     easy = tmp_path / "Ethanol_test.easy"
     easy.write_text("\n".join([
@@ -88,7 +88,7 @@ def test_generated_chemistry_parses_in_juice(mech, tmp_path):
     assert not any("GOO2000" in l for l in rxn_lines) and any("ETHGLY" in l for l in rxn_lines)   # codes -> chosen names
     # the ALIAS lines take effect when the runner's parser reads the elog: GECKO-A's HO, HNO2, O3P, SULF are the
     # MCM's OH, HONO, O, SA - one species each, never two
-    from easy_parser import EasyParser
+    from juice.core.easy_parser import EasyParser
     m = EasyParser(base_path=str(tmp_path)).parse(canon)
     names = {getattr(s, "name", s) for s in m.species}
     names = {n.upper() if isinstance(n, str) else str(n).upper() for n in names}

@@ -1,0 +1,14 @@
+; geckoa.aliases.incl -- species name aliases GECKO-A <-> EASY/MCM (gecko_to_easy.py)
+; ALIAS[canonical] = alt1 alt2 ...  The EASY/JUICE parsers replace every alternative by the canonical name in
+;   reactions and k[] keys (NOT inside CONST(...) expressions: settings must use the canonical name). The canonical
+;   name is what the output files carry. Extend this file for further species (one line per canonical name).
+; First block = the standard SAPHIR aliases (general_settings.incl / <stem>.fac.saphir.incl), then GECKO-A specific.
+ALIAS[HV]     = hv
+ALIAS[OH]     = HO
+ALIAS[HCHO]   = H2CO CH2O
+ALIAS[O]      = O3P
+ALIAS[CH3OOH] = CH3O2H MOOH
+ALIAS[HONO]   = HNO2
+ALIAS[HNO3]   = HONO2
+ALIAS[HNO4]   = HO2NO2
+ALIAS[SA]     = SULF H2SO4

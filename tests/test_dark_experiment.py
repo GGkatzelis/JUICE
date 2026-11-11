@@ -1,5 +1,5 @@
 """A roof that never opens (lights never on) is a dark experiment: a note, not a problem."""
-import experiment_spec as es
+from juice.core import experiment_spec as es
 
 
 def _spec(chamber: str, roof_open):

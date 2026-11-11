@@ -1,5 +1,5 @@
 """Fortran D exponents become E only inside numbers; GECKO-A species names such as G2D5004 stay as they are."""
-from evaluator import fortran_d_to_e
+from juice.core.evaluator import fortran_d_to_e
 
 
 def test_numbers_are_converted():

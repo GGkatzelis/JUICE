@@ -1,2 +1,0 @@
-# For running the test suite (python -m pytest) — not needed to use JUICE.
-pytest>=8

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-import elog_generator as eg
+from juice.core import elog_generator as eg
 
 
 def test_easy_version_is_read_from_the_fac_header(tmp_path):
@@ -51,8 +51,8 @@ def test_case_variants_are_reported(tmp_path):
 def test_parser_versions_a_redefined_function(tmp_path):
     """With both definitions present, A uses the first body and B the second — in the inline
     expansion and in the evaluator's entries."""
-    from easy_parser import EasyParser
-    from evaluator import precompile_s_vec, topological_sort, update_s_vec
+    from juice.core.easy_parser import EasyParser
+    from juice.core.evaluator import precompile_s_vec, topological_sort, update_s_vec
     p = tmp_path / "t.canonical.elog"; p.write_text(RAW, encoding="utf-8")
     parser = EasyParser(); mech = parser.parse(str(p))
     assert "*2" in mech.parameters["A"].replace(" ", "") and "*3" in mech.parameters["B"].replace(" ", "")

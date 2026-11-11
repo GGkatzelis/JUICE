@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 
-import f0am_export as fx
+from juice.importers import f0am_export as fx
 
 
 def _toy(n=5, dt=60.0):

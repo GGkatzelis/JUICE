@@ -72,7 +72,7 @@ jNO2 in 1/s. "nf" = not found. T control: Y = actively controlled, N = ambient.
 - Data: EUROCHAMP Data Centre (format see section 4).
 - SAPHIR-PLUS: 9.32 m3 flow-through plant chamber below SAPHIR, Teflon-type surfaces, 15 LED panels (Hohaus 2016). SAPHIR-STAR: no public record found.
 - Refs: Rohrer et al. 2005, ACP 5, 2189; Bohn et al. 2005, ACP 5, 493; Hohaus et al. 2016, AMT 9, 1247.
-- URLs: https://www.eurochamp.org/simulation-chambers/SAPHIR ; https://acp.copernicus.org/articles/5/2189/2005/ ; https://amt.copernicus.org/articles/9/1247/2016/
+- URLs: https://www.eurochamp.org/simulation-setups/chambers/SAPHIR ; https://acp.copernicus.org/articles/5/2189/2005/ ; https://amt.copernicus.org/articles/9/1247/2016/
 
 ### AIDA (KIT, DE)
 - 84.5 m3 aluminium vessel (+3.7 m3 prep chamber), T +50 to -90 C, 0-100 % RH, p controlled. Not transparent to sun; new

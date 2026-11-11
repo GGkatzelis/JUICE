@@ -1,0 +1,27 @@
+; GECKOA_ethanol.geckoa.names.incl -- GECKO-A dictionary code -> name used in the organic include (gecko_to_easy.py)
+; ALIAS[name] = G<code>: the GECKO-A code (G-prefixed, as a non-MCM species would be called) is accepted as a synonym
+;   of the MCM name chosen by the converter. Override or extend here; the comment carries the GECKO-A notation.
+; Inorganic core names are in geckoa.aliases.incl; species without an MCM name are called G<code> already.
+ALIAS[HOCH2CH2O   ] = G1O2000   ; CH2(OH)CH2(O.)
+ALIAS[ETHGLY      ] = GOO2000   ; CH2(OH)CH2(OH)
+ALIAS[HOCH2CH2O2  ] = G2O2000   ; CH2(OH)CH2(OO.)
+ALIAS[HYETHO2H    ] = GHO2000   ; CH2(OH)CH2(OOH)
+ALIAS[HOCH2CHO    ] = GDO2000   ; CH2(OH)CHO
+ALIAS[HOCH2CO2H   ] = GAO2000   ; CH2(OH)CO(OH)
+ALIAS[HOCH2CO3    ] = G3K2001   ; CH2(OH)CO(OO.)
+ALIAS[HOCH2CO3H   ] = GGO2000   ; CH2(OH)CO(OOH)
+ALIAS[PHAN        ] = GPO2000   ; CH2(OH)CO(OONO2)
+ALIAS[HCOCH2OOH   ] = GHD2000   ; CH2(OOH)CHO
+ALIAS[CH3NO3      ] = GN01001   ; CH3(ONO2)
+ALIAS[C2H5OH      ] = GO02000   ; CH3CH2(OH)
+ALIAS[CH3CHO      ] = GD02000   ; CH3CHO
+ALIAS[CH3CO2H     ] = GA02000   ; CH3CO(OH)
+ALIAS[CH3CO3      ] = G3K2000   ; CH3CO(OO.)
+ALIAS[CH3CO3H     ] = GG02000   ; CH3CO(OOH)
+ALIAS[PAN         ] = GP02000   ; CH3CO(OONO2)
+ALIAS[HCOCH2O     ] = G1D2000   ; CHOCH2(O.)
+ALIAS[HCOCH2O2    ] = G2D2000   ; CHOCH2(OO.)
+ALIAS[GLYOX       ] = GDD2000   ; CHOCHO
+ALIAS[HCOCO3      ] = G3D2000   ; CHOCO(OO.)
+ALIAS[HCOCO2H     ] = GAD2000   ; CO(OH)CHO
+ALIAS[HCOCO3H     ] = GGD2000   ; CO(OOH)CHO

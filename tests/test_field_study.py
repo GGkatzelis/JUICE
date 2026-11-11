@@ -5,10 +5,10 @@ import os
 import numpy as np
 import pytest
 
-import field_spec as fs
-import field_scenario as fsc
-import study as S
-from scenario_prep import load_paths
+from juice.core import field_spec as fs
+from juice.core import field_scenario as fsc
+from juice.core import study as S
+from juice.core.scenario_prep import load_paths
 
 INCLUDE_DIR = load_paths("")["include_dir"]
 
@@ -75,7 +75,7 @@ def test_materialise_writes_each_run_with_its_factor_and_shared_chemistry(field_
     assert os.path.isfile(os.path.join(st.folder, "chemistry", "chemistry.json"))
     assert not os.path.isdir(os.path.join(plans[0].folder, "chemistry"))       # the subset is shared, not extracted per run
     # the factor reaches the ENZ: NO emission halved, isoprene untouched
-    from measured_inputs import read_enz
+    from juice.core.measured_inputs import read_enz
     _times, cols = read_enz(plans[0].json_path[:-5] + ".enz")
     S.materialise(st, plans[1], INCLUDE_DIR)
     _times, cols1 = read_enz(plans[1].json_path[:-5] + ".enz")
@@ -99,7 +99,7 @@ def test_emission_factor_resolution():
 def test_study_window_opens_a_field_study(field_study):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    import study_window as sw
+    from juice.gui import study_window as sw
     app = QApplication.instance() or QApplication([])
     st, (t1, t2) = field_study
     os.makedirs(st.folder, exist_ok=True)

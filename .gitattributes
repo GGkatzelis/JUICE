@@ -2,4 +2,4 @@
 * text=auto
 
 # MCM downloads are verified by sha256 (mechanism_registry.py): never convert their line endings
-mechanisms/base/** -text
+chemistry/mechanisms/base/** -text

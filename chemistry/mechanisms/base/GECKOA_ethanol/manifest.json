@@ -1,0 +1,69 @@
+{
+ "kind": "gecko",
+ "id": "GECKOA_ethanol",
+ "name": "GECKO-A C2H5OH (complete generator output)",
+ "version": "generator maxgen 6, imported 2026-11-11",
+ "files": {
+  "physics": "geckoa.physics.incl",
+  "anorg": "anorg.geckoa.incl",
+  "aliases": "geckoa.aliases.incl",
+  "names": "GECKOA_ethanol.geckoa.names.incl",
+  "organic": "GECKOA_ethanol.geckoa.organic.incl",
+  "dil_mech": "GECKOA_ethanol.dil.mech",
+  "dil_rate": "GECKOA_ethanol.dil.rate",
+  "soa": "GECKOA_ethanol.SOA.include",
+  "species_tsv": "GECKOA_ethanol.species.tsv"
+ },
+ "checksums": {
+  "geckoa.physics.incl": "77dcbf3257bc58d6798f180e65297868db77daf89b326eeca9385de0798f9fbc",
+  "anorg.geckoa.incl": "fa74531d276c227efae69f1bb504242c68c41b2bce748bc6b7a44c1124b342e4",
+  "geckoa.aliases.incl": "8fa77318d39b3250b922a966fa8e22b9d8ffc908ddf3460a83e1ff0fbd11030e",
+  "GECKOA_ethanol.geckoa.names.incl": "0557763b39d9a002912ca64a7ace450dfeddf4c48d92b55c3bcb385fea0dc992",
+  "GECKOA_ethanol.geckoa.organic.incl": "0ef06bcdffa007417595f46d819b2b22e786c34227ffc51c5bd3474d9d45bb7c",
+  "GECKOA_ethanol.dil.mech": "e977a424e22c1c47d8790c60e9c4ee88068a061c9932daf61968b2373c2eb982",
+  "GECKOA_ethanol.dil.rate": "2f92742e49f47f933eca47b8efa5ebbffe954cb001622d7876f0cbd0e6c97d74",
+  "GECKOA_ethanol.SOA.include": "bd925a0d2ff0deedad4d6f8b04d892e844c7695be9de340114de4371162e0503",
+  "GECKOA_ethanol.species.tsv": "9ae4920cc994488a381499bfe7ead5111629e7d69823ab7c70aa338e343d668a"
+ },
+ "source": {
+  "folder": "tests/fixtures/gecko_ethanol",
+  "generator_files_sha256": {
+   "dictionary.out": "33951d311786a6ac0d5c210990f4ee8b0e1d4244f9bc90d32917d688126bfe15",
+   "reactionswithcom.dum": "44a8c72e160a245b87e1722d8a4e1212402d653e2fc5a7479ed19189c36e5561",
+   "pvap.nan.dat": "00298b4d0cdea9a1b932619bf9c25cb2c529dace41f3824a5627fef9c2651225",
+   "scheme.log": "39c50aeb0437bfc242f6b56b97e8e8be533b715359dce05f28582724b64758be"
+  },
+  "generator_maxgen": 6,
+  "imported": "2026-11-11",
+  "options": {
+   "maxgen_cut": null,
+   "cstar_max": null,
+   "wall": "krechmer"
+  }
+ },
+ "gecko": {
+  "precursor": "C2H5OH",
+  "primary_code": "O02000",
+  "primary_notation": "CH3CH2(OH)",
+  "n_species": 66,
+  "n_species_generator": 66,
+  "n_reactions_generator": 289,
+  "n_reactions_organic": 183,
+  "n_reactions_inorganic": 42,
+  "n_partitioning": 19,
+  "n_names": 23,
+  "n_species_tsv": 122,
+  "dropped": {
+   "RO2 counter class PERO1 empty in this mechanism (rate 0)": 10,
+   "RO2 counter class PERO2 empty in this mechanism (rate 0)": 10,
+   "RO2 counter class PERO3 empty in this mechanism (rate 0)": 10,
+   "RO2 counter class PERO4 empty in this mechanism (rate 0)": 10,
+   "RO2 counter class PERO5 empty in this mechanism (rate 0)": 10,
+   "RO2 counter class PERO7 empty in this mechanism (rate 0)": 10
+  },
+  "rescaled": 2
+ },
+ "citation": "GECKO-A: Aumont, Szopa & Madronich, ACP 5, 2497 (2005); Valorso et al., ACP 11, 6895 (2011); GECKO-A v1.0 (2026), https://gitlab.in2p3.fr/ (GPL-3.0). JUICE reads the generator output; it ships none of its code.",
+ "status": "imported",
+ "notes": "Written by gecko_import.py from the generator output; regenerate rather than edit. Experiments choose the inorganic core (GECKO-A's own or MCM v3.3.1 with aliases) and whether the partitioning include is loaded."
+}

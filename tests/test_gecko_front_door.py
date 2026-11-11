@@ -6,9 +6,9 @@ import shutil
 
 import pytest
 
-import experiment_spec as es
-import gecko_import as gi
-import mechanism_registry as mreg
+from juice.core import experiment_spec as es
+from juice.importers import gecko_import as gi
+from juice.chemistry import mechanism_registry as mreg
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -20,7 +20,7 @@ def registry(tmp_path, monkeypatch):
     """A registry holding the MCM download (unchanged, for the 'mcm' core) and the imported ethanol mechanism."""
     base_dir = tmp_path / "base"
     base_dir.mkdir()
-    shutil.copytree(os.path.join(ROOT, "mechanisms", "base", "MCM_v3.3.1"), base_dir / "MCM_v3.3.1")
+    shutil.copytree(os.path.join(ROOT, "chemistry", "mechanisms", "base", "MCM_v3.3.1"), base_dir / "MCM_v3.3.1")
     monkeypatch.setattr(mreg, "BASE_DIR", str(base_dir))
     b = gi.import_generator_folder(ETHANOL, "GECKOA_ethanol", "C2H5OH", log=lambda *a: None)
     return b
@@ -91,13 +91,13 @@ def test_experiment_writer_emits_the_gecko_includes(registry, tmp_path, core):
 def test_gecko_experiment_runs_in_juice(registry, tmp_path):
     """The written experiment goes through EASY -> JSON and the solver; GECKO-A names are merged into the MCM ones."""
     import subprocess, sys
-    import run_benchmark as rb
-    import scenario_prep as sp
+    from juice.tools import run_benchmark as rb
+    from juice.core import scenario_prep as sp
     b = registry
     s = _spec(b.id, "gecko", "run_gecko")
     res = es.write_experiment(s, str(tmp_path / "run"))
     js = sp.prepare_scenario(res, sp.load_paths("")["include_dir"], export_kv_pd=False, toml_path="", solver=sp.solver_from_toml("", "twostep"))
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "scenario_runner.py"), js], capture_output=True, text=True, cwd=ROOT,
+    r = subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js], capture_output=True, text=True, cwd=ROOT,
                        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert r.returncode == 0, r.stdout[-2000:]
     df = rb.parse_cs_file(str(tmp_path / "run" / "run_gecko.cs"))
@@ -115,8 +115,8 @@ def test_gecko_mcm_core_follows_the_mcm_subset_control(registry, tmp_path):
     differs, so O3, OH and HONO must agree closely.  This is the check that caught the missing physics lines (every
     termolecular rate 0, OH 1e9) and the CONST(J<n>) anchors (an undefined J1 evaluated as 1 s-1)."""
     import subprocess, sys
-    import run_benchmark as rb
-    import scenario_prep as sp
+    from juice.tools import run_benchmark as rb
+    from juice.core import scenario_prep as sp
     b = registry
     out = {}
     for tag in ("control", "gecko"):
@@ -125,7 +125,7 @@ def test_gecko_mcm_core_follows_the_mcm_subset_control(registry, tmp_path):
             s.gecko_partitioning = True
         res = es.write_experiment(s, str(tmp_path / tag))
         js = sp.prepare_scenario(res, sp.load_paths("")["include_dir"], export_kv_pd=False, toml_path="", solver=sp.solver_from_toml("", "twostep"))
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "scenario_runner.py"), js], capture_output=True, text=True, cwd=ROOT,
+        r = subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js], capture_output=True, text=True, cwd=ROOT,
                            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         assert r.returncode == 0, r.stdout[-2000:]
         df = rb.parse_cs_file(str(tmp_path / tag / f"{tag}.cs"))
@@ -137,9 +137,9 @@ def test_gecko_mcm_core_follows_the_mcm_subset_control(registry, tmp_path):
 
 def test_field_case_can_use_a_gecko_base(registry, tmp_path):
     import numpy as np
-    import field_spec as fs
-    import field_scenario as fsc
-    from scenario_prep import load_paths
+    from juice.core import field_spec as fs
+    from juice.core import field_scenario as fsc
+    from juice.core.scenario_prep import load_paths
     b = registry
     lines = ["time,lat,lon,T,p,RH,h,jNO2,E_C2H5OH [mol/s],B_O3 [ppb]"]
     for i in range(3):
@@ -162,8 +162,8 @@ def test_field_case_can_use_a_gecko_base(registry, tmp_path):
 def test_chemistry_page_shows_a_gecko_base(registry):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    import experiment_wizard as ew
-    from scenario_prep import load_paths
+    from juice.gui import experiment_wizard as ew
+    from juice.core.scenario_prep import load_paths
     app = QApplication.instance() or QApplication([])
     b = registry
 

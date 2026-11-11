@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pytest
 
-import field_spec as fs
+from juice.core import field_spec as fs
 
 
 def _table(tmp_path, text, name="t.csv"):

@@ -1,6 +1,6 @@
 # How chamber studies specified photolysis frequencies for MCM / SAPRC — historical practice
 
-Compiled 2026-11-02 for JUICE chamber profiles (`chambers/<id>.chamber.json`). Companion to
+Compiled 2026-11-02 for JUICE chamber profiles (`setups/chambers/<id>.chamber.json`). Companion to
 `docs/lamp_photolysis_literature.md` (which collects the *numbers*; this file collects the *methods*).
 
 Question answered here: when people modelled chamber experiments with the Master Chemical Mechanism

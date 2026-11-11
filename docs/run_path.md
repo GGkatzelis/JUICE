@@ -1,22 +1,22 @@
 # One run, file by file
 
-[`architecture.md`](../architecture.md) lists what each module is. This page follows **one chamber
+[`architecture.md`](architecture.md) lists what each module is. This page follows **one chamber
 experiment** from the moment it is defined to the moment its results are on screen: which file is called,
 what it does, what it hands on, and where you can step in.
 
-The example is [`examples/saphir_isoprene.py`](../examples/saphir_isoprene.py), the base case. The window
+The example is [`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py), the base case. The window
 takes the same path: its Run step calls the same functions (Sect. 7).
 
 ## 1. The tree
 
 ```
-examples/saphir_isoprene.py   (or <name>_run.py, or the window)
+examples/chamber/saphir_isoprene.py   (or <name>_run.py, or the window)
 │
 ├─ build()                                   STEPS 1–4: define the experiment (nothing is written yet)
 │   └─ juice.new_experiment(name, chamber)
 │       └─ experiment_spec.ExperimentSpec          the experiment: conditions, chemistry, injections, chamber
 │           └─ experiment_spec.apply_chamber
-│               └─ chambers.chamber(<id>)          chambers/<id>.chamber.json: volume, place, light, wall defaults
+│               └─ chambers.chamber(<id>)          setups/chambers/<id>.chamber.json: volume, place, light, wall defaults
 │
 └─ main()                                    STEP 5: run
     ├─ juice.check(exp)                            the review panel's checks
@@ -25,7 +25,7 @@ examples/saphir_isoprene.py   (or <name>_run.py, or the window)
     ├─ ① juice.write(exp, OUT)  ──────────────────────────────────────── writes the input files
     │   └─ experiment_spec.write_experiment
     │       ├─ ensure_mechanism                    the chemistry → OUT/chemistry/
-    │       │   ├─ mechanism_registry               which base, which add-ons (mechanisms/)
+    │       │   ├─ mechanism_registry               which base, which add-ons (chemistry/mechanisms/)
     │       │   └─ mcm_converter.convert_mcm_file   cuts the subset of exp.precursors out of the full MCM
     │       ├─ enz_columns → write_enz_file         the time grid and its columns → OUT/<name>.enz
     │       │   ├─ chambers / enz_builder           solar zenith angle, roof or lights
@@ -42,11 +42,11 @@ examples/saphir_isoprene.py   (or <name>_run.py, or the window)
     │       ├─ elog_generator.generate_both         EASY with every #include expanded
     │       │                                       → OUT/<name>_juice.elog, <name>_juice.canonical.elog
     │       ├─ idl_parser.parse_idl_easy            canonical elog + ENZ → one scenario dictionary
-    │       ├─ scenario_prep.solver_from_toml       the solver profile (FR_GUI.toml [solver])
+    │       ├─ scenario_prep.solver_from_toml       the solver profile (settings.toml [solver])
     │       └─                                      → OUT/<name>.json
     │
     ├─ ③ juice.solve(json)  ──────────────────────────────────────────── integrates
-    │   └─ python scenario_runner.py <name>.json   (its own process; output → OUT/<name>_run.log)
+    │   └─ python -m juice.core.scenario_runner <name>.json   (its own process; output → OUT/<name>_run.log)
     │       └─ ScenarioRunner.run
     │           ├─ _setup_environment               ENZ → time series (load_saphir_environment)
     │           ├─ _build_mechanism                 elog → reactions, rate expressions (easy_parser,
@@ -58,7 +58,7 @@ examples/saphir_isoprene.py   (or <name>_run.py, or the window)
     │
     └─ ④ juice.results(cs, exp)  ─────────────────────────────────────── reads the results
         └─ juice.Results                            run_benchmark.parse_cs_file → a table; .ppb(), .hour
-            (or: python results_viewer.py <name>.cs)
+            (or: python -m juice.gui.results_viewer <name>.cs)
 ```
 
 Each of ①–④ writes files and the next one reads only those files. That is why you can stop after any of
@@ -68,8 +68,8 @@ them, look at or change what it wrote, and go on.
 
 | | |
 |---|---|
-| **Files** | `juice.py`, `experiment_spec.py`, `chambers.py` + `chambers/<id>.chamber.json` |
-| **Reads** | the chamber profile (`chambers/SAPHIR.chamber.json`), or a template from `templates/` |
+| **Files** | `juice/api.py`, `experiment_spec.py`, `chambers.py` + `setups/chambers/<id>.chamber.json` |
+| **Reads** | the chamber profile (`setups/chambers/SAPHIR.chamber.json`), or a template from `setups/templates/` |
 | **Does** | builds an `ExperimentSpec` in memory. `new_experiment` sets the chamber's defaults (volume, location, light type, wall sources, dilution); every line after it changes one field |
 | **Writes** | nothing |
 | **Step in** | any field. The four parts are `exp.conditions` (Step 1), `exp.base_mechanism` / `precursors` / `addons` / `initials` (Step 2), `exp.injections` (Step 3), `exp.chamber` (Step 4) |
@@ -82,7 +82,7 @@ The experiment is plain data. A field you don't set keeps the chamber's default,
 | | |
 |---|---|
 | **Files** | `experiment_spec.py` (`write_experiment`), `mcm_converter.py`, `mechanism_registry.py`, `enz_builder.py`, `measured_inputs.py`, `easy_builder.py`, `easy_scene.py`, `lamp_photolysis.py` |
-| **Reads** | the spec; the full MCM in `mechanisms/base/MCM_v3.3.1/`; your conditions file or the archive, if chosen |
+| **Reads** | the spec; the full MCM in `chemistry/mechanisms/base/MCM_v3.3.1/`; your conditions file or the archive, if chosen |
 | **Does** | three things, in this order: the chemistry, the ENZ, the EASY |
 | **Writes** | `chemistry/`, `<name>.enz`, `<name>.easy`, `<name>.experiment.json` |
 | **Step in** | edit `<name>.easy` or `<name>.enz` by hand before ② (example, off-road C) |
@@ -110,7 +110,7 @@ The experiment is plain data. A field you don't set keeps the chamber's default,
 
 | | |
 |---|---|
-| **Files** | `scenario_prep.py`, `elog_generator.py`, `idl_parser.py`, `FR_GUI.toml` |
+| **Files** | `scenario_prep.py`, `elog_generator.py`, `idl_parser.py`, `settings.toml` |
 | **Reads** | `<name>.easy`, `<name>.enz`, the include files (run folder, `chemistry/`, `exp.include_dirs`, the settings file's `include_dir`, in that order) |
 | **Does** | expands every `#include` into one flat file, the elog, as FACSIMILE's preprocessor does. Then parses the elog and the ENZ into one dictionary: species, reactions, rate expressions, parameters, the time series and the solver settings |
 | **Writes** | `<name>_juice.elog` (expanded), `<name>_juice.canonical.elog` (normalised names), `<name>.json` |
@@ -132,7 +132,7 @@ lists it.
 The run is five calls in order: `_setup_environment` → `_build_mechanism` → `_solve` →
 `_export_results` → `_export_kinetics`.
 
-The three profiles are set in `FR_GUI.toml` `[solver.profiles]` and chosen with `solver=`:
+The three profiles are set in `settings.toml` `[solver.profiles]` and chosen with `solver=`:
 
 | profile | method | settings |
 |---|---|---|
@@ -141,13 +141,13 @@ The three profiles are set in `FR_GUI.toml` `[solver.profiles]` and chosen with 
 | `twostep` | Verwer's TWOSTEP, no Jacobian (`twostep_solver.py`) | rtol 1e-3 |
 
 `juice.solve` starts `scenario_runner.py` as its own process, as the window does. It can also be run by
-hand: `python scenario_runner.py <name>.json --solver precise`.
+hand: `python -m juice.core.scenario_runner <name>.json --solver precise`.
 
 ## 6. ④ Results
 
 | | |
 |---|---|
-| **Files** | `juice.py` (`Results`), `run_benchmark.py` (`parse_cs_file`), `results_viewer.py` |
+| **Files** | `juice/api.py` (`Results`), `run_benchmark.py` (`parse_cs_file`), `results_viewer.py` |
 | **Reads** | `<name>.cs` (and `.kv`, `.pd` for the viewer's Process Analysis) |
 | **Does** | reads the columns into a table. `ppb()` converts with the model's air density (column `M`) |
 | **Step in** | anything you do with the numbers. `r.df` is a pandas DataFrame |
@@ -169,8 +169,8 @@ A **field case** (`field_window.py`, `juice.new_field_case`) differs only in ①
 its one table, and `field_scenario.write_case` writes the ENZ and EASY: emissions, background, held
 species, dilution, deposition. Then ②–④ are the same files and functions. After ④, `juice.skill`
 (`field_scenario.skill_table`) compares the model with the table's `O_` columns → `<name>_skill.csv`.
-The walk-through is [`examples/field_site.py`](../examples/field_site.py); the lamp chamber's is
-[`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py).
+The walk-through is [`examples/field/field_site.py`](../examples/field/field_site.py); the lamp chamber's is
+[`examples/chamber/uv_lamp_chamber.py`](../examples/chamber/uv_lamp_chamber.py).
 
 ## 8. I want to change …
 
@@ -182,8 +182,8 @@ The walk-through is [`examples/field_site.py`](../examples/field_site.py); the l
 | a single EASY statement | the EASY | `exp.overrides`, written after the mechanism (off-road B) |
 | the conditions over time | the ENZ | `c.source = "file"` with your table, or edit `<name>.enz` between ① and ② |
 | holding NO2 or O3 to a measurement | ENZ + EASY | `c.constrain_species`, with the column in your table |
-| the solver or its tolerance | `<name>.json` | `solver=` in ②; the numbers of each profile in `FR_GUI.toml` |
-| a new chamber | the chamber profile | the chamber editor, or a `chambers/<id>.chamber.json`; then `new_experiment(chamber="<id>")` |
+| the solver or its tolerance | `<name>.json` | `solver=` in ②; the numbers of each profile in `settings.toml` |
+| a new chamber | the chamber profile | the chamber editor, or a `setups/chambers/<id>.chamber.json`; then `new_experiment(chamber="<id>")` |
 | the whole design (loops, scans) | your script | call `build()` with arguments and loop (off-road A); for large grids `study_runner.py` |
 
 The first rows change the spec. A change there is saved in `<name>.experiment.json` and repeated by

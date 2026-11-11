@@ -1,0 +1,123 @@
+Name	Smiles	Inchi	InchiKey	Formula	Mass	Excited	PeroxyRadical	Synonyms
+H2	[H][H]	-	-	H2	2.0160	false	false	GECKO:H2|H2
+H2O	O	-	-	H2O	18.0150	false	false	GECKO:H2O|H2O
+H2O2	OO	-	-	H2O2	34.0140	false	false	GECKO:H2O2|H2O2
+HONO	O=NO	-	-	HNO2	47.0130	false	false	GECKO:HNO2|HNO2
+HNO3	O=[N+]([O-])O	-	-	HNO3	63.0120	false	false	GECKO:HNO3|HNO3
+HO2NO2	O=[N+]([O-])OO	-	-	HNO4	79.0110	false	false	GECKO:HNO4|HNO4
+OH	[OH]	-	-	HO	17.0070	false	false	GECKO:HO|HO
+HO2	[O]O	-	-	HO2	33.0060	false	false	GECKO:HO2|HO2
+N2O5	O=[N+]([O-])O[N+](=O)[O-]	-	-	N2O5	108.0090	false	false	GECKO:N2O5|N2O5
+NO	[N]=O	-	-	NO	30.0060	false	false	GECKO:NO|NO
+NO2	[O]N=O	-	-	NO2	46.0050	false	false	GECKO:NO2|NO2
+NO3	[O][N+](=O)[O-]	-	-	NO3	62.0040	false	false	GECKO:NO3|NO3
+O	[O]	-	-	O	15.9990	false	false	GECKO:O3P|O
+O1D	[O]	-	-	O	15.9990	true	false	GECKO:O1D|O*
+O2	O=O	-	-	O2	31.9980	false	false	GECKO:O2|O2
+O3	[O-][O+]=O	-	-	O3	47.9970	false	false	GECKO:O3|O3
+SO2	O=S=O	-	-	O2S	64.0580	false	false	GECKO:SO2|SO2
+SA	OS(=O)(=O)O	-	-	H2O4S	98.0720	false	false	GECKO:SULF|sulf
+GCH2OH2	OCO	-	-	CH4O2	48.0000	false	false	GECKO:CH2OH2|CH2(OH)(OH)
+HOCH2CH2O	[O]CCO	-	-	C2H5O2	61.1000	false	false	GECKO:1O2000|CH2(OH)CH2(O.)
+ETHGLY	OCCO	-	-	C2H6O2	62.1000	false	false	GECKO:OO2000|CH2(OH)CH2(OH)
+HOCH2CH2O2	[O]OCCO	-	-	C2H5O3	77.1000	false	true	GECKO:2O2000|CH2(OH)CH2(OO.)
+HYETHO2H	OCCOO	-	-	C2H6O3	78.1000	false	false	GECKO:HO2000|CH2(OH)CH2(OOH)
+HOCH2CHO	O=CCO	-	-	C2H4O2	60.1000	false	false	GECKO:DO2000|CH2(OH)CHO
+HOCH2CO2H	O=C(O)CO	-	-	C2H4O3	76.1000	false	false	GECKO:AO2000|CH2(OH)CO(OH)
+HOCH2CO3	[O]OC(=O)CO	-	-	C2H3O4	91.0000	false	true	GECKO:3K2001|CH2(OH)CO(OO.)
+HOCH2CO3H	O=C(CO)OO	-	-	C2H4O4	92.1000	false	false	GECKO:GO2000|CH2(OH)CO(OOH)
+PHAN	O=C(CO)OO[N+](=O)[O-]	-	-	C2H3NO6	137.1000	false	false	GECKO:PO2000|CH2(OH)CO(OONO2)
+HCOCH2OOH	O=CCOO	-	-	C2H4O3	76.1000	false	false	GECKO:HD2000|CH2(OOH)CHO
+G3H2000	[O]OC(=O)COO	-	-	C2H3O5	107.0000	false	true	GECKO:3H2000|CH2(OOH)CO(OO.)
+GGH2000	O=C(COO)OO	-	-	C2H4O5	108.1000	false	false	GECKO:GH2000|CH2(OOH)CO(OOH)
+GPH2000	O=C(COO)OO[N+](=O)[O-]	-	-	C2H3NO7	153.1000	false	false	GECKO:PH2000|CH2(OOH)CO(OONO2)
+HCHO	C=O	-	-	CH2O	30.0000	false	false	GECKO:CH2O|CH2O
+CH3O	C[O]	-	-	CH3O	31.0000	false	false	GECKO:CH3O|CH3(O.)
+CH3OH	CO	-	-	CH4O	32.0000	false	false	GECKO:CH3OH|CH3(OH)
+CH3NO3	CO[N+](=O)[O-]	-	-	CH3NO3	77.0000	false	false	GECKO:N01001|CH3(ONO2)
+CH3O2	CO[O]	-	-	CH3O2	47.0000	false	true	GECKO:CH3O2|CH3(OO.)
+CH3OOH	COO	-	-	CH4O2	48.0000	false	false	GECKO:CH3OOH|CH3(OOH)
+C2H5OH	CCO	-	-	C2H6O	46.1000	false	false	GECKO:O02000|CH3CH2(OH)
+CH3CHO	CC=O	-	-	C2H4O	44.1000	false	false	GECKO:D02000|CH3CHO
+CH3CO2H	CC(=O)O	-	-	C2H4O2	60.1000	false	false	GECKO:A02000|CH3CO(OH)
+CH3CO3	CC(=O)O[O]	-	-	C2H3O3	75.0000	false	true	GECKO:3K2000|CH3CO(OO.)
+CH3CO3H	CC(=O)OO	-	-	C2H4O3	76.1000	false	false	GECKO:G02000|CH3CO(OOH)
+PAN	CC(=O)OO[N+](=O)[O-]	-	-	C2H3NO5	121.1000	false	false	GECKO:P02000|CH3CO(OONO2)
+CH4	C	-	-	CH4	16.1000	false	false	GECKO:CH4|CH4
+HCOOH	O=CO	-	-	CH2O2	46.0000	false	false	GECKO:HCOOH|CHO(OH)
+GHCOO2	[O]OC=O	-	-	CHO3	61.0000	false	true	GECKO:HCOO2|CHO(OO.)
+GHCOO2H	O=COO	-	-	CH2O3	62.0000	false	false	GECKO:HCOO2H|CHO(OOH)
+GP01001	O=COO[N+](=O)[O-]	-	-	CHNO5	107.0000	false	false	GECKO:P01001|CHO(OONO2)
+HCOCH2O	[O]CC=O	-	-	C2H3O2	59.0000	false	false	GECKO:1D2000|CHOCH2(O.)
+HCOCH2O2	[O]OCC=O	-	-	C2H3O3	75.0000	false	true	GECKO:2D2000|CHOCH2(OO.)
+GLYOX	O=CC=O	-	-	C2H2O2	58.0000	false	false	GECKO:DD2000|CHOCHO
+HCOCO3	[O]OC(=O)C=O	-	-	C2HO4	89.0000	false	true	GECKO:3D2000|CHOCO(OO.)
+CO	[C-]#[O+]	-	-	CO	28.0000	false	false	GECKO:CO|CO
+G1A2000	[O]CC(=O)O	-	-	C2H3O3	75.0000	false	false	GECKO:1A2000|CO(OH)CH2(O.)
+G2A2000	[O]OCC(=O)O	-	-	C2H3O4	91.0000	false	true	GECKO:2A2000|CO(OH)CH2(OO.)
+GAH2000	O=C(O)COO	-	-	C2H4O4	92.1000	false	false	GECKO:AH2000|CO(OH)CH2(OOH)
+HCOCO2H	O=CC(=O)O	-	-	C2H2O3	74.0000	false	false	GECKO:AD2000|CO(OH)CHO
+G1G2000	[O]CC(=O)OO	-	-	C2H3O4	91.0000	false	false	GECKO:1G2000|CO(OOH)CH2(O.)
+G2G2000	[O]OCC(=O)OO	-	-	C2H3O5	107.0000	false	true	GECKO:2G2000|CO(OOH)CH2(OO.)
+HCOCO3H	O=CC(=O)OO	-	-	C2H2O4	90.0000	false	false	GECKO:GD2000|CO(OOH)CHO
+G1P2000	[O]CC(=O)OO[N+](=O)[O-]	-	-	C2H2NO6	136.1000	false	false	GECKO:1P2000|CO(OONO2)CH2(O.)
+G2P2000	[O]OCC(=O)OO[N+](=O)[O-]	-	-	C2H2NO7	152.1000	false	true	GECKO:2P2000|CO(OONO2)CH2(OO.)
+GPD2000	O=CC(=O)OO[N+](=O)[O-]	-	-	C2HNO6	135.0000	false	false	GECKO:PD2000|CO(OONO2)CHO
+CO2	O=C=O	-	-	CO2	44.0000	false	false	GECKO:CO2|CO2
+SOA_ETHGLY	-	-	-	C	12.011	false	false	SOA_phase of ETHGLY
+WALL_ETHGLY	-	-	-	C	12.011	false	false	WALL_phase of ETHGLY
+WALL_PL_ETHGLY	-	-	-	C	12.011	false	false	WALL_PL_phase of ETHGLY
+SOA_HYETHO2H	-	-	-	C	12.011	false	false	SOA_phase of HYETHO2H
+WALL_HYETHO2H	-	-	-	C	12.011	false	false	WALL_phase of HYETHO2H
+WALL_PL_HYETHO2H	-	-	-	C	12.011	false	false	WALL_PL_phase of HYETHO2H
+SOA_HOCH2CHO	-	-	-	C	12.011	false	false	SOA_phase of HOCH2CHO
+WALL_HOCH2CHO	-	-	-	C	12.011	false	false	WALL_phase of HOCH2CHO
+WALL_PL_HOCH2CHO	-	-	-	C	12.011	false	false	WALL_PL_phase of HOCH2CHO
+SOA_HOCH2CO2H	-	-	-	C	12.011	false	false	SOA_phase of HOCH2CO2H
+WALL_HOCH2CO2H	-	-	-	C	12.011	false	false	WALL_phase of HOCH2CO2H
+WALL_PL_HOCH2CO2H	-	-	-	C	12.011	false	false	WALL_PL_phase of HOCH2CO2H
+SOA_HOCH2CO3H	-	-	-	C	12.011	false	false	SOA_phase of HOCH2CO3H
+WALL_HOCH2CO3H	-	-	-	C	12.011	false	false	WALL_phase of HOCH2CO3H
+WALL_PL_HOCH2CO3H	-	-	-	C	12.011	false	false	WALL_PL_phase of HOCH2CO3H
+SOA_PHAN	-	-	-	C	12.011	false	false	SOA_phase of PHAN
+WALL_PHAN	-	-	-	C	12.011	false	false	WALL_phase of PHAN
+WALL_PL_PHAN	-	-	-	C	12.011	false	false	WALL_PL_phase of PHAN
+SOA_HCOCH2OOH	-	-	-	C	12.011	false	false	SOA_phase of HCOCH2OOH
+WALL_HCOCH2OOH	-	-	-	C	12.011	false	false	WALL_phase of HCOCH2OOH
+WALL_PL_HCOCH2OOH	-	-	-	C	12.011	false	false	WALL_PL_phase of HCOCH2OOH
+SOA_GGH2000	-	-	-	C	12.011	false	false	SOA_phase of GGH2000
+WALL_GGH2000	-	-	-	C	12.011	false	false	WALL_phase of GGH2000
+WALL_PL_GGH2000	-	-	-	C	12.011	false	false	WALL_PL_phase of GGH2000
+SOA_GPH2000	-	-	-	C	12.011	false	false	SOA_phase of GPH2000
+WALL_GPH2000	-	-	-	C	12.011	false	false	WALL_phase of GPH2000
+WALL_PL_GPH2000	-	-	-	C	12.011	false	false	WALL_PL_phase of GPH2000
+SOA_C2H5OH	-	-	-	C	12.011	false	false	SOA_phase of C2H5OH
+WALL_C2H5OH	-	-	-	C	12.011	false	false	WALL_phase of C2H5OH
+WALL_PL_C2H5OH	-	-	-	C	12.011	false	false	WALL_PL_phase of C2H5OH
+SOA_CH3CHO	-	-	-	C	12.011	false	false	SOA_phase of CH3CHO
+WALL_CH3CHO	-	-	-	C	12.011	false	false	WALL_phase of CH3CHO
+WALL_PL_CH3CHO	-	-	-	C	12.011	false	false	WALL_PL_phase of CH3CHO
+SOA_CH3CO2H	-	-	-	C	12.011	false	false	SOA_phase of CH3CO2H
+WALL_CH3CO2H	-	-	-	C	12.011	false	false	WALL_phase of CH3CO2H
+WALL_PL_CH3CO2H	-	-	-	C	12.011	false	false	WALL_PL_phase of CH3CO2H
+SOA_CH3CO3H	-	-	-	C	12.011	false	false	SOA_phase of CH3CO3H
+WALL_CH3CO3H	-	-	-	C	12.011	false	false	WALL_phase of CH3CO3H
+WALL_PL_CH3CO3H	-	-	-	C	12.011	false	false	WALL_PL_phase of CH3CO3H
+SOA_PAN	-	-	-	C	12.011	false	false	SOA_phase of PAN
+WALL_PAN	-	-	-	C	12.011	false	false	WALL_phase of PAN
+WALL_PL_PAN	-	-	-	C	12.011	false	false	WALL_PL_phase of PAN
+SOA_GLYOX	-	-	-	C	12.011	false	false	SOA_phase of GLYOX
+WALL_GLYOX	-	-	-	C	12.011	false	false	WALL_phase of GLYOX
+WALL_PL_GLYOX	-	-	-	C	12.011	false	false	WALL_PL_phase of GLYOX
+SOA_GAH2000	-	-	-	C	12.011	false	false	SOA_phase of GAH2000
+WALL_GAH2000	-	-	-	C	12.011	false	false	WALL_phase of GAH2000
+WALL_PL_GAH2000	-	-	-	C	12.011	false	false	WALL_PL_phase of GAH2000
+SOA_HCOCO2H	-	-	-	C	12.011	false	false	SOA_phase of HCOCO2H
+WALL_HCOCO2H	-	-	-	C	12.011	false	false	WALL_phase of HCOCO2H
+WALL_PL_HCOCO2H	-	-	-	C	12.011	false	false	WALL_PL_phase of HCOCO2H
+SOA_HCOCO3H	-	-	-	C	12.011	false	false	SOA_phase of HCOCO3H
+WALL_HCOCO3H	-	-	-	C	12.011	false	false	WALL_phase of HCOCO3H
+WALL_PL_HCOCO3H	-	-	-	C	12.011	false	false	WALL_PL_phase of HCOCO3H
+SOA_GPD2000	-	-	-	C	12.011	false	false	SOA_phase of GPD2000
+WALL_GPD2000	-	-	-	C	12.011	false	false	WALL_phase of GPD2000
+WALL_PL_GPD2000	-	-	-	C	12.011	false	false	WALL_PL_phase of GPD2000

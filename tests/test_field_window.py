@@ -6,9 +6,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
-import field_spec as fs
-import field_window as fw
-import juice_start as js
+from juice.core import field_spec as fs
+from juice.gui import field_window as fw
+from juice.gui import juice_start as js
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +24,7 @@ def calls(monkeypatch):
 
 
 def _titles(menu):
-    from juice_start import _Choice
+    from juice.gui.juice_start import _Choice
     return [c.findChildren(js.QLabel)[0].text() for c in menu.findChildren(_Choice)]
 
 
@@ -45,7 +45,7 @@ def test_chamber_menu_without_back_has_no_back_button(app):
 def test_field_menu_starts_a_field_window(app, calls):
     menu = js.FieldMenu("", on_back=lambda: None)
     assert _titles(menu)[:2] == ["New field case", "Open a saved field case"]
-    from juice_start import _Choice
+    from juice.gui.juice_start import _Choice
     menu.findChildren(_Choice)[0].clicked.emit()
     assert calls == [("field", [])]
     assert "Back" in [b.text() for b in menu.findChildren(js.QPushButton)]
