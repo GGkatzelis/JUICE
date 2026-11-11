@@ -1,4 +1,4 @@
-; cracmm2.chem.incl -- CRACMM 2 from the F0AM chemistry library (Chem/CRACMM2), converted by f0am_import.py 2026-11-10
+; cracmm2.chem.incl -- CRACMM 2 from the F0AM chemistry library (Chem/CRACMM2), converted by f0am_import.py 2026-11-11
 ; Skipper et al. (2024); F0AM version of the CMAQ mech.def by N. Skipper (EPA).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
 ; source files sha256[:16]: cracmm2_AllRxns.m 77f91896db70c38c, cracmm2_K.m 07d002a6b97b27c1, cracmm2_J.m 6ec61d35f114b129
 ; 193 species, 526 reactions; rates as in F0AM (constant species O2, M, H2O, H2

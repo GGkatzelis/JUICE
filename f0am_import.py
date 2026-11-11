@@ -96,6 +96,10 @@ PROFILES["RACM2"] = {
 STANDARD_ALIASES = [("HV", "hv"), ("OH", "HO"), ("HCHO", "H2CO CH2O"), ("O", "O3P"), ("CH3OOH", "CH3O2H MOOH"),
                     ("HONO", "HNO2"), ("HNO3", "HONO2"), ("HNO4", "HO2NO2"), ("SA", "SULF H2SO4")]
 CONSTANT_SPECIES = ("M", "O2", "N2", "H2", "H2O")
+# names a lumped mechanism shares with the MCM for the SAME compound (inorganics and a few explicit organics):
+# their formula is taken from the MCM species table; every other species of a lumped mechanism has none
+SAME_AS_MCM = {"O3", "O", "O1D", "OH", "HO2", "H2O2", "NO", "NO2", "NO3", "N2O5", "HONO", "HNO3", "HNO4", "HO2NO2",
+               "CO", "CO2", "SO2", "H2", "CH4", "HCHO", "PAN", "MVK", "MACR", "MEK", "MPAN"}
 EASY_VARIABLES = {"T", "M", "O2", "N2", "H2", "H2O", "P"}
 
 
@@ -437,7 +441,20 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
         fh.write("\n".join([f"; {files['dil_rate']} -- dilution of every species (f0am_import.py)"] + [f"k[{s} + DIL --> ] = CONST(DILUTE)" for s in species]) + "\n")
     with open(os.path.join(out, files["species_tsv"]), "w", encoding="utf-8", newline="\n") as fh:
         rev = {own: mcm for mcm, own in prof.get("mcm_names", {}).items()}
-        fh.write("Name\tFormula\tMCM name\n" + "".join(f"{s}\t\t{rev.get(s, '')}\n" for s in species))
+        alias_of = {a: c for c, alts in STANDARD_ALIASES for a in alts.split()}
+        try:                                           # formulas where the species is ONE compound: its MCM name,
+            import species_db as _sdb                  #   or an inorganic / unambiguous name shared with the MCM
+            mcm_db = _sdb.load_species_db()
+        except Exception:
+            mcm_db = None
+
+        def formula_of(s):
+            if mcm_db is None:
+                return ""
+            name = rev.get(s) or alias_of.get(s) or (s if s in SAME_AS_MCM else "")
+            return mcm_db.formula(name) if name else ""
+        fh.write("Name\tFormula\tMCM name\tPeroxyRadical\n"
+                 + "".join(f"{s}\t{formula_of(s)}\t{rev.get(s, '')}\tfalse\n" for s in species))
 
     import shutil                                      # the F0AM originals, for provenance (GPL-3.0, as JUICE)
     os.makedirs(os.path.join(out, "f0am_source"), exist_ok=True)

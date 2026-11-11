@@ -713,7 +713,7 @@ class ChemistryPage(QWizardPage):
         self.mode_compounds.setChecked(True)
         hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); ml.addLayout(hb)
         g = QGridLayout()
-        g.addWidget(QLabel("Search MCM species (name or formula)"), 0, 0)
+        g.addWidget(QLabel("Search MCM and add-on species (name or formula)"), 0, 0)
         self.search = QLineEdit(); self.search.textChanged.connect(self._filter); g.addWidget(self.search, 0, 1)
         self.candidates = QListWidget(); g.addWidget(self.candidates, 1, 0, 1, 2)
         self.candidates.itemDoubleClicked.connect(lambda _it: self._add_selected())
@@ -843,6 +843,8 @@ class ChemistryPage(QWizardPage):
         self._addons_changed()
         if hasattr(self, "gecko_box"):
             self._gecko_changed()
+        if hasattr(self, "candidates"):                # the search lists the add-on species of this base
+            self._filter(self.search.text())
 
     # ── first-generation tree / adjustments ──
     def _fac(self) -> str:
@@ -936,10 +938,26 @@ class ChemistryPage(QWizardPage):
         if data:
             _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
 
+    def _addon_species(self) -> Dict[str, Tuple[str, str]]:
+        """NAME -> (formula, add-on id) of the add-ons installed for the chosen base (e.g. NOAA_BB's FURAN)."""
+        out: Dict[str, Tuple[str, str]] = {}
+        try:
+            for a in mreg.addons_for(self.base_id()):
+                for name, formula in (a.adds_species or {}).items():
+                    out.setdefault(name.upper(), (formula or "", a.id))
+        except Exception:
+            pass
+        return out
+
     def _filter(self, text: str):
         self.candidates.clear()
         q = text.strip().upper()
         n = 0
+        # add-on species first (they are few): '[add-on <id>]' says where they come from; choosing one ticks it
+        for name, (formula, aid) in sorted(self._addon_species().items()):
+            if not q or q in name or q in formula.upper():
+                self.candidates.addItem(f"{name}   {formula or '?'}   [add-on {aid}]")
+                n += 1
         for name, e in MCM_DB.items():
             formula = getattr(e, "formula", "") or ""
             if not q or q in name or q in formula.upper():
@@ -949,10 +967,18 @@ class ChemistryPage(QWizardPage):
                     break
 
     def _add_selected(self):
+        ticks = []
         for it in self.candidates.selectedItems():
             name = it.text().split()[0]
+            m = re.search(r"\[add-on (\S+)\]", it.text())
+            if m:
+                ticks.append(m.group(1))
             if not any(self.chosen.item(i).text() == name for i in range(self.chosen.count())):
                 self.chosen.addItem(name)
+        if ticks:                                      # an add-on species needs its add-on
+            have = self.addon_ids()
+            self.addon_combo.set_checked(have + [t for t in ticks if t not in have])
+            self._addons_changed()
         self.update_tree()
 
     def _remove_selected(self):

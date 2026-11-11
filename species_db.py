@@ -68,9 +68,20 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REG = os.path.join(_HERE, "mechanisms")
 
 
+def _manifest_kind(folder: str) -> str:
+    try:
+        import json
+        with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as fh:
+            return str(json.load(fh).get("kind", "base"))
+    except (OSError, ValueError):
+        return "base"
+
+
 def _registry_sources():
     """Species tables shipped with the repository (mechanism registry): every machine has these.
-    base/<ID>/*.tsv are MCM exports (positional), addons/<ID>/*.tsv are clean tables."""
+    base/<ID>/*.tsv are MCM exports (positional), addons/<ID>/*.tsv are clean tables.
+    The tables of complete bases (GECKO-A, lumped) are NOT global: their names are only valid in a run of
+    that base (a GECKO-A code such as G2T70GE is a different molecule in every generator run) -> base_sources()."""
     out = []
     for kind, mode in (("base", 'positional'), ("addons", 'clean')):
         d = os.path.join(_REG, kind)
@@ -78,12 +89,63 @@ def _registry_sources():
             continue
         for mid in sorted(os.listdir(d)):
             md = os.path.join(d, mid)
-            if not os.path.isdir(md):
+            if not os.path.isdir(md) or (kind == "base" and _manifest_kind(md) in ("gecko", "lumped")):
                 continue
             for fn in sorted(os.listdir(md), key=lambda f: f != "mcm_export_species.tsv"):   # the clean export first
                 if fn.lower().endswith(".tsv"):
                     out.append((os.path.join(md, fn), 'clean' if fn == "mcm_export_species.tsv" else mode))
     return out
+
+
+def base_sources(base_id: str):
+    """The species table of a complete base (GECKO-A or lumped): read before the global sources, so that its
+    names mean what they mean in that mechanism. [] for an MCM base or an unknown id."""
+    md = os.path.join(_REG, "base", base_id or "")
+    if not base_id or not os.path.isdir(md) or _manifest_kind(md) not in ("gecko", "lumped"):
+        return []
+    return [(os.path.join(md, fn), 'clean') for fn in sorted(os.listdir(md)) if fn.lower().endswith(".species.tsv")]
+
+
+def _addon_manifest_species(db: dict) -> None:
+    """Species an add-on declares in its manifest (adds_species: NAME -> formula), e.g. NOAA_BB's FURAN."""
+    import json
+    d = os.path.join(_REG, "addons")
+    if not os.path.isdir(d):
+        return
+    for mid in sorted(os.listdir(d)):
+        try:
+            with open(os.path.join(d, mid, "manifest.json"), encoding="utf-8") as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        ro2 = {s.upper() for s in m.get("ro2", [])}
+        for name, formula in (m.get("adds_species") or {}).items():
+            _merge(db, name.upper(), formula or "", 0.0, name.upper() in ro2, "", f"addon {mid}")
+
+
+def base_of_run(path: str) -> str:
+    """The base mechanism a run used, from its EASY provenance line ('; CHEMISTRY: base <ID> (') or its
+    experiment description, for a .cs/.easy/.json path of the run. '' if unknown."""
+    import json
+    import re as _re
+    stem = os.path.splitext(path)[0]
+    for cand in (stem + ".easy", stem.replace("_juice", "") + ".easy"):
+        try:
+            with open(cand, encoding="latin-1", errors="replace") as fh:
+                for line in fh:
+                    m = _re.match(r";\s*CHEMISTRY:\s*base\s+(\S+)\s+\(", line)
+                    if m:
+                        return m.group(1)
+        except OSError:
+            pass
+    for cand in (stem + ".experiment.json", stem + ".field.json"):
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                d = json.load(fh)
+            return str(d.get("base_mechanism") or (d.get("chemistry") or {}).get("base_mechanism") or "")
+        except (OSError, ValueError):
+            pass
+    return ""
 
 
 DEFAULT_SOURCES = [
@@ -366,17 +428,20 @@ class SpeciesDB:
 
 
 _CACHE = {}
-def load_species_db(extra_paths=None, quiet=True, reload=False) -> SpeciesDB:
+def load_species_db(extra_paths=None, quiet=True, reload=False, base_id: str = "") -> SpeciesDB:
     """Read every source TSV once (cached) and return the shared SpeciesDB. extra_paths appends
     scenario-specific sources: each is a path (parsed 'clean') or a (path, mode) tuple.
-    reload=True rebuilds the cache."""
+    base_id: the base mechanism of the run (GECKO-A or lumped: its own species table comes first, so its names
+    mean what they mean there; species_db.base_of_run(cs_path) finds it). reload=True rebuilds the cache."""
     extras = [(p if isinstance(p, tuple) else (p, 'clean')) for p in (extra_paths or [])]
-    key = tuple(extras)
+    first = base_sources(base_id)
+    key = (tuple(first), tuple(extras))
     if reload: _CACHE.pop(key, None)
     if key in _CACHE: return _CACHE[key]
     table = {}
-    for path, mode in DEFAULT_SOURCES + extras:
+    for path, mode in first + DEFAULT_SOURCES + extras:
         _load_one(path, mode, table, quiet)
+    _addon_manifest_species(table)
     if not quiet:
         nro2 = sum(1 for v in table.values() if v.is_ro2)
         print(f"species_db: {len(table)} species ({nro2} RO2) from {len(DEFAULT_SOURCES)+len(extras)} sources")

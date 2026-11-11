@@ -99,6 +99,23 @@ except ImportError:
     MCM_DB = {}
     KNOWN_ZERO_CARBON = frozenset()
 
+
+def _use_species_of_run(csv_path) -> str:
+    """Point MCM_DB at the species table of the run's base mechanism. A GECKO-A or lumped base brings its own
+    names (G<code> means a different molecule in every generator run), so they must not come from another base.
+    Returns the base id ('' = the MCM / global table)."""
+    global MCM_DB
+    try:
+        import species_db as _sdb
+        base = _sdb.base_of_run(csv_path) if csv_path else ""
+        db = _sdb.load_species_db(base_id=base)
+        if len(getattr(db, "_t", {})):
+            MCM_DB = db
+        return base
+    except Exception as e:                  # the viewer works with the global table as before
+        print(f"[viewer] species of the run's base mechanism not loaded: {e}")
+        return ""
+
 try:
     from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                  QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
@@ -986,6 +1003,7 @@ class ResultsViewer(QMainWindow):
 
     def __init__(self, df, csv_path=None, toml_path=None):
         super().__init__()
+        _use_species_of_run(csv_path)          # formulas/SMILES of this run's base mechanism (GECKO-A codes are per run)
         self.df = df.copy()
         self._toml_path = toml_path
         self._color_index = 0

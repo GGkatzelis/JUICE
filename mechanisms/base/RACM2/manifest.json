@@ -2,7 +2,7 @@
  "kind": "lumped",
  "id": "RACM2",
  "name": "RACM2",
- "version": "F0AM Chem/RACM2, converted 2026-11-10",
+ "version": "F0AM Chem/RACM2, converted 2026-11-11",
  "files": {
   "physics": "racm2.physics.incl",
   "aliases": "racm2.aliases.incl",
@@ -13,13 +13,13 @@
   "species_tsv": "racm2.species.tsv"
  },
  "checksums": {
-  "racm2.physics.incl": "ef74c506b46a4630bced4b175aaa7db34494c15d47d178e2fc5c1187d1c5d4f7",
-  "racm2.aliases.incl": "dbfcde1e26fef6e9e9c99e999e16ec4cb630b4a7e3566c4982734616e4349a34",
-  "racm2.chem.incl": "8b4b98f6710c1431ad0b3b6739050c78ca8f8b769020fd0b62708a4dc15da94a",
-  "racm2.phot.incl": "a916cbbf9ed0e99653e7dbb8f1c0c370d7f4790c6b6376379f2bace400254f00",
+  "racm2.physics.incl": "82e6779c531f967efa9d551f0d2f4a072c8f96248418965019aff78782e817a2",
+  "racm2.aliases.incl": "ee304b210aa0f1a0c9d8bed67571e75d9498a5679aaec9c53b8113d418e93c0d",
+  "racm2.chem.incl": "4d70ed724474f11116cc7c40564e531546b4d2ff0daa5a937f0428c8336464be",
+  "racm2.phot.incl": "45a8bcb5cb651b5758786715a40f26c59403ba9c170949d0ee69417fe29b3ae0",
   "RACM2.dil.mech": "b9fb624a3033d46f0c8f6c5184b374d44301d2281ddb495daf1ed9700d4d5e1f",
   "RACM2.dil.rate": "09a529c1dc1eb965223ef4f6eef17e3cb35d4ff645fae89d8f552fb211c365be",
-  "racm2.species.tsv": "6f1552468b0cb8a4e7d70f0e695b719f59a748bbfbc04be4e2f8669ebda42bb3"
+  "racm2.species.tsv": "fe1c7a36e936961bcc2a7eedccbf53d645c765a9c78040d2afc92b7d4279b6d4"
  },
  "source": {
   "f0am_path": "Chem/RACM2",
@@ -30,7 +30,7 @@
    "RACM2_K.m": "6b2a19be13049eafc5c7515587d6c15ca98730fe1953b895224507e06254c39c",
    "RACM2_J.m": "5074e56adce9cfee341452993fbc3721bbde3f1ce07c603ef9f3e31d0110a9a0"
   },
-  "converted": "2026-11-10",
+  "converted": "2026-11-11",
   "converter": "f0am_import.py",
   "license": "GPL-3.0 (F0AM)"
  },

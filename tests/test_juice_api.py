@@ -98,7 +98,8 @@ def test_chamber_window_prepare_writes_the_script(app, tmp_path):
     for k, ext in (("enz", ".enz"), ("easy", ".easy")):
         assert filecmp.cmp(again[k], str(tmp_path / held.name / (held.name + ext)), shallow=False), k
     text = script.read_text(encoding="utf-8")
-    assert f"SOLVER = {w.page_run.solver.currentData()!r}" in text and "KV_PD = False" in text
+    assert f"solver = {w.page_run.solver.currentData()!r}" in text and "kv_pd = False" in text
+    assert "# STEP 1 — EXPERIMENT" in text and "# STEP 5 — RUN" in text
     w.close()
 
 
@@ -145,3 +146,32 @@ def test_chemistry_step_shows_planned_entries_greyed_out(app):
         assert not combo.model().item(i).isEnabled()
     assert combo.currentData() == "MCM_v3.3.1"
     w.close()
+
+
+def test_species_search_lists_addon_species_and_ticks_the_addon(app):
+    import juice_gui
+    from experiment_wizard import ChemistryPage
+    w = juice_gui.JuiceWindow("")
+    page = w.findChildren(ChemistryPage)[0]
+    page.search.setText("FURAN")
+    items = [page.candidates.item(i).text() for i in range(page.candidates.count())]
+    assert any(t.startswith("FURAN ") and "[add-on NOAA_BB]" in t for t in items)
+    row = next(i for i, t in enumerate(items) if t.startswith("FURAN "))
+    page.candidates.item(row).setSelected(True)
+    page._add_selected()
+    assert "NOAA_BB" in page.addon_ids()
+    assert "FURAN" in [page.chosen.item(i).text() for i in range(page.chosen.count())]
+    w.close()
+
+
+def test_species_lookup_is_per_base_mechanism():
+    import species_db as sdb
+    assert sdb.load_species_db().get("G2T70GE") is None                 # GECKO-A codes are not global names
+    import mechanism_registry as mreg
+    bases = mreg.load_bases()
+    if {"GECKOA_toluene", "GECKOA_apinene"} <= set(bases):
+        assert sdb.load_species_db(base_id="GECKOA_toluene").get("G2T70GE").formula == "C7H8NO10"
+        assert sdb.load_species_db(base_id="GECKOA_apinene").get("G2T70GE").formula == "C7H7N2O11"
+    if "CRACMM2" in bases:
+        assert sdb.load_species_db(base_id="CRACMM2").get("ISO").formula == "C5H8"
+    assert sdb.load_species_db().get("FURAN").formula == "C4H4O"            # add-on species from its manifest

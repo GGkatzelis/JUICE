@@ -1,194 +1,194 @@
-Name	Formula	MCM name
-O3		
-O3P		
-O1D		
-H2O2		
-HO		
-NO2		
-NO		
-NO3		
-HONO		
-HNO3		
-HNO4		
-HO2		
-HCHO		
-CO		
-ACD		CH3CHO
-MO2		CH3O2
-ALD		
-ETHP		C2H5O2
-ACT		CH3COCH3
-ACO3		CH3CO3
-UALD		
-KET		
-PINAL		
-HC10P		
-LIMAL		
-MEK		
-HKET		
-MACR		
-MACP		
-XO2		
-MVK		
-GLY		GLYOX
-MGLY		MGLYOX
-DCB1		
-DCB2		
-BALD		
-CHO		
-OP1		
-OP2		
-OPB		
-OP3		
-PAA		CH3CO3H
-ONIT		
-PAN		
-TRPN		
-HONIT		
-N2O5		
-SO2		
-SULF		
-SULRXN		
-ETH		C2H6
-HC3		
-HC3P		
-ASOATJ		
-HC5		
-HC5P		
-ETE		C2H4
-ETEP		
-OLT		
-OLTP		
-OLI		
-OLIP		
-ACE		C2H2
-ORA1		HCOOH
-BEN		BENZENE
-BENP		
-PHEN		
-TOL		TOLUENE
-TOLP		
-CSL		
-XYL		
-XYLP		
-EBZ		
-EBZP		
-ISO		C5H8
-ISON		
-INO2		
-ISOP		
-ISHP		
-IEPOX		
-IPX		
-INALD		
-API		APINENE
-APIP1		
-APIP2		
-LIM		LIMONENE
-LIMP1		
-LIMP2		
-PINALP		
-RCO3		
-LIMALP		
-ACTP		
-MEKP		
-KETP		
-MCP		
-MVKP		
-UALP		
-DCB3		
-BALP		
-ADDC		
-MCT		
-MCTO		
-MOH		CH3OH
-EOH		C2H5OH
-ROH		
-ETEG		
-MAHP		
-ORA2		CH3CO2H
-ORAP		
-PPN		
-MPAN		
-MCTP		
-OLNN		
-OLND		
-APINP1		
-APINP2		
-LIMNP1		
-LIMNP2		
-ADCN		
-HOM		
-VROCP4OXY2		
-VROCN1OXY6		
-FURANONE		
-VROCP3OXY2		
-VROCP0OXY4		
-BAL1		
-BAL2		
-ELHOM		
-VROCIOXY		
-SLOWROC		
-ACRO		ACR
-BDE13		C4H6
-BDE13P		
-FURAN		
-FURANO2		
-PROG		
-SESQ		
-SESQNRO2		
-VROCN2OXY2		
-SESQRO2		
-VROCP0OXY2		
-VROCP1OXY3		
-AGLYJ		
-IEPOXP		
-AISO3NOSJ		
-ASO4J		
-AISO3OSJ		
-AISO4J		
-AISO5J		
-VROCP6ALK		
-VROCP6ALKP		
-VROCP5ALK		
-VROCP5ALKP		
-VROCP4ALK		
-VROCP4ALKP		
-VROCP3ALK		
-VROCP3ALKP		
-VROCP2ALK		
-VROCP2ALKP		
-VROCP1ALK		
-VROCP1ALKP		
-HC10		
-VROCP6ALKP2		
-VROCP5ALKP2		
-VROCP4ALKP2		
-VROCP2OXY2		
-VROCP3ALKP2		
-VROCP1OXY1		
-VROCP2ALKP2		
-VROCP1ALKP2		
-VROCN1OXY1		
-HC10P2		
-VROCP6ARO		
-VROCP6AROP		
-VROCN2OXY4		
-VROCN1OXY3		
-VROCP5ARO		
-VROCP5AROP		
-NAPH		
-NAPHP		
-VROCN2OXY8		
-VROCP5OXY1		
-VROCP6OXY1		
-ECH4		
-ATRPNJ		
-AHOMJ		
-AHONITJ		
-STY		STYRENE
-STYP		
-CH4		
-DELTA_SI		
-DELTA_N		
-DELTA_C		
+Name	Formula	MCM name	PeroxyRadical
+O3	O3		false
+O3P	O		false
+O1D	O		false
+H2O2	H2O2		false
+HO	HO		false
+NO2	NO2		false
+NO	NO		false
+NO3	NO3		false
+HONO	HNO2		false
+HNO3	HNO3		false
+HNO4			false
+HO2	HO2		false
+HCHO	CH2O		false
+CO	CO		false
+ACD	C2H4O	CH3CHO	false
+MO2	CH3O2	CH3O2	false
+ALD			false
+ETHP	C2H5O2	C2H5O2	false
+ACT	C3H6O	CH3COCH3	false
+ACO3	C2H3O3	CH3CO3	false
+UALD			false
+KET			false
+PINAL			false
+HC10P			false
+LIMAL			false
+MEK	C4H8O		false
+HKET			false
+MACR	C4H6O		false
+MACP			false
+XO2			false
+MVK	C4H6O		false
+GLY	C2H2O2	GLYOX	false
+MGLY	C3H4O2	MGLYOX	false
+DCB1			false
+DCB2			false
+BALD			false
+CHO			false
+OP1			false
+OP2			false
+OPB			false
+OP3			false
+PAA	C2H4O3	CH3CO3H	false
+ONIT			false
+PAN	C2H3NO5		false
+TRPN			false
+HONIT			false
+N2O5	N2O5		false
+SO2	O2S		false
+SULF			false
+SULRXN			false
+ETH	C2H6	C2H6	false
+HC3			false
+HC3P			false
+ASOATJ			false
+HC5			false
+HC5P			false
+ETE	C2H4	C2H4	false
+ETEP			false
+OLT			false
+OLTP			false
+OLI			false
+OLIP			false
+ACE	C2H2	C2H2	false
+ORA1	CH2O2	HCOOH	false
+BEN	C6H6	BENZENE	false
+BENP			false
+PHEN			false
+TOL	C7H8	TOLUENE	false
+TOLP			false
+CSL			false
+XYL			false
+XYLP			false
+EBZ			false
+EBZP			false
+ISO	C5H8	C5H8	false
+ISON			false
+INO2			false
+ISOP			false
+ISHP			false
+IEPOX			false
+IPX			false
+INALD			false
+API	C10H16	APINENE	false
+APIP1			false
+APIP2			false
+LIM	C10H16	LIMONENE	false
+LIMP1			false
+LIMP2			false
+PINALP			false
+RCO3			false
+LIMALP			false
+ACTP			false
+MEKP			false
+KETP			false
+MCP			false
+MVKP			false
+UALP			false
+DCB3			false
+BALP			false
+ADDC			false
+MCT			false
+MCTO			false
+MOH	CH4O	CH3OH	false
+EOH	C2H6O	C2H5OH	false
+ROH			false
+ETEG			false
+MAHP			false
+ORA2	C2H4O2	CH3CO2H	false
+ORAP			false
+PPN			false
+MPAN	C4H5NO5		false
+MCTP			false
+OLNN			false
+OLND			false
+APINP1			false
+APINP2			false
+LIMNP1			false
+LIMNP2			false
+ADCN			false
+HOM			false
+VROCP4OXY2			false
+VROCN1OXY6			false
+FURANONE			false
+VROCP3OXY2			false
+VROCP0OXY4			false
+BAL1			false
+BAL2			false
+ELHOM			false
+VROCIOXY			false
+SLOWROC			false
+ACRO	C3H4O	ACR	false
+BDE13	C4H6	C4H6	false
+BDE13P			false
+FURAN			false
+FURANO2			false
+PROG			false
+SESQ			false
+SESQNRO2			false
+VROCN2OXY2			false
+SESQRO2			false
+VROCP0OXY2			false
+VROCP1OXY3			false
+AGLYJ			false
+IEPOXP			false
+AISO3NOSJ			false
+ASO4J			false
+AISO3OSJ			false
+AISO4J			false
+AISO5J			false
+VROCP6ALK			false
+VROCP6ALKP			false
+VROCP5ALK			false
+VROCP5ALKP			false
+VROCP4ALK			false
+VROCP4ALKP			false
+VROCP3ALK			false
+VROCP3ALKP			false
+VROCP2ALK			false
+VROCP2ALKP			false
+VROCP1ALK			false
+VROCP1ALKP			false
+HC10			false
+VROCP6ALKP2			false
+VROCP5ALKP2			false
+VROCP4ALKP2			false
+VROCP2OXY2			false
+VROCP3ALKP2			false
+VROCP1OXY1			false
+VROCP2ALKP2			false
+VROCP1ALKP2			false
+VROCN1OXY1			false
+HC10P2			false
+VROCP6ARO			false
+VROCP6AROP			false
+VROCN2OXY4			false
+VROCN1OXY3			false
+VROCP5ARO			false
+VROCP5AROP			false
+NAPH			false
+NAPHP			false
+VROCN2OXY8			false
+VROCP5OXY1			false
+VROCP6OXY1			false
+ECH4			false
+ATRPNJ			false
+AHOMJ			false
+AHONITJ			false
+STY	C8H8	STYRENE	false
+STYP			false
+CH4	CH4		false
+DELTA_SI			false
+DELTA_N			false
+DELTA_C			false

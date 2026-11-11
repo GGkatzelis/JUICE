@@ -11,6 +11,7 @@ There are two ways in:
 - **Start from scratch.** Write a script with `import juice`, as in the examples below.
 
 All of it is in one module, [`juice.py`](../juice.py). The examples are in [`examples/`](../examples).
+[`run_path.md`](run_path.md) follows one run through the files it calls, and shows where you can step in.
 
 ## 1. Setup
 
@@ -124,9 +125,9 @@ and in how closely they follow FACSIMILE:
 
 | profile | method | use it for |
 |---|---|---|
-| `fast` (default) | BDF with the exact Jacobian, relative tolerance 1e-3 | everyday runs |
-| `precise` | the same at a tighter tolerance | the closest agreement with FACSIMILE |
-| `twostep` | Verwer's TWOSTEP, no Jacobian | very large mechanisms (GECKO-A); also the fastest for the complete MCM |
+| `fast` (default) | BDF with the exact Jacobian, relative tolerance 1e-4, warm continuation across ENZ rows | everyday runs |
+| `precise` | the same at 1e-6, cold restart at every ENZ row | the closest agreement with FACSIMILE |
+| `twostep` | Verwer's TWOSTEP, no Jacobian, relative tolerance 1e-3 | very large mechanisms (GECKO-A); also the fastest for the complete MCM |
 
 Other chemistry is one field away:
 
@@ -144,34 +145,50 @@ exp = juice.new_experiment("my_run", template="voc_photooxidation_low_nox")
 ## 6. From the window to code
 
 When the Run step prepares an experiment, the run folder gets `<name>_run.py` besides the ENZ, EASY and
-JSON files. The field window does the same. A shortened example:
+JSON files. The field window does the same. The file follows the window's steps and writes out every
+field with what it means. Shortened:
 
 ```python
-OUT = os.path.dirname(os.path.abspath(__file__))   # where the input files and results go
-SOLVER = 'fast'       # fast | precise | twostep
-TOML = r'...\GG_GUI.toml'
-KV_PD = True          # also export reaction rates (Process Analysis); False is faster
-
 def build():
-    exp = juice.new_experiment('uv_lights_on_off', chamber='generic_lamps')
+    # STEP 1 — EXPERIMENT: which chamber, when, and where the conditions come from
+    exp = juice.new_experiment('saphir_isoprene', chamber='SAPHIR')
     c = exp.conditions
-    c.date = '2024-07-09'
-    c.source = 'manual'    # manual | archive | file
+    c.date = '2024-07-09'    # YYYY-MM-DD, UTC
+    c.source = 'manual'      # manual | file | archive (the SAPHIR data archive of that day)
+    c.input_file = ''        # the table for source 'file' (full path)
     ...
-    exp.injections = [
-        juice.Injection(name='ethanol', products='C2H5OH', total_ppb='200', start='10:30', duration_min=10),
-    ]
-    # chamber effects: the generic_lamps defaults (exp.chamber.<name> to change one)
+    # STEP 2 — CHEMISTRY: which mechanism, which compounds
+    exp.base_mechanism = 'MCM_v3.3.1'
+    exp.precursors = ['C5H8']
+    ...
+    # STEP 3 — INJECTIONS     exp.injections = [juice.Injection(...), ...]
+    # STEP 4 — CHAMBER        ch = exp.chamber; ch.hono = True; ch.hono_const = '2.6*0.7'; ...
+    # EASY SETTINGS AND PROVENANCE
     return exp
+
+def main():
+    exp = build()
+    # STEP 5 — RUN
+    solver = 'fast'          # fast | precise | twostep | None (the settings file's)
+    kv_pd = True             # rates and production/destruction for Process Analysis
+    files = juice.write(exp, OUT, TOML)                     # 1  input files (edit them here if you must)
+    json_path = juice.prepare(exp, OUT, solver=solver, toml=TOML, kv_pd=kv_pd, files=files)
+    cs_path = juice.solve(json_path, TOML)                  # 3  the solver
+    r = juice.results(cs_path, exp)                         # 4  results as a table
 ```
 
 - `python <name>_run.py` rebuilds the experiment, writes its files into `OUT`, runs the solver and prints
   a summary.
 - `build()` returns exactly the experiment the window held, field by field. The test suite checks this
   for every template and example and through both windows.
-- Only the fields that differ from the chamber's defaults are written out, plus the main ones, so the
-  file stays short. Every field of `exp`, `exp.conditions` and `exp.chamber` can still be set.
+- Every field is written out with a comment, including the chamber processes' expressions and the EASY
+  settings, so the file documents the experiment completely.
 - Running the file again in its own folder overwrites that run. Change `OUT` to keep both.
+
+[`examples/saphir_isoprene.py`](../examples/saphir_isoprene.py) is the same structure written by hand,
+with longer notes: where a conditions file goes and how to hold NO2 or O3 to it, injections from a liquid
+volume or a flow, the solver choice, and an off-road section (loops, your own chemistry, editing the input
+files, another chamber).
 
 A saved experiment can also be loaded directly:
 

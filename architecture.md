@@ -35,6 +35,9 @@ results_viewer.py                            Overview, Timeseries, Process analy
                                              Budgets, Chemical space, figure list → .pptx
 ```
 
+[`docs/run_path.md`](docs/run_path.md) follows one experiment through this pipeline function by function,
+with the files each stage reads and writes and where a user can change something.
+
 An existing IDL-written `.easy` enters at the second box and takes the same path, which is how the
 reference scenes are checked. In the GUI it enters at the first box instead: `facsimile_import.py`
 reads the `.easy` and its ENZ back into an `ExperimentSpec` (the ENZ becomes the measured-inputs

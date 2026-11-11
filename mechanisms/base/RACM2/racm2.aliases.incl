@@ -1,4 +1,4 @@
-; racm2.aliases.incl -- RACM2 from the F0AM chemistry library (Chem/RACM2), converted by f0am_import.py 2026-11-10
+; racm2.aliases.incl -- RACM2 from the F0AM chemistry library (Chem/RACM2), converted by f0am_import.py 2026-11-11
 ; Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
 ; source files sha256[:16]: RACM2_AllRxns.m 74850b8b2da16cc1, RACM2_K.m 6b2a19be13049eaf, RACM2_J.m 5074e56adce9cfee
 ; ALIAS[canonical] = alternatives: the parsers replace every alternative by the canonical name in reactions

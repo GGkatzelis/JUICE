@@ -2,7 +2,7 @@
  "kind": "lumped",
  "id": "CRACMM2",
  "name": "CRACMM 2",
- "version": "F0AM Chem/CRACMM2, converted 2026-11-10",
+ "version": "F0AM Chem/CRACMM2, converted 2026-11-11",
  "files": {
   "physics": "cracmm2.physics.incl",
   "aliases": "cracmm2.aliases.incl",
@@ -13,13 +13,13 @@
   "species_tsv": "cracmm2.species.tsv"
  },
  "checksums": {
-  "cracmm2.physics.incl": "d9ff45e9633f8902869d27a86a4a4ec77b2b91cae5311d9fc77213a812a99c70",
-  "cracmm2.aliases.incl": "359900e58c6c772746226e0dace460b2f88f80b352b140789adf9c1a37396feb",
-  "cracmm2.chem.incl": "a98cfe49e35572ec5c5a932cb51d9820367d92de7048b3e95b2e4f6d5c435b04",
-  "cracmm2.phot.incl": "bf1686415938e7c5fa35294e7a55b51561f22c7572d6b320689458e9d23ca2d6",
+  "cracmm2.physics.incl": "440e7ec5ef1bef40555856404fdf2e6c7acb892c48c4d0a31ac797b98eec8aa4",
+  "cracmm2.aliases.incl": "b8573d696734b9ad57cdc214162dfc1932ddad6389f44bdf879a5599bd717e9f",
+  "cracmm2.chem.incl": "97f559fd514ff78179f7a72fbb04a49c4eabf981dc9d40711831b431e81c3bf6",
+  "cracmm2.phot.incl": "8d3b78431adf3b3e51e4489ecd9f94242fde842cb102f624792baf439270ec34",
   "CRACMM2.dil.mech": "4b9abf2544fcb7fed31a6d0eefd0442ea6c6ed3b9c8ee8188e5ab4f199d84364",
   "CRACMM2.dil.rate": "b13843b9264fdd13111a1feff85d3d2f24ba9dfe7a5e293a3b72fa522989a4fe",
-  "cracmm2.species.tsv": "06a4c7b879705b43f20aab7b6cc0e3ee93515ef8f62ed22228c03b2985e5d0b2"
+  "cracmm2.species.tsv": "67dd9126cb17aeb4d0fd7741ecc588d51744367453671605b8bee07d35776dd2"
  },
  "source": {
   "f0am_path": "Chem/CRACMM2",
@@ -30,7 +30,7 @@
    "cracmm2_K.m": "07d002a6b97b27c18f2c9fb544b96d0dbeaabd058f9cbd0145dba943e2508390",
    "cracmm2_J.m": "6ec61d35f114b129bf6d4dea93a82307adb2116fcec87e6c712bd1425889437d"
   },
-  "converted": "2026-11-10",
+  "converted": "2026-11-11",
   "converter": "f0am_import.py",
   "license": "GPL-3.0 (F0AM)"
  },

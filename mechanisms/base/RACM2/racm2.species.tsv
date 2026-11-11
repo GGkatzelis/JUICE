@@ -1,117 +1,117 @@
-Name	Formula	MCM name
-ACD		CH3CHO
-ACE		C2H2
-ACO3		CH3CO3
-ACT		CH3COCH3
-ACTP		
-ADCN		
-ADDC		
-ALD		
-API		APINENE
-APIP		
-BALD		
-BALP		
-BAL1		
-BAL2		
-BEN		BENZENE
-BENP		
-CH4		
-CHO		
-CO		
-CO2		
-CSL		
-DCB1		
-DCB2		
-DCB3		
-DIEN		
-EOH		C2H5OH
-EPX		
-ETE		C2H4
-ETEG		
-ETEP		
-ETH		C2H6
-ETHP		C2H5O2
-GLY		GLYOX
-H2		
-H2O2		
-HC3		
-HC3P		
-HC5		
-HC5P		
-HC8		
-HC8P		
-HCHO		
-HKET		
-HNO3		
-HONO		
-HO2		
-HO2NO2		
-ISHP		
-ISO		C5H8
-ISON		
-ISOP		
-KET		
-KETP		
-LIM		LIMONENE
-LIMP		
-MACP		
-MACR		
-MAHP		
-MCP		
-MCT		
-MCTO		
-MCTP		
-MEK		
-MEKP		
-MGLY		MGLYOX
-MO2		CH3O2
-MOH		CH3OH
-MPAN		
-MVK		
-MVKP		
-N2O5		
-NALD		
-NO		
-NO2		
-NO3		
-O3		
-O3P		
-OH		
-OLI		
-OLIP		
-OLND		
-OLNN		
-OLT		
-OLTP		
-ONIT		
-OP1		
-OP2		
-ORA1		HCOOH
-ORA2		CH3CO2H
-ORAP		
-O1D		
-PAA		CH3CO3H
-PAN		
-PER1		
-PER2		
-PHEN		
-PPN		
-RCO3		
-ROH		
-SO2		
-SULF		
-TLP1		
-TOL		TOLUENE
-TOLP		
-TR2		
-UALD		
-UALP		
-XO2		
-XY2		
-XYL1		
-XYLP		
-XYM		
-XYO		
-XYP		
-XYO2		
-XYOP		
+Name	Formula	MCM name	PeroxyRadical
+ACD	C2H4O	CH3CHO	false
+ACE	C2H2	C2H2	false
+ACO3	C2H3O3	CH3CO3	false
+ACT	C3H6O	CH3COCH3	false
+ACTP			false
+ADCN			false
+ADDC			false
+ALD			false
+API	C10H16	APINENE	false
+APIP			false
+BALD			false
+BALP			false
+BAL1			false
+BAL2			false
+BEN	C6H6	BENZENE	false
+BENP			false
+CH4	CH4		false
+CHO			false
+CO	CO		false
+CO2			false
+CSL			false
+DCB1			false
+DCB2			false
+DCB3			false
+DIEN			false
+EOH	C2H6O	C2H5OH	false
+EPX			false
+ETE	C2H4	C2H4	false
+ETEG			false
+ETEP			false
+ETH	C2H6	C2H6	false
+ETHP	C2H5O2	C2H5O2	false
+GLY	C2H2O2	GLYOX	false
+H2	H2		false
+H2O2	H2O2		false
+HC3			false
+HC3P			false
+HC5			false
+HC5P			false
+HC8			false
+HC8P			false
+HCHO	CH2O		false
+HKET			false
+HNO3	HNO3		false
+HONO	HNO2		false
+HO2	HO2		false
+HO2NO2			false
+ISHP			false
+ISO	C5H8	C5H8	false
+ISON			false
+ISOP			false
+KET			false
+KETP			false
+LIM	C10H16	LIMONENE	false
+LIMP			false
+MACP			false
+MACR	C4H6O		false
+MAHP			false
+MCP			false
+MCT			false
+MCTO			false
+MCTP			false
+MEK	C4H8O		false
+MEKP			false
+MGLY	C3H4O2	MGLYOX	false
+MO2	CH3O2	CH3O2	false
+MOH	CH4O	CH3OH	false
+MPAN	C4H5NO5		false
+MVK	C4H6O		false
+MVKP			false
+N2O5	N2O5		false
+NALD			false
+NO	NO		false
+NO2	NO2		false
+NO3	NO3		false
+O3	O3		false
+O3P	O		false
+OH	HO		false
+OLI			false
+OLIP			false
+OLND			false
+OLNN			false
+OLT			false
+OLTP			false
+ONIT			false
+OP1			false
+OP2			false
+ORA1	CH2O2	HCOOH	false
+ORA2	C2H4O2	CH3CO2H	false
+ORAP			false
+O1D	O		false
+PAA	C2H4O3	CH3CO3H	false
+PAN	C2H3NO5		false
+PER1			false
+PER2			false
+PHEN			false
+PPN			false
+RCO3			false
+ROH			false
+SO2	O2S		false
+SULF			false
+TLP1			false
+TOL	C7H8	TOLUENE	false
+TOLP			false
+TR2			false
+UALD			false
+UALP			false
+XO2			false
+XY2			false
+XYL1			false
+XYLP			false
+XYM			false
+XYO			false
+XYP			false
+XYO2			false
+XYOP			false
