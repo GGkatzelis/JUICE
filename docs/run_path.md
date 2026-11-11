@@ -149,7 +149,7 @@ hand: `python scenario_runner.py <name>.json --solver precise`.
 |---|---|
 | **Files** | `juice.py` (`Results`), `run_benchmark.py` (`parse_cs_file`), `results_viewer.py` |
 | **Reads** | `<name>.cs` (and `.kv`, `.pd` for the viewer's Process Analysis) |
-| **Does** | reads the columns into a table. `ppb()` converts with the experiment's pressure and temperature |
+| **Does** | reads the columns into a table. `ppb()` converts with the model's air density (column `M`) |
 | **Step in** | anything you do with the numbers. `r.df` is a pandas DataFrame |
 
 ## 7. The same path from the window
@@ -167,7 +167,10 @@ the same work as the script:
 
 A **field case** (`field_window.py`, `juice.new_field_case`) differs only in ①. `field_spec.check` reads
 its one table, and `field_scenario.write_case` writes the ENZ and EASY: emissions, background, held
-species, dilution, deposition. Then ②–④ are the same files and functions.
+species, dilution, deposition. Then ②–④ are the same files and functions. After ④, `juice.skill`
+(`field_scenario.skill_table`) compares the model with the table's `O_` columns → `<name>_skill.csv`.
+The walk-through is [`examples/field_site.py`](../examples/field_site.py); the lamp chamber's is
+[`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py).
 
 ## 8. I want to change …
 

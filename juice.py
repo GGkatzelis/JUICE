@@ -236,8 +236,10 @@ class Results:
         return self.df[name].to_numpy(float)
 
     def ppb(self, name: str):
-        """Mixing ratio in ppb, with the air density of the pressure and temperature given (constant)."""
-        return self[name] / self.M * 1e9
+        """Mixing ratio in ppb, with the model's own air density (the M column of the results file; the
+        pressure and temperature given only when a file has no M column)."""
+        M = self.df["M"].to_numpy(float) if "M" in self.df.columns else self.M
+        return self[name] / M * 1e9
 
 
 def results(cs_path: str, spec: Optional[Spec] = None) -> Results:
@@ -247,11 +249,24 @@ def results(cs_path: str, spec: Optional[Spec] = None) -> Results:
     return Results(cs_path)
 
 
+def skill(case: FieldSpec, cs_path: str) -> Tuple[List[dict], str]:
+    """Field case: the model against the O_ columns of its table, per species: n, means, bias, normalised
+    mean bias, RMSE and R² (ppb, the model interpolated to the table's times).  Writes <name>_skill.csv next
+    to the results, as the field window's Run step does.  Returns (rows, path); path '' without O_ columns."""
+    import field_scenario as fsc
+    table, rep = fs.check(case)
+    if table is None:
+        raise ValueError("the field case has errors:\n" + rep.text())
+    return fsc.skill_table(cs_path, table), fsc.write_skill(cs_path, table)
+
+
 class Run:
-    """What juice.run returns: the files of one run and its results."""
+    """What juice.run returns: the files of one run and its results (and, for a field case, the skill
+    table: .skill_path)."""
 
     def __init__(self, spec: Spec, out_dir: str, files: dict, json_path: str, cs_path: str, seconds: float):
         self.spec, self.out_dir, self.files, self.json, self.cs, self.seconds = spec, out_dir, files, json_path, cs_path, seconds
+        self.skill_path = ""
 
     def results(self) -> Results:
         return results(self.cs, self.spec)
@@ -279,7 +294,10 @@ def run(spec: Spec, out_dir: str, solver: Optional[str] = None, toml: str = "", 
         write_script(spec, os.path.join(os.path.abspath(out_dir), spec.name + "_run.py"), solver=solver, toml=toml, kv_pd=kv_pd)
     js = prepare(spec, out_dir, solver, toml, kv_pd, files=files)
     cs = solve(js, toml, log)
-    return Run(spec, os.path.abspath(out_dir), files, js, cs, time.time() - t0)
+    out = Run(spec, os.path.abspath(out_dir), files, js, cs, time.time() - t0)
+    if isinstance(spec, FieldSpec):                    # the field window's Run step writes it too
+        out.skill_path = skill(spec, cs)[1]
+    return out
 
 
 # ── an experiment as code ────────────────────────────────────────────────────────────────────────
@@ -402,18 +420,20 @@ _FIELD_LAYOUT = {
         ("chemistry", None),
     ],
     "sources": [
+        ("# Held species are the C_ columns, observed-only species the O_ columns: nothing to set here.", None),
         ("default_emission_unit", "unit of E_ columns without [unit]: ppb/s, molec/cm3/s, molec/cm2/s, mol/km2/s, mol/km2/h, mol/s, molec/s"),
         ("area_km2", "footprint A of E/(h*A); needed by mol/s and molec/s"),
         ("emission_scale", "factor on the E_ columns: {species | 'NOX' | 'VOC' | 'ALL': factor}"),
-        ("initials", "ppb at the start: {species: ppb}"),
     ],
     "mixing": [
+        ("# Background air the parcel is diluted towards: the B_ columns of the table.", None),
         ("dilution", " | ".join(fs.DILUTION_SOURCES) + " (pbl: growth of h; table: kdil column; tracer: decay of a held tracer)"),
         ("k_dil_per_h", "dilution 'constant', 1/h"),
         ("k_collapse_per_h", "dilution 'pbl': rate while the layer does not grow, 1/h"),
         ("tracer", "dilution 'tracer': a species with a C_ column"),
         ("deposition_velocity_cm_s", "{species: cm/s}; loss = v/h"),
         ("deposition_lifetime_h", "{species: h}; loss = 1/lifetime"),
+        ("initials", "ppb at the start: {species: ppb}"),
     ],
 }
 
@@ -452,13 +472,34 @@ def _injection_code(ev: Injection) -> List[str]:
     return ["    juice.Injection(" + ",\n                    ".join(args) + "),"]
 
 
+def _light_note(chamber_id: str) -> List[str]:
+    """Comment lines on where the light of a lamp or dark chamber comes from (it is set in the profile,
+    not in the experiment)."""
+    import chambers as chm
+    p = chm.chamber(chamber_id)
+    if p.light_type == "lamps":
+        lt = p.light
+        what = (f"spectrum file {lt['spectrum']}" if lt.get("spectrum") else
+                f"built-in spectrum {lt['spectrum_builtin']}" if lt.get("spectrum_builtin") else
+                "solar-like" if lt.get("solar_like") else "no spectrum given (clear-sky ratios)")
+        return [f"# The light of this chamber is set in its profile, chambers/{p.id}.chamber.json, not here: lamps",
+                f"#   '{lt.get('lamps', '')}', jNO2 at full power {lt.get('jno2_full_s1', 0)} 1/s, {what}; every other J is",
+                "#   jNO2 x the ratio of that spectrum (lamp_photolysis.py). Change it in the chamber editor or that file.",
+                "#   roof_open below means lights on; a 'lights' column (0-1) of a conditions file dims them.", ""]
+    if p.light_type == "dark":
+        return [f"# This chamber has no light source (profile chambers/{p.id}.chamber.json): all J values are 0.", ""]
+    return []
+
+
 def experiment_code(spec: ExperimentSpec) -> List[str]:
     """The body of build(): code that rebuilds `spec` exactly, step by step as in the window."""
     chamber = spec.conditions.chamber_name
     L = _step(1, "EXPERIMENT: which chamber, when, and where the conditions come from",
               "The chamber profile sets the volume, the dilution and the chamber processes; juice.chambers() lists them.")
     L += [f"exp = juice.new_experiment({spec.name!r}, chamber={chamber!r})",
-          f"exp.title = {spec.title!r}", "", "c = exp.conditions"]
+          f"exp.title = {spec.title!r}", ""]
+    L += _light_note(chamber)
+    L += ["c = exp.conditions"]
     done_c: set = set()
     L += _emit("c", spec.conditions, _CHAMBER_LAYOUT["conditions"], done_c) + _rest("c", spec.conditions, done_c)
 
@@ -573,6 +614,7 @@ def main():
     for n in ("O3", "NO", "NO2", "OH", "HO2"):
         if n in r.species:
             print(f"  {{n:4s}} start {{r[n][0]:.3e}}  end {{r[n][-1]:.3e}}  max {{r[n].max():.3e}} molec/cm3")
+{after}
 
 
 if __name__ == "__main__":
@@ -592,7 +634,19 @@ def script_text(spec: Spec, solver: Optional[str] = None, toml: str = "", kv_pd:
                           fname=f"{spec.name}_run.py", here=HERE, solver=solver, toml=toml, kv_pd=bool(kv_pd),
                           suffix="field.json" if field else "experiment.json", rule=_RULE,
                           body="\n".join(("    " + l) if l else "" for l in body),
-                          var="case" if field else "exp")
+                          var="case" if field else "exp", after=_FIELD_AFTER if field else "")
+
+
+_FIELD_AFTER = '''
+    # The model against the O_ columns of the table (bias, NMB, RMSE, R2 in ppb) -> <name>_skill.csv.
+    # A constrained site with spin_up_days > 0 starts that many days before the table; r.hour counts from there.
+    rows, skill_path = juice.skill(case, cs_path)
+    for row in rows:
+        if row.get("n", 0) >= 2:
+            print(f"  {row['species']:8s} observed {row['obs_mean']:.3g} ppb, modelled {row['model_mean']:.3g} ppb, "
+                  f"NMB {row['nmb']:+.0%}, R2 {row['r2']:.2f}")
+    if skill_path:
+        print("  skill table:", skill_path)'''
 
 
 def write_script(spec: Spec, path: str, solver: Optional[str] = None, toml: str = "", kv_pd: bool = True,

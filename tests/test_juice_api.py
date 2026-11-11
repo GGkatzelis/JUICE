@@ -54,6 +54,28 @@ def test_script_writes_byte_identical_files(tmp_path, key):
         assert filecmp.cmp(a[k], b[k], shallow=False), k
 
 
+def test_scripts_explain_the_lamps_and_compare_a_field_case(tmp_path):
+    lamp = juice.script_text(lamp_spec())
+    assert "chambers/generic_lamps.chamber.json" in lamp and "jNO2 at full power" in lamp
+    assert "chamber.json" not in juice.script_text(es.spec_scene_05())         # SAPHIR: the sun, nothing to explain
+    field = juice.script_text(_field_specs()["site_day"])
+    assert "juice.skill(case, cs_path)" in field and "# STEP 4 — MIXING AND DEPOSITION" in field
+    assert field.index("case.initials") > field.index("# STEP 4")               # initial values on step 4, as in the window
+
+
+def test_examples_build_what_they_describe():
+    import importlib.util
+    def build(name):
+        s = importlib.util.spec_from_file_location("_ex_" + name, os.path.join(juice.HERE, "examples", name + ".py"))
+        m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+        return m.build()
+    site = build("field_site")
+    ref = juice.load(fs.list_examples()["site_day"][0])
+    assert asdict(site) == asdict(ref)                                          # the shipped case, written out
+    for name in ("saphir_isoprene", "uv_lamp_chamber"):
+        assert not [m for lvl, m in juice.check(build(name)) if lvl == "error"], name
+
+
 def test_new_experiment_is_what_picking_the_chamber_does():
     spec = juice.new_experiment("x", chamber="generic_lamps")
     ref = es.ExperimentSpec(name="x")

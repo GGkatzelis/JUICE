@@ -100,14 +100,15 @@ unchanged.
 r = run.results()             # or juice.results(path_to_cs, exp)
 r.species                     # every output column
 r["OH"]                       # molecules cm-3, one value per output time
-r.ppb("O3")                   # ppb, with the experiment's pressure and temperature
+r.ppb("O3")                   # ppb, with the model's air density (the M column of the results)
 r.hour                        # hours since midnight UTC of the first output time
 r.utc                         # the output times as datetimes
 r.df                          # everything as a pandas DataFrame
 ```
 
-For a field case, `ppb()` uses 1013.25 hPa and 298 K. Its skill table (`<name>_skill.csv`) uses the
-measured air density.
+For a field case, `juice.skill(case, cs_path)` compares the model with the `O_` columns of the table
+(bias, normalised mean bias, RMSE, R² per species) and writes `<name>_skill.csv`. `juice.run` writes it
+for every field case, as the field window's Run step does (`run.skill_path`).
 
 The results open in the results viewer like any other run: `python results_viewer.py <name>.cs`.
 
@@ -237,7 +238,9 @@ mechanism and the rate-constant changes. A later definition replaces an earlier 
 input table (`c.source = "file"` or `"archive"`).
 
 **A lamp chamber.** Use `chamber="generic_lamps"` or a chamber profile of your own (made with the chamber
-editor). `roof_open` then means lights on. See [`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py).
+editor). `roof_open` then means lights on. The lamps (jNO2 at full power, spectrum) are set in the profile,
+not in the experiment. See [`examples/uv_lamp_chamber.py`](../examples/uv_lamp_chamber.py): the same steps as
+the base case, with the light, the OH source, the walls and a profile of your own written out.
 
 **Field cases.** A site, a plume or a Lagrangian air parcel:
 
@@ -248,8 +251,9 @@ case.generic_lifetime_h = 6.0
 juice.run(case, r"D:\runs\my_site")
 ```
 
-The input table is described in the main tutorial (Sect. 3.2). See
-[`examples/field_site.py`](../examples/field_site.py). The field window, too, writes `<name>_run.py`
+The input table is described in the main tutorial (Sect. 3.2).
+[`examples/field_site.py`](../examples/field_site.py) writes the shipped `site_day` case out in the field
+window's steps, with the table's columns, the dilution choices and the skill table. The field window, too, writes `<name>_run.py`
 next to every case it prepares, and `juice.load("<case>.field.json")` reads a saved or shipped case
 (`field_spec.list_examples()` lists the three examples).
 
@@ -265,6 +269,7 @@ next to every case it prepares, and `juice.load("<case>.field.json")` reads a sa
 | `prepare(spec, out_dir, solver=None, kv_pd=True)` | + the solver input `<name>.json` |
 | `solve(json_path)` | runs the solver; returns the results file `<name>.cs` |
 | `results(cs_path, spec=None)` | the results as a table (`Results`) |
+| `skill(case, cs_path)` | field case: the model against the `O_` columns; writes `<name>_skill.csv` |
 | `run(spec, out_dir, solver=None, kv_pd=True)` | write, prepare, solve; returns a `Run` with `.results()` and `.summary()` |
 | `write_script(spec, path, solver=None)` | the experiment as a runnable `<name>_run.py` |
 | `build_from_script(path)` | `build()` of such a file, without running it |
