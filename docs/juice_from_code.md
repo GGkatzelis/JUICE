@@ -39,11 +39,12 @@ Isoprene in SAPHIR under the open roof, with invented conditions
 ([`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py)):
 
 ```python
+import juice
+
 exp = juice.new_experiment("saphir_isoprene", chamber="SAPHIR")
 
 c = exp.conditions                         # when and under which conditions
-c.date, c.start, c.end, c.step_s = "2024-07-09", "06:00", "16:00", 60
-c.source = "manual"                        # manual | archive | file
+c.date, c.start, c.end = "2024-07-09", "06:00", "16:00"
 c.temperature_K, c.temperature_mode = 298.0, "const"
 c.pressure_hPa, c.h2o_percent, c.flow_m3h = 1013.0, 1.0, 0.5
 c.roof_open = [("08:00", "15:00")]
@@ -56,12 +57,18 @@ exp.injections = [
     juice.Injection(name="isoprene", products="C5H8", total_ppb="10", start="08:30", duration_min=5),
 ]
 
-run = juice.run(exp, r"D:\runs\saphir_isoprene", solver="fast")
+run = juice.run(exp)                       # writes the input files and runs the solver in runs/saphir_isoprene
 print(run.summary())
+run.results().plot(["O3", "NO", "NO2", "C5H8", "OH", "HO2"])
 ```
 
 `new_experiment` does what picking a chamber on the first step does: it sets that chamber's defaults (its
-volume, wall sources, dilution, light). Everything after it is a plain field of the experiment.
+volume, wall sources, dilution, light). Everything after it is a plain field of the experiment, and a field
+you do not set keeps that default. `juice.run(exp)` puts the run in `<output_root>/<name>` (`runs/` unless
+`settings.local.toml` says otherwise); `juice.run(exp, r"D:\my runs\day_1")` puts it anywhere.
+
+Every example comes twice: the short file (as above), and `<name>_explained.py`, the same experiment step by
+step with what each setting means and what else can be chosen. Both write the same input files.
 
 The experiment has four parts, the same as the window's steps:
 
@@ -111,6 +118,8 @@ r.ppb("O3")                   # ppb, with the model's air density (the M column 
 r.hour                        # hours since midnight UTC of the first output time
 r.utc                         # the output times as datetimes
 r.df                          # everything as a pandas DataFrame
+r.plot(["O3", "OH", "C5H8"])  # one panel per species (radicals in molecules cm-3, the rest in ppb);
+                              # the hours with the roof open / lights on are shaded; path="fig.png" saves it
 ```
 
 For a field case, `juice.skill(case, cs_path)` compares the model with the `O_` columns of the table
@@ -153,8 +162,8 @@ exp = juice.new_experiment("my_run", template="voc_photooxidation_low_nox")
 ## 6. From the window to code
 
 When the Run step prepares an experiment, the run folder gets `<name>_run.py` besides the ENZ, EASY and
-JSON files. The field window does the same. The file follows the window's steps and writes out every
-field with what it means. Shortened:
+JSON files. The field window does the same. The file follows the window's steps and writes what the
+experiment sets: every field that differs from the chamber's defaults, with what it means. Shortened:
 
 ```python
 def build():
@@ -162,16 +171,15 @@ def build():
     exp = juice.new_experiment('saphir_isoprene', chamber='SAPHIR')
     c = exp.conditions
     c.date = '2024-07-09'    # YYYY-MM-DD, UTC
-    c.source = 'manual'      # manual | file | archive (the SAPHIR data archive of that day)
-    c.input_file = ''        # the table for source 'file' (full path)
+    c.start = '06:00'        # HH:MM UTC
+    c.temperature_mode = 'const'    # const = temperature_K | enz = the T column of the file/archive
     ...
     # STEP 2 — CHEMISTRY: which mechanism, which compounds
     exp.base_mechanism = 'MCM_v3.3.1'
     exp.precursors = ['C5H8']
     ...
     # STEP 3 — INJECTIONS     exp.injections = [juice.Injection(...), ...]
-    # STEP 4 — CHAMBER        ch = exp.chamber; ch.hono = True; ch.hono_const = '2.6*0.7'; ...
-    # EASY SETTINGS AND PROVENANCE
+    # STEP 4 — CHAMBER        (only what differs from the profile, e.g. ch.hono_const = '2.6*0.7*1.5')
     return exp
 
 def main():
@@ -189,11 +197,11 @@ def main():
   a summary.
 - `build()` returns exactly the experiment the window held, field by field. The test suite checks this
   for every template and example and through both windows.
-- Every field is written out with a comment, including the chamber processes' expressions and the EASY
-  settings, so the file documents the experiment completely.
+- A field the file does not mention has the chamber's default (the date and the time window are always
+  written). Section 2's table and `juice.OPTIONS` list the fields; the `_explained.py` examples show them all.
 - Running the file again in its own folder overwrites that run. Change `OUT` to keep both.
 
-[`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py) is the same structure written by hand,
+[`examples/chamber/saphir_isoprene_explained.py`](../examples/chamber/saphir_isoprene_explained.py) is the same structure written by hand,
 with longer notes: where a conditions file goes and how to hold NO2 or O3 to it, injections from a liquid
 volume or a flow, the solver choice, and an off-road section (loops, your own chemistry, editing the input
 files, another chamber).
@@ -211,7 +219,7 @@ juice.run(exp, r"D:\runs\my_day_no_hono")
 
 Code makes it easy to do things the window does one at a time.
 
-**Loops.** For example the same day at three NO levels (`python examples/chamber/saphir_isoprene.py --scan`):
+**Loops.** For example the same day at three NO levels (`python examples/chamber/saphir_isoprene_explained.py --scan`):
 
 ```python
 for no in (1, 5, 20):
@@ -245,8 +253,9 @@ mechanism and the rate-constant changes. A later definition replaces an earlier 
 input table (`c.source = "file"` or `"archive"`).
 
 **A lamp chamber.** Use `chamber="generic_lamps"` or a chamber profile of your own (made with the chamber
-editor). `roof_open` then means lights on. The lamps (jNO2 at full power, spectrum) are set in the profile,
-not in the experiment. See [`examples/chamber/uv_lamp_chamber.py`](../examples/chamber/uv_lamp_chamber.py): the same steps as
+editor). Set `c.lights_on = [("09:00", "13:00")]` (the same field as `roof_open`). The lamps (jNO2 at full
+power, spectrum) are set in the profile, not in the experiment, and `c.j_source` does not change them. See
+[`examples/chamber/uv_lamp_chamber_explained.py`](../examples/chamber/uv_lamp_chamber_explained.py): the same steps as
 the base case, with the light, the OH source, the walls and a profile of your own written out.
 
 **Field cases.** A site, a plume or a Lagrangian air parcel:
@@ -259,7 +268,7 @@ juice.run(case, r"D:\runs\my_site")
 ```
 
 The input table is described in the main tutorial (Sect. 3.2).
-[`examples/field/field_site.py`](../examples/field/field_site.py) writes the shipped `site_day` case out in the field
+[`examples/field/field_site_explained.py`](../examples/field/field_site_explained.py) writes the shipped `site_day` case out in the field
 window's steps, with the table's columns, the dilution choices and the skill table. The field window, too, writes `<name>_run.py`
 next to every case it prepares, and `juice.load("<case>.field.json")` reads a saved or shipped case
 (`field_spec.list_examples()` lists the three examples).
@@ -277,7 +286,8 @@ next to every case it prepares, and `juice.load("<case>.field.json")` reads a sa
 | `solve(json_path)` | runs the solver; returns the results file `<name>.cs` |
 | `results(cs_path, spec=None)` | the results as a table (`Results`) |
 | `skill(case, cs_path)` | field case: the model against the `O_` columns; writes `<name>_skill.csv` |
-| `run(spec, out_dir, solver=None, kv_pd=True)` | write, prepare, solve; returns a `Run` with `.results()` and `.summary()` |
+| `run(spec, out_dir="", solver=None, kv_pd=True)` | write, prepare, solve (`out_dir` '' = `<output_root>/<name>`); returns a `Run` with `.results()` and `.summary()` |
+| `Results.plot(species, path="")` | one panel per species, light periods shaded; returns the figure |
 | `write_script(spec, path, solver=None)` | the experiment as a runnable `<name>_run.py` |
 | `build_from_script(path)` | `build()` of such a file, without running it |
 | `chambers()`, `mechanisms()`, `solvers()`, `templates()`, `OPTIONS` | what can be chosen |

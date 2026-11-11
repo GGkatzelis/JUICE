@@ -3,7 +3,7 @@
 
 Written by F. Rohrer (MCM_SAPHIR_Tool branch easy-start-gui; 2026-11-09, adaptive iteration 279df43) and taken over
 unchanged into JUICE; the runner (scenario_runner._solve, solver_method "TWOSTEP") and the solver profile "twostep"
-(scenario_prep) drive it.  Integration notes: Franz's TWOSTEP_BACKEND.md; here README "Solver profiles".
+(scenario_prep) drive it.  Integration notes: Franz's TWOSTEP_BACKEND.md; here docs/user_guide.md "Solver profiles".
 
     python -m juice.core.twostep_solver --selftest          # mini SAPHIR-like mechanism vs scipy BDF reference
 

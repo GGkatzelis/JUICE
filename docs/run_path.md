@@ -4,13 +4,13 @@
 experiment** from the moment it is defined to the moment its results are on screen: which file is called,
 what it does, what it hands on, and where you can step in.
 
-The example is [`examples/chamber/saphir_isoprene.py`](../examples/chamber/saphir_isoprene.py), the base case. The window
+The example is [`examples/chamber/saphir_isoprene_explained.py`](../examples/chamber/saphir_isoprene_explained.py), the base case. The window
 takes the same path: its Run step calls the same functions (Sect. 7).
 
 ## 1. The tree
 
 ```
-examples/chamber/saphir_isoprene.py   (or <name>_run.py, or the window)
+examples/chamber/saphir_isoprene_explained.py   (or the short saphir_isoprene.py, <name>_run.py, or the window)
 │
 ├─ build()                                   STEPS 1–4: define the experiment (nothing is written yet)
 │   └─ juice.new_experiment(name, chamber)
@@ -169,8 +169,8 @@ A **field case** (`field_window.py`, `juice.new_field_case`) differs only in ①
 its one table, and `field_scenario.write_case` writes the ENZ and EASY: emissions, background, held
 species, dilution, deposition. Then ②–④ are the same files and functions. After ④, `juice.skill`
 (`field_scenario.skill_table`) compares the model with the table's `O_` columns → `<name>_skill.csv`.
-The walk-through is [`examples/field/field_site.py`](../examples/field/field_site.py); the lamp chamber's is
-[`examples/chamber/uv_lamp_chamber.py`](../examples/chamber/uv_lamp_chamber.py).
+The walk-through is [`examples/field/field_site_explained.py`](../examples/field/field_site_explained.py); the lamp chamber's is
+[`examples/chamber/uv_lamp_chamber_explained.py`](../examples/chamber/uv_lamp_chamber_explained.py).
 
 ## 8. I want to change …
 

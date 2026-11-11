@@ -60,20 +60,66 @@ def test_scripts_explain_the_lamps_and_compare_a_field_case(tmp_path):
     assert "chamber.json" not in juice.script_text(es.spec_scene_05())         # SAPHIR: the sun, nothing to explain
     field = juice.script_text(_field_specs()["site_day"])
     assert "juice.skill(case, cs_path)" in field and "# STEP 4 — MIXING AND DEPOSITION" in field
-    assert field.index("case.initials") > field.index("# STEP 4")               # initial values on step 4, as in the window
+    assert "case.generic_lifetime_h = 6.0" in field
+
+
+def test_scripts_write_only_what_differs():
+    """<name>_run.py says what the experiment sets: unchanged chamber processes and defaults stay out,
+    the date and the time window are always there, and a lamp chamber says lights_on."""
+    lamp = juice.script_text(lamp_spec())
+    assert "c.lights_on = " in lamp and "c.roof_open" not in lamp
+    assert "ch = exp.chamber" not in lamp and "unchanged" in lamp               # generic_lamps processes as in the profile
+    assert "c.source = " not in lamp and "exp.hmax = " not in lamp               # defaults are not repeated
+    assert "c.date = " in lamp and "c.start = " in lamp and "c.end = " in lamp
+    saphir = juice.script_text(es.spec_scene_05())
+    assert "c.roof_open = " in saphir and "lights_on" not in saphir
+
+
+def test_lights_on_is_roof_open():
+    c = es.Conditions()
+    c.lights_on = [("09:00", "13:00")]
+    assert c.roof_open == [("09:00", "13:00")] and c.lights_on is c.roof_open
+    assert "lights_on" not in asdict(c)                                           # saved files keep 'roof_open'
+
+
+def _example(folder, name):
+    import importlib.util
+    s = importlib.util.spec_from_file_location("_ex_" + name, os.path.join(juice.HERE, "examples", folder, name + ".py"))
+    m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+    return m
 
 
 def test_examples_build_what_they_describe():
-    import importlib.util
-    def build(name):
-        s = importlib.util.spec_from_file_location("_ex_" + name, os.path.join(juice.HERE, "examples", "field" if name.startswith("field") else "chamber", name + ".py"))
-        m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
-        return m.build()
-    site = build("field_site")
+    site = _example("field", "field_site_explained").build()
     ref = juice.load(fs.list_examples()["site_day"][0])
     assert asdict(site) == asdict(ref)                                          # the shipped case, written out
-    for name in ("saphir_isoprene", "uv_lamp_chamber"):
-        assert not [m for lvl, m in juice.check(build(name)) if lvl == "error"], name
+    for name in ("saphir_isoprene_explained", "uv_lamp_chamber_explained"):
+        assert not [m for lvl, m in juice.check(_example("chamber", name).build()) if lvl == "error"], name
+
+
+@pytest.mark.parametrize("folder,name", [("chamber", "saphir_isoprene"), ("chamber", "uv_lamp_chamber"),
+                                         ("field", "field_site")])
+def test_short_example_is_the_explained_one(tmp_path, folder, name):
+    """The short example leaves out what restates a default; its input files are those of the step-by-step one."""
+    m = _example(folder, name)
+    short = getattr(m, "exp", None) or m.case
+    long_ = _example(folder, name + "_explained").build()
+    a, b = juice.write(long_, str(tmp_path / "explained")), juice.write(short, str(tmp_path / "short"))
+    for k in ("enz", "easy"):
+        assert filecmp.cmp(a[k], b[k], shallow=False), k
+
+
+def test_results_plot(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    ref = os.path.join(juice.HERE, "validation", "UV lamps", "uv_lights_on_off")
+    cs = next(os.path.join(ref, f) for f in os.listdir(ref) if f.endswith(".cs"))
+    r = juice.results(cs, lamp_spec())
+    fig = r.plot(["O3", "NO2", "OH"], path=str(tmp_path / "fig.png"))
+    assert (tmp_path / "fig.png").stat().st_size > 1000 and len(fig.axes) == 3
+    assert "lights on" in fig._suptitle.get_text()
+    with pytest.raises(KeyError):
+        r.plot(["NOT_A_SPECIES"], show=False)
 
 
 def test_new_experiment_is_what_picking_the_chamber_does():

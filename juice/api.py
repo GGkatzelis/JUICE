@@ -212,11 +212,12 @@ class Results:
     """A results file (.cs) as a table: .df has TIME (s since 2000-01-01 UTC) and one column per species
     in molecules cm-3; .utc and .hour give the time axis; .ppb(name) converts with the air density."""
 
-    def __init__(self, cs_path: str, pressure_hPa: float = 1013.25, temperature_K: float = 298.0):
+    def __init__(self, cs_path: str, pressure_hPa: float = 1013.25, temperature_K: float = 298.0, spec=None):
         from juice.tools.run_benchmark import parse_cs_file
         self.path = cs_path
         self.df = parse_cs_file(cs_path)
         self.M = pressure_hPa * 100.0 / (1.380649e-23 * temperature_K) * 1e-6     # molecules cm-3
+        self.spec = spec
 
     @property
     def species(self) -> List[str]:
@@ -242,12 +243,67 @@ class Results:
         M = self.df["M"].to_numpy(float) if "M" in self.df.columns else self.M
         return self[name] / M * 1e9
 
+    def plot(self, species: List[str], path: str = "", show: Optional[bool] = None):
+        """One panel per species against the hour of the day (UTC). Radicals (RADICALS) in molecules cm-3,
+        everything else in ppb. For a chamber experiment the hours with the roof open or the lights on are
+        shaded. path: also save the figure there (.png, .pdf, .svg). show: open the window (default: only
+        when nothing is saved). Returns the matplotlib figure."""
+        import matplotlib.pyplot as plt
+        missing = [s for s in species if s not in self.df.columns]
+        if missing:
+            raise KeyError(f"not in the results: {', '.join(missing)} (r.species lists what is)")
+        n = len(species)
+        ncols = 1 if n <= 3 else 2
+        nrows = -(-n // ncols)
+        fig, axes = plt.subplots(nrows, ncols, sharex=True, squeeze=False, figsize=(5.5 * ncols, 2.2 * nrows + 0.6))
+        h = self.hour
+        lit = [(_hours(a), _hours(b)) for a, b in self.spec.conditions.roof_open] if isinstance(self.spec, ExperimentSpec) else []
+        for ax, name in zip(axes.flat, species):
+            radical = name in RADICALS
+            ax.plot(h, self[name] if radical else self.ppb(name), lw=1.4)
+            ax.set_ylabel(f"{name}\n[{'cm$^{-3}$' if radical else 'ppb'}]")
+            for a, b in lit:
+                ax.axvspan(a, b, color="gold", alpha=0.15, lw=0)
+            ax.grid(alpha=0.3)
+        for ax in axes.flat[n:]:
+            ax.set_visible(False)
+        for ax in axes[-1]:
+            ax.set_xlabel("hour of the day (UTC)")
+        name = getattr(self.spec, "name", "") or os.path.splitext(os.path.basename(self.path))[0]
+        fig.suptitle(name + ("   (shaded: " + ("lights on" if _lamp_chamber(self.spec) else "roof open") + ")" if lit else ""))
+        fig.tight_layout()
+        if path:
+            fig.savefig(path, dpi=150)
+        if show if show is not None else not path:
+            plt.show()
+        return fig
+
+
+# species that Results.plot shows in molecules cm-3 instead of ppb
+RADICALS = {"OH", "HO2", "NO3", "O", "O1D", "O3P", "RO2", "CH3O2", "HO"}
+
+
+def _hours(hhmm: str) -> float:
+    hh, mm = hhmm.split(":")
+    return int(hh) + int(mm) / 60.0
+
+
+def _lamp_chamber(spec) -> bool:
+    if not isinstance(spec, ExperimentSpec):
+        return False
+    try:
+        from juice.core import chambers as chm
+        return chm.chamber(spec.conditions.chamber_name).light_type == "lamps"
+    except Exception:
+        return False
+
 
 def results(cs_path: str, spec: Optional[Spec] = None) -> Results:
-    """Read a results file; with the experiment given, ppb() uses its pressure and temperature."""
+    """Read a results file; with the experiment given, ppb() uses its pressure and temperature and plot()
+    shades the hours the roof was open or the lights on."""
     if isinstance(spec, ExperimentSpec):
-        return Results(cs_path, spec.conditions.pressure_hPa, spec.conditions.temperature_K)
-    return Results(cs_path)
+        return Results(cs_path, spec.conditions.pressure_hPa, spec.conditions.temperature_K, spec)
+    return Results(cs_path, spec=spec)
 
 
 def skill(case: FieldSpec, cs_path: str) -> Tuple[List[dict], str]:
@@ -283,12 +339,14 @@ class Run:
         return "\n".join(lines)
 
 
-def run(spec: Spec, out_dir: str, solver: Optional[str] = None, toml: str = "", kv_pd: bool = True,
+def run(spec: Spec, out_dir: str = "", solver: Optional[str] = None, toml: str = "", kv_pd: bool = True,
         log: Optional[str] = None, script: bool = True) -> Run:
-    """write -> prepare -> solve.  script: also write <name>_run.py (this experiment as code).
+    """write -> prepare -> solve.  out_dir: the run folder ('' = <output_root>/<name>, output_root from the
+    settings file, runs/ by default).  script: also write <name>_run.py (this experiment as code).
     Returns a Run (files, JSON, results file, run time)."""
     import time
     toml = toml or default_toml()
+    out_dir = out_dir or os.path.join(paths(toml)["output_root"], spec.name)
     t0 = time.time()
     files = write(spec, out_dir, toml)
     if script:
@@ -302,8 +360,9 @@ def run(spec: Spec, out_dir: str, solver: Optional[str] = None, toml: str = "", 
 
 
 # ── an experiment as code ────────────────────────────────────────────────────────────────────────
-# <name>_run.py follows the steps of the window. Every field of the experiment is written out with what it
-# means (and the allowed values), so the file documents the experiment completely and rebuilds it exactly.
+# <name>_run.py follows the steps of the window. It writes what the experiment sets, i.e. every field that
+# differs from what new_experiment(name, chamber) gives, with what it means; so it rebuilds the experiment exactly
+# and stays short. The layouts below give the order and the comments.
 # A layout entry is ("# text", None) for a comment line, ("", None) for an empty line, or (field, comment).
 
 _RULE = "# " + "═" * 100
@@ -444,23 +503,33 @@ def _diff(obj, base) -> List[str]:
     return [f.name for f in fields(obj) if getattr(obj, f.name) != getattr(base, f.name)]
 
 
-def _emit(target: str, obj, layout, done: set) -> List[str]:
+def _emit(target: str, obj, layout, done: set, base=None, rename: Optional[Dict[str, str]] = None,
+          keep: Tuple[str, ...] = ()) -> List[str]:
+    """The fields of `layout` as code, each with what it means.  With `base` (what new_experiment or
+    new_field_case gives) only the fields that differ from it, and those in `keep`: the script then says
+    what this experiment sets, and everything it does not mention is the chamber's (or the kind of run's)
+    default."""
     L = []
     for name, cmt in layout:
         if name.startswith("#") or name == "":
-            L.append(name); continue
+            if base is None:
+                L.append(name)
+            continue
         if not hasattr(obj, name):
             continue
         done.add(name)
-        text = f"{target}.{name} = {getattr(obj, name)!r}"
+        if base is not None and name not in keep and getattr(obj, name) == getattr(base, name):
+            continue
+        text = f"{target}.{(rename or {}).get(name, name)} = {getattr(obj, name)!r}"
         L.append(text + (f"    # {cmt}" if cmt else ""))
     return L
 
 
-def _rest(target: str, obj, done: set) -> List[str]:
+def _rest(target: str, obj, done: set, base=None) -> List[str]:
     """Fields the layout does not name (a newer JUICE may have more): written so the rebuild stays exact."""
     return [f"{target}.{f.name} = {getattr(obj, f.name)!r}" for f in fields(obj) if f.name not in done
-            and f.name not in ("name", "conditions", "chamber", "injections")]
+            and f.name not in ("name", "conditions", "chamber", "injections")
+            and (base is None or getattr(obj, f.name) != getattr(base, f.name))]
 
 
 def _step(n: int, title: str, what: str) -> List[str]:
@@ -486,28 +555,49 @@ def _light_note(chamber_id: str) -> List[str]:
         return [f"# The light of this chamber is set in its profile, setups/chambers/{p.id}.chamber.json, not here: lamps",
                 f"#   '{lt.get('lamps', '')}', jNO2 at full power {lt.get('jno2_full_s1', 0)} 1/s, {what}; every other J is",
                 "#   jNO2 x the ratio of that spectrum (lamp_photolysis.py). Change it in the chamber editor or that file.",
-                "#   roof_open below means lights on; a 'lights' column (0-1) of a conditions file dims them.", ""]
+                "#   c.lights_on below is when they are on (the same field as roof_open); a 'lights' column (0-1)",
+                "#   of a conditions file dims them.", ""]
     if p.light_type == "dark":
         return [f"# This chamber has no light source (profile setups/chambers/{p.id}.chamber.json): all J values are 0.", ""]
     return []
 
 
+_UNCHANGED = "# Nothing set here: {what}."
+
+
 def experiment_code(spec: ExperimentSpec) -> List[str]:
-    """The body of build(): code that rebuilds `spec` exactly, step by step as in the window."""
+    """The body of build(): code that rebuilds `spec` exactly, step by step as in the window.  Only what
+    differs from juice.new_experiment(name, chamber) is written: everything else is the chamber's default."""
+    from juice.core import chambers as chm
     chamber = spec.conditions.chamber_name
+    try:
+        base = new_experiment(spec.name, chamber=chamber)
+    except Exception:                                    # a profile that is gone: compare with the dataclass defaults
+        base = ExperimentSpec(name=spec.name)
+    try:
+        lamps = chm.chamber(chamber).light_type == "lamps"
+    except Exception:
+        lamps = False
+    rename = {"roof_open": "lights_on"} if lamps else None
     L = _step(1, "EXPERIMENT: which chamber, when, and where the conditions come from",
               "The chamber profile sets the volume, the dilution and the chamber processes; juice.chambers() lists them.")
-    L += [f"exp = juice.new_experiment({spec.name!r}, chamber={chamber!r})",
-          f"exp.title = {spec.title!r}", ""]
-    L += _light_note(chamber)
-    L += ["c = exp.conditions"]
+    L += [f"exp = juice.new_experiment({spec.name!r}, chamber={chamber!r})"]
+    if spec.title:
+        L += [f"exp.title = {spec.title!r}"]
+    L += [""] + _light_note(chamber)
+    L += ["# Only what differs from the chamber's defaults is written below; docs/juice_from_code.md lists every field.",
+          "c = exp.conditions"]
     done_c: set = set()
-    L += _emit("c", spec.conditions, _CHAMBER_LAYOUT["conditions"], done_c) + _rest("c", spec.conditions, done_c)
+    L += (_emit("c", spec.conditions, _CHAMBER_LAYOUT["conditions"], done_c, base.conditions, rename,
+                keep=("date", "start", "end"))
+          + _rest("c", spec.conditions, done_c, base.conditions))
 
     L += _step(2, "CHEMISTRY: which mechanism, which compounds",
                "juice.mechanisms() lists the bases and the add-ons.")
     done_s = {"title"}
-    L += _emit("exp", spec, _CHAMBER_LAYOUT["chemistry"], done_s)
+    L += [f"exp.base_mechanism = {spec.base_mechanism!r}"]       # always: which chemistry is the first thing to see
+    done_s.add("base_mechanism")
+    L += _emit("exp", spec, _CHAMBER_LAYOUT["chemistry"], done_s, base)
 
     L += _step(3, "INJECTIONS: what goes into the chamber, how much, when",
                "One Injection per event: total_ppb = the whole amount, spread over duration_min from start (HH:MM UTC).")
@@ -521,13 +611,15 @@ def experiment_code(spec: ExperimentSpec) -> List[str]:
     L += ["]"]
 
     L += _step(4, "CHAMBER: what the chamber adds on its own",
-               f"The {chamber} profile set these; switch a process off or change its expressions here.")
-    L += ["ch = exp.chamber"]
+               f"The {chamber} profile sets these; switch a process off or change its expressions here.")
     done_ch: set = set()
-    L += _emit("ch", spec.chamber, _CHAMBER_LAYOUT["chamber"], done_ch) + _rest("ch", spec.chamber, done_ch)
+    ch = _emit("ch", spec.chamber, _CHAMBER_LAYOUT["chamber"], done_ch, base.chamber) + _rest("ch", spec.chamber, done_ch, base.chamber)
+    L += (["ch = exp.chamber"] + ch) if ch else [f"# The processes of the {chamber} profile, unchanged "
+                                                 "(e.g. exp.chamber.hono = False switches the HONO wall source off)."]
 
-    L += ["", _RULE, "# EASY SETTINGS AND PROVENANCE", _RULE]
-    L += _emit("exp", spec, _CHAMBER_LAYOUT["easy"], done_s) + _rest("exp", spec, done_s)
+    easy = _emit("exp", spec, _CHAMBER_LAYOUT["easy"], done_s, base) + _rest("exp", spec, done_s, base)
+    if easy:
+        L += ["", _RULE, "# EASY SETTINGS AND PROVENANCE", _RULE] + easy
     return L
 
 
@@ -536,16 +628,23 @@ def field_code(spec: FieldSpec) -> List[str]:
     L = _step(1, "FIELD CASE: which kind of run, which table",
               f"run_type: {' | '.join(fs.RUN_TYPES)} (constrained site, plume or transect, Lagrangian parcel).")
     L += [f"case = juice.new_field_case({spec.name!r}, run_type={spec.run_type!r},",
-          f"                            table={spec.table!r})"]
+          f"                            table={spec.table!r})",
+          "# Only what differs from the defaults of this kind of run is written below; docs/juice_from_code.md lists every field."]
+    base = new_field_case(spec.name, spec.run_type)
+    base.table = spec.table
     done: set = {"name", "run_type", "table"}
-    L += _emit("case", spec, _FIELD_LAYOUT["case"], done)
+
+    def section(key, what):
+        lines = _emit("case", spec, _FIELD_LAYOUT[key], done, base)
+        return lines or [_UNCHANGED.format(what=what)]
+    L += _emit("case", spec, _FIELD_LAYOUT["case"], done, base)
     L += _step(2, "CHEMISTRY", "Any base mechanism: the MCM subset, a lumped mechanism or a GECKO-A base.")
-    L += _emit("case", spec, _FIELD_LAYOUT["chemistry"], done)
+    L += section("chemistry", "the default chemistry of a field case")
     L += _step(3, "EMISSIONS AND CONSTRAINTS", "Emissions are the E_ columns, held species the C_ columns of the table.")
-    L += _emit("case", spec, _FIELD_LAYOUT["sources"], done)
+    L += section("sources", "everything comes from the table's E_ and C_ columns, in their own units")
     L += _step(4, "MIXING AND DEPOSITION", "How the air mass is diluted, and what deposits.")
-    L += _emit("case", spec, _FIELD_LAYOUT["mixing"], done)
-    rest = _rest("case", spec, done)
+    L += section("mixing", f"dilution {spec.dilution!r} (the default of this kind of run), no deposition, no initial values")
+    rest = _rest("case", spec, done, base)
     if rest:
         L += ["", "# other fields"] + rest
     return L
@@ -554,9 +653,9 @@ def field_code(spec: FieldSpec) -> List[str]:
 _SCRIPT = '''"""
 {name} — this JUICE {what} as code.
 
-Written by JUICE {version} on {when} from {origin}. It follows the steps of the window; every field
-is written out with what it means. Running this file rebuilds the {what}, writes its input files into
-OUT, runs the solver and prints a summary:
+Written by JUICE {version} on {when} from {origin}. It follows the steps of the window and writes
+out what this {what} sets; everything it does not mention keeps its default. Running this file rebuilds
+the {what}, writes its input files into OUT, runs the solver and prints a summary:
 
     python {fname}
 

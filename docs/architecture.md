@@ -125,7 +125,7 @@ the `twostep_*` keys). Choices:
 - per study, frozen in the `.study.json`; a study refuses to change it once runs have finished
 - `run_benchmark.py --solver`
 
-Rules learned on the way (benchmark of 4 November 2026, see the README table):
+Rules learned on the way (benchmark of 4 November 2026, see the table in user_guide.md):
 
 - **Never combine rtol 1e-6 with warm continuation.** It diverges in trace species: HCOCO3 1.4e5 %
   in scene_06, HO13C4O2 1.3e4 % in scene_09. `tests/test_profiles.py` guards this.
@@ -208,7 +208,7 @@ any key.
 `python -m juice.tools.run_benchmark` runs every reference scene that has `.easy`, `.enz` and a FACSIMILE `.cs`
 (scene_01 … scene_09) through the full pipeline and compares every column of the result with
 FACSIMILE: maximum relative deviation over the whole run, concentrations measured against
-max(max|FAC|, 100 molec/cm³), the solver's absolute tolerance. The current table is in the README.
+max(max|FAC|, 100 molec/cm³), the solver's absolute tolerance. The current table is in [user_guide.md](user_guide.md#validation).
 `python -m pytest` (≈ 1.5 min, also on GitHub Actions) runs the input-side self-tests for every scene,
 scene_04 against FACSIMILE, and the UV-lamp chamber check, which has no FACSIMILE reference and is
 checked against physics instead (photostationary state, H2O2 loss, dark chemistry) and against a

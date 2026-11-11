@@ -1,6 +1,7 @@
 # JUICE tutorial — from nothing to a result in an afternoon
 
-This is the hands-on companion to the [README](../README.md). It walks through four things a new user
+This is the hands-on companion to the [README](../README.md); the [user guide](user_guide.md) is the
+reference for everything shown here. It walks through four things a new user
 does: a chamber experiment, the same under UV lamps, field observations (three kinds of run), and a
 parameter study. Every step
 names what you click and what you should see. Nothing here needs access to the SAPHIR archive; the

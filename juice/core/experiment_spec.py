@@ -141,6 +141,15 @@ class Conditions:
     constrain_species: List[str] = field(default_factory=list)       # e.g. ["NO2", "O3"] → held to ENZ columns
     chamber_name: str = "SAPHIR"          # injection_calc.CHAMBERS profile (volume, MFC/syringe standards)
 
+    # In a lamp chamber "roof open" means "lights on": the same field under the name that fits.
+    @property
+    def lights_on(self) -> List[Tuple[str, str]]:
+        return self.roof_open
+
+    @lights_on.setter
+    def lights_on(self, value: List[Tuple[str, str]]) -> None:
+        self.roof_open = value
+
 
 @dataclass
 class InjectionEvent:
