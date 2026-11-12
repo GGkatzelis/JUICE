@@ -38,7 +38,7 @@ from juice.core import injection_calc as ic
 from juice.chemistry import mechanism_registry as mreg
 
 try:
-    from juice.chemistry.mcm_species_db import MCM_DB, reactions_of, search_species
+    from juice.chemistry.mcm_species_db import MCM_DB, search_species
 except Exception:                               # database optional
     MCM_DB = {}
 
@@ -709,13 +709,15 @@ class ChemistryPage(QWizardPage):
                                    "with the MCM core the inorganic chemistry and photolysis are exactly those of an MCM experiment and only\n"
                                    "the organic chemistry comes from GECKO-A - the choice for a like-for-like comparison with an MCM run.")
         gl.addWidget(self.gecko_core, 1, 1)
-        self.gecko_part = QCheckBox("Gas-particle-wall partitioning of the condensable species (GECKO-A's Nannoolal C*, Krechmer wall)")
-        self.gecko_part.setChecked(True); gl.addWidget(self.gecko_part, 2, 0, 1, 2)
         gl.addWidget(_info("The chemistry comes from the imported generator output as EASY includes (FACSIMILE runs them too). "
                            "Injections name the primary species as written here; every other GECKO-A species is known to the injection "
                            "step under its MCM name where one exists, otherwise as G<GECKO code>. Mechanisms of this size run best "
                            "with the twostep solver profile."), 3, 0, 1, 2)
         lay.addWidget(self.gecko_box)
+        # gas-particle-wall partitioning: for every base; live where the base has the scheme (GECKO-A), else pending
+        from juice.gui.partitioning_panel import PartitioningBox
+        self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
+        lay.addWidget(self.partition)
         self.mcm_box = QWidget(); ml = QVBoxLayout(self.mcm_box); ml.setContentsMargins(0, 0, 0, 0)
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
         self.mode_existing = QRadioButton("Existing mechanism include set")
@@ -751,20 +753,28 @@ class ChemistryPage(QWizardPage):
         ml.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
                            "the CHANEL template shows how a mixture is written as mole fractions."))
 
-        # first-generation products of the chosen compounds (from the full MCM .fac): one block per
-        # compound, one column per reaction partner, products listed downwards, rate on hover
-        tb = QGroupBox("First-generation chemistry of the chosen compounds (untick to hide)"); tb.setCheckable(True); tb.setChecked(True)
+        lay.addWidget(self.mcm_box)
+
+        # first-generation products of the compounds, from whichever base is chosen (first_generation.py):
+        # one block per compound, one column per reaction partner, products listed downwards, rate on hover
+        tb = QGroupBox("First-generation chemistry (untick to hide)"); tb.setCheckable(True); tb.setChecked(True)
         tl = QVBoxLayout(tb)
+        self.tree_row = QWidget(); hr = QHBoxLayout(self.tree_row); hr.setContentsMargins(0, 0, 0, 0)
+        hr.addWidget(QLabel("Compounds"))
+        self.tree_names = QLineEdit(); self.tree_names.setPlaceholderText("names separated by commas, MCM names work (e.g. C5H8, APINENE)")
+        self.tree_names.setToolTip("A GECKO-A or lumped mechanism is used whole, so there is no list of chosen compounds: name the ones to show.\n"
+                                   "MCM names are translated through the mechanism's ALIAS lines (APINENE is RACM2's API).")
+        self.tree_names.editingFinished.connect(self.update_tree); hr.addWidget(self.tree_names, stretch=1)
+        tl.addWidget(self.tree_row)
         self.tree_tabs = QTabWidget(); self.tree_tabs.setDocumentMode(True); self.tree_tabs.setMaximumHeight(230)
         tl.addWidget(self.tree_tabs)
         hb3 = QHBoxLayout(); b = QPushButton("Update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
         hb3.addWidget(_info("One tab per compound: reaction partners side by side, products below each. "
-                            "Hover a product set for the MCM rate; double-click it to adjust the rate below."), stretch=1)
+                            "Hover a product set for its rate; double-click it to adjust the rate below."), stretch=1)
         tl.addLayout(hb3)
         self._tree_widgets = [self.tree_tabs] + [hb3.itemAt(i).widget() for i in range(hb3.count()) if hb3.itemAt(i).widget()]
         tb.toggled.connect(self._toggle_tree)
-        ml.addWidget(tb)
-        lay.addWidget(self.mcm_box)
+        lay.addWidget(tb)
 
         # reaction adjustments = EASY k[...] overrides
         ab = QGroupBox("Reaction adjustments (written exactly as EASY does it)"); al = QVBoxLayout(ab)
@@ -800,6 +810,15 @@ class ChemistryPage(QWizardPage):
     def _gecko_changed(self):
         g, lumped = self.is_gecko(), self.is_lumped()
         self.gecko_box.setVisible(g); self.mcm_box.setVisible(not (g or lumped))
+        self.tree_row.setVisible(g or lumped)
+        if g:                                        # a GECKO-A mechanism is made for one compound: show it
+            prim = (self._bases[self.base_id()].gecko or {}).get("precursor", "")
+            if prim and prim.upper() not in [n.upper() for n in self.tree_compounds()]:
+                self.tree_names.setText(prim)
+        if hasattr(self, "partition"):
+            self.partition.set_base(self._bases.get(self.base_id()))
+        if self.tree_tabs.isVisible() or self.tree_tabs.count():
+            self.update_tree()
         if lumped:                                   # a whole mechanism: nothing to choose, say what it is
             b = self._bases[self.base_id()]; d = b.lumped or {}
             names = ", ".join(f"{m} = {o}" for m, o in list((d.get("mcm_names") or {}).items())[:6])
@@ -859,26 +878,34 @@ class ChemistryPage(QWizardPage):
             self._filter(self.search.text())
 
     # ── first-generation tree / adjustments ──
-    def _fac(self) -> str:
-        from juice.core.experiment_spec import base_fac
-        return "" if self.is_gecko() else base_fac(self.base_id())
-
     def _toggle_tree(self, on: bool):
         for w in self._tree_widgets:
             w.setVisible(on)
         if on and self.tree_tabs.count() == 0:
             self.update_tree()
 
+    def _complete(self) -> bool:
+        return self.is_gecko() or self.is_lumped()
+
+    def tree_compounds(self) -> List[str]:
+        if self._complete():
+            return [n.strip() for n in self.tree_names.text().replace(";", ",").split(",") if n.strip()]
+        return [self.chosen.item(i).text() for i in range(self.chosen.count())]
+
     def update_tree(self):
+        from juice.chemistry.first_generation import first_generation
         self.tree_tabs.clear()
-        names = [self.chosen.item(i).text() for i in range(self.chosen.count())]
-        for n in names:
+        base = self.base_id()
+        for n in self.tree_compounds():
             try:
-                rxns = reactions_of(n, self._fac())
+                name, rxns = first_generation(n, base, self.addon_ids())
             except Exception as e:
-                self.tree_tabs.addTab(_info(f"cannot read the MCM file: {e}"), n); continue
+                self.tree_tabs.addTab(_info(f"cannot read the mechanism files of {base}: {e}"), n); continue
             if not rxns:
-                self.tree_tabs.addTab(_info("no reactions found (not an MCM species?)"), n); continue
+                self.tree_tabs.addTab(_info(f"no reactions of {n} in {base}"
+                                            + (" with these add-ons" if self.addon_ids() else "")
+                                            + " (not a species of this mechanism, or one that only forms)"), n); continue
+            n = n.upper() if name == n.upper() else f"{n.upper()} = {name}"
             order = ["OH", "O3", "NO3", "hv", ""]
             partners = sorted({r["partner"] for r in rxns}, key=lambda p: (order.index(p) if p in order else 9, p))
             cols = {p: [r for r in rxns if r["partner"] == p] for p in partners}
@@ -899,64 +926,38 @@ class ChemistryPage(QWizardPage):
     def _adjust_from_tree(self, item, _col=None):
         data = item.data(Qt.ItemDataRole.UserRole)
         if data:
-            _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
+            _add_row(self.adjust, [data[0], data[1], f"from {self.base_id()}; edit the expression or set 0"])
 
     def _find_reactions(self):
+        from juice.chemistry.first_generation import first_generation
         self.found.clear()
         q = self.rxn_search.text().strip()
         if not q:
             return
-        if self.is_gecko():
-            self._find_gecko_reactions(q.upper()); return
         try:
-            rxns = reactions_of(q, self._fac())
+            _name, rxns = first_generation(q, self.base_id(), self.addon_ids(), limit=60)
         except Exception as e:
-            self.found.addItem(f"cannot read the MCM file: {e}"); return
+            self.found.addItem(f"cannot read the mechanism files: {e}"); return
         for r in rxns:
             it = QListWidgetItem(f"{r['easy']}      k = {r['easy_rate']}"); it.setData(Qt.ItemDataRole.UserRole, (r["easy"], r["easy_rate"])); self.found.addItem(it)
+        if len(rxns) >= 60:
+            self.found.addItem("… more; narrow the name")
         if not rxns:
-            self.found.addItem(f"no MCM reactions with {q.upper()} as a reactant")
-
-    def _find_gecko_reactions(self, q: str):
-        """Reactions of the GECKO-A organic include with q as a reactant: 'X + ... --> ...' and its k[] line."""
-        import re as _re
-        b = self._bases[self.base_id()]
-        n = 0
-        try:
-            lines = open(b.path("organic"), encoding="latin-1").read().splitlines()
-        except OSError as e:
-            self.found.addItem(f"cannot read the GECKO-A include: {e}"); return
-        rates = {}
-        for l in lines:
-            m = _re.match(r"\s*k\[(.+?)\]\s*=\s*CONST\((.*)\)\s*$", l.split(";", 1)[0] if not l.lstrip().startswith(";") else "")
-            if m:
-                rates[_re.sub(r"\s+", "", m.group(1)).upper()] = m.group(2).strip()
-        for l in lines:
-            code = l.split(";", 1)[0].strip()
-            if "-->" not in code or code.startswith("k["):
-                continue
-            lhs = code.split("-->", 1)[0]
-            if any(_re.sub(r"^[0-9.eE+\-]*\*", "", t.strip()).upper() == q for t in lhs.split("+")):
-                rate = rates.get(_re.sub(r"\s+", "", code).upper(), "")
-                it = QListWidgetItem(f"{code}      k = {rate}"); it.setData(Qt.ItemDataRole.UserRole, (code, rate)); self.found.addItem(it)
-                n += 1
-                if n >= 60:
-                    self.found.addItem("… more; narrow the name"); break
-        if not n:
-            self.found.addItem(f"no GECKO-A reactions with {q} as a reactant")
+            self.found.addItem(f"no reactions in {self.base_id()} with {q.upper()} as a reactant")
 
     def _adjust_from_found(self, item):
         data = item.data(Qt.ItemDataRole.UserRole)
         if data:
-            _add_row(self.adjust, [data[0], data[1], "from the MCM; edit the expression or set 0"])
+            _add_row(self.adjust, [data[0], data[1], f"from {self.base_id()}; edit the expression or set 0"])
 
     def _addon_species(self) -> Dict[str, Tuple[str, str]]:
-        """NAME -> (formula, add-on id) of the add-ons installed for the chosen base (e.g. NOAA_BB's FURAN)."""
+        """NAME -> (formula, add-on id) of the compounds an add-on installed for the chosen base can start from
+        (its precursors, e.g. NOAA_BB's FURAN): its radicals and hydroperoxides only form, so they are not listed."""
         out: Dict[str, Tuple[str, str]] = {}
         try:
             for a in mreg.addons_for(self.base_id()):
-                for name, formula in (a.adds_species or {}).items():
-                    out.setdefault(name.upper(), (formula or "", a.id))
+                for name in (a.precursors or list(a.adds_species or {})):
+                    out.setdefault(name.upper(), ((a.adds_species or {}).get(name, "") or "", a.id))
         except Exception:
             pass
         return out
@@ -968,7 +969,7 @@ class ChemistryPage(QWizardPage):
         # add-on species first (they are few): '[add-on <id>]' says where they come from; choosing one ticks it
         for name, (formula, aid) in sorted(self._addon_species().items()):
             if not q or q in name or q in formula.upper():
-                self.candidates.addItem(f"{name}   {formula or '?'}   [add-on {aid}]")
+                self.candidates.addItem(f"{name}   {formula or '(formula not given)'}   [add-on {aid}]")
                 n += 1
         for name, e in MCM_DB.items():
             formula = getattr(e, "formula", "") or ""
