@@ -216,18 +216,21 @@ def test_chemistry_step_shows_planned_entries_greyed_out(app):
     w.close()
 
 
-def test_species_search_lists_addon_species_and_ticks_the_addon(app):
+def test_species_search_lists_addon_compounds_only_when_ticked(app):
     from juice.gui import juice_gui
     from juice.gui.experiment_wizard import ChemistryPage
     w = juice_gui.JuiceWindow("")
     page = w.findChildren(ChemistryPage)[0]
+    items = lambda: [page.candidates.item(i).text() for i in range(page.candidates.count())]
+    page.addon_combo.set_checked([]); page._addons_changed()
     page.search.setText("FURAN")
-    items = [page.candidates.item(i).text() for i in range(page.candidates.count())]
-    assert any(t.startswith("FURAN ") and "[add-on NOAA_BB]" in t for t in items)
-    row = next(i for i, t in enumerate(items) if t.startswith("FURAN "))
+    assert not any("[add-on" in t for t in items())                   # no add-on chosen: its compounds are not offered
+    page.addon_combo.set_checked(["NOAA_BB"]); page._addons_changed()
+    assert any(t.startswith("FURAN ") and "[add-on NOAA_BB]" in t for t in items())
+    assert not any(t.startswith("HYDFURANO2 ") for t in items())        # a radical of the add-on only forms
+    row = next(i for i, t in enumerate(items()) if t.startswith("FURAN "))
     page.candidates.item(row).setSelected(True)
     page._add_selected()
-    assert "NOAA_BB" in page.addon_ids()
     assert "FURAN" in [page.chosen.item(i).text() for i in range(page.chosen.count())]
     w.close()
 
