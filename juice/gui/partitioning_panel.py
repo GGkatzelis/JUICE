@@ -66,7 +66,7 @@ class PartitionDiagram(QWidget):
         accent = QColor("#6a4c93") if self.isEnabled() else fg
         v = self.values
         w = self.width()
-        bw, bh = min(170, w * 0.2), 64
+        bw, bh = min(160, w * 0.16), 64
         y = 20
         boxes = {"particle": QRectF(w * 0.03, y, bw, bh), "gas": QRectF((w - bw) / 2, y, bw, bh),
                  "wall": QRectF(w * 0.97 - bw, y, bw, bh)}
@@ -189,8 +189,8 @@ class PartitioningBox(QGroupBox):
         self.species.setMaximumHeight(170); dl.addWidget(self.species)
         self.species.horizontalHeaderItem(4).setToolTip("Gas–particle equilibrium without the wall: 1 / (1 + C*/C_OA)")
         lay.addWidget(self.details)
-        self.details.setVisible(False)
         self.toggle.toggled.connect(self.details.setVisible)
+        self.toggle.setChecked(True)                  # open by default: the scheme is the point of the panel
         self.refresh()
 
     @staticmethod

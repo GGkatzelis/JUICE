@@ -188,6 +188,10 @@ def import_generator_folder(folder: str, base_id: str = "", voc: str = "", name:
                    "options": {"maxgen_cut": maxgen, "cstar_max": cstar_max, "wall": wall}},
         "gecko": {"precursor": voc or primary_name, "primary_code": primary,
                   "primary_notation": mech.species[primary].notation if primary in mech.species else "",
+                  # every starting compound of the generator run (a mixture has several): what the Chemistry step offers
+                  "primaries": [{"code": p, "name": (voc if (voc and p == primary) else g.easy_name(p)),
+                                 "notation": mech.species[p].notation if p in mech.species else ""}
+                                for p in mech.primaries],
                   "n_species": len(mech.species), "n_species_generator": n_full[0], "n_reactions_generator": n_full[1],
                   "n_reactions_organic": n_org, "n_reactions_inorganic": n_an, "n_partitioning": len(soa), "n_names": n_names,
                   "n_species_tsv": n_tsv, "dropped": dict(conv.dropped), "rescaled": len(conv.rescaled)},

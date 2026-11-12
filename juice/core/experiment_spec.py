@@ -1269,8 +1269,11 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
                 for term in inj.products.replace(" ", "").split("+"):
                     sp = re.sub(r"^[0-9.eE+\-]*\*", "", term).upper()
                     if sp and sp not in known_species:
+                        held = [a for a in mreg.addon_holding(sp, spec.base_mechanism) if a not in spec.addons] if not whole else []
                         msgs.append(("warning", f"Injection '{inj.name}': product '{sp}' is not a species of the mechanism"
-                                                + (f" {whole} (used as a whole, so it cannot be added)." if whole else ".")))
+                                                + (f" {whole} (used as a whole, so it cannot be added)." if whole else
+                                                   f"; it is in the add-on {held[0]}: tick it under Add-ons on the Chemistry step."
+                                                   if held else ".")))
         elif not inj.start:
             msgs.append(("warning", f"Injection '{inj.name}': neither modelled nor timed — it has no effect."))
         seen_cols.add(col)
@@ -1296,7 +1299,12 @@ def known_species_for(spec: ExperimentSpec, include_dir: str, out_dir: str = "")
     names |= {t.upper() for t in spec.chamber.tracer_dilution}          # chamber tracers are defined by the dilution lines
     complete = not spec.mechanism_stem and mreg.is_complete(spec.base_mechanism)
     if not complete:
-        names |= {p.upper() for p in spec.precursors}
+        try:                                           # a chosen compound counts only if the MCM or a ticked add-on has it
+            from juice.chemistry.mcm_species_db import MCM_DB
+            ok = set(MCM_DB) | {s.upper() for s in mreg.addon_species(list(spec.addons))}
+        except Exception:
+            ok = set()
+        names |= {p.upper() for p in spec.precursors if not ok or spec.mechanism_stem or p.upper() in ok}
         names |= {"NO", "NO2", "O3", "CO", "CO2", "HONO", "H2O2", "HNO3", "SO2", "H2", "CH4", "HCHO"}
     for inj in spec.injections:                        # holding species of a delayed release are defined by the chain itself
         for lhs, rhs, _rate in inj.chain:

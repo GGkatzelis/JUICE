@@ -173,7 +173,9 @@ def test_chemistry_page_shows_a_gecko_base(registry):
     labels = [page.base_combo.itemText(i) for i in range(page.base_combo.count())]
     assert any(l.startswith("GECKO-A:") for l in labels) and any("Master Chemical" in l for l in labels)
     page.base_combo.setCurrentIndex(page.base_combo.findData(b.id))
-    assert page.is_gecko() and page.gecko_box.isVisibleTo(page) and not page.mcm_box.isVisibleTo(page)
+    assert page.is_gecko() and page.gecko_box.isVisibleTo(page)
+    # the compound search stays (it offers the mechanism's starting compounds); the MCM-only rows are hidden
+    assert not page.mode_row.isVisibleTo(page) and not page.mcm_extra.isVisibleTo(page)
     assert "C2H5OH" in page.gecko_info.text() and "183 organic" in page.gecko_info.text()
     page.gecko_core.setCurrentIndex(page.gecko_core.findData("mcm")); page.gecko_part.setChecked(False)
     s = es.ExperimentSpec(name="x"); page.apply(s)

@@ -439,6 +439,15 @@ class ReviewPanel(QWidget):
                         None)
             return (2, "A remark from the wiki import: check the injection it refers to; the note stays as a record of what the import assumed.", None)
         m = _re.search(r"Injection '([^']+)': product '([^']+)' is not a species", msg)
+        ma = _re.search(r"it is in the add-on (\w+)", msg)
+        if m and ma:
+            aid = ma.group(1)
+
+            def tick():
+                ch.addon_combo.set_checked(list(dict.fromkeys(ch.addon_ids() + [aid]))); ch._addons_changed()
+            return (1, f"'{m.group(2)}' is not an MCM species but the add-on {aid} brings it: {aid} is now ticked under "
+                       f"Add-ons (untick it if that is not wanted). Add '{m.group(2)}' to the chosen compounds if it is "
+                       f"not there yet.", tick)
         if m and "used as a whole" in msg:
             name, sp = m.group(1), m.group(2)
             return (1, f"'{sp}' is injected but the chosen base mechanism does not contain it, and a GECKO-A or lumped "

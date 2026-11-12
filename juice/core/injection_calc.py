@@ -428,6 +428,39 @@ def parse_mixture_text(text: str, default_unit: str = "ul") -> List[MixtureCompo
     return comps
 
 
+def find_in_addons(text: str, base_id: str = "") -> Optional[Tuple[str, str, "ResolvedCompound"]]:
+    """(species, add-on id, resolved) when `text` (a common name, species name or formula) is a species one of the
+    installed add-ons brings, ticked or not: what the import and the mixture check point the user to."""
+    try:
+        from juice.chemistry import mechanism_registry as mreg
+        addons = [a for a in mreg.load_addons().values() if not base_id or a.compatible(base_id)]
+    except Exception:
+        return None
+    for a in addons:
+        rc = resolve_compound(text, extra_species=a.adds_species)
+        if rc.status == "mcm" and rc.mcm.upper() in {s.upper() for s in a.adds_species}:
+            return rc.mcm.upper(), a.id, rc
+    # by formula (2-methylfuran is NOAA_BB's M2F, C5H6O): one compound an add-on starts from with that formula
+    rc = resolve_compound(text)
+    q = (text or "").strip()
+    formula = rc.formula or (q if re.fullmatch(r"[A-Z][A-Za-z0-9]*\d[A-Za-z0-9]*", q) else "")
+    if formula:
+        norm = lambda f: "".join(sorted(re.findall(r"[A-Z][a-z]?\d*", f.replace("1", ""))))
+        hits = [(n.upper(), a.id) for a in addons for n in (a.precursors or a.adds_species)
+                if a.adds_species.get(n) and norm(a.adds_species[n]) == norm(formula)]
+        if len(hits) == 1:
+            sp, aid = hits[0]
+            rc.mcm, rc.status, rc.formula = sp, "mcm", formula
+            rc.note = f"formula {formula} → {sp} (add-on {aid})"
+            return sp, aid, rc
+    return None
+
+
+def addon_note(species: str, addon_id: str) -> str:
+    return (f"'{species}' is not in the MCM but in the add-on {addon_id}: tick {addon_id} under Add-ons on the "
+            f"Chemistry step, or it is not modelled")
+
+
 def resolve_mixture(m: Mixture) -> List[Tuple[str, str]]:
     """Fill mcm/mw/density of every component from the tables (typed values are kept).
     Returns alerts [(level, message)]."""
@@ -436,9 +469,15 @@ def resolve_mixture(m: Mixture) -> List[Tuple[str, str]]:
         rc = resolve_compound(c.name)
         if not c.mcm and rc.mcm:
             c.mcm = rc.mcm
+        in_addon = None
+        if not c.mcm and not c.surrogate:              # not in the MCM: perhaps an add-on species (FURAN of NOAA_BB)
+            in_addon = find_in_addons(c.name)
+            if in_addon:
+                c.mcm = in_addon[0]; rc = in_addon[2]
+                alerts.append(("warning", f"{c.name}: " + addon_note(in_addon[0], in_addon[1])))
         c.mw = c.mw or rc.mw
         c.density = c.density or rc.density
-        if c.mcm and MCM_DB and c.mcm not in MCM_DB:
+        if c.mcm and MCM_DB and c.mcm not in MCM_DB and not in_addon and not find_in_addons(c.mcm):
             alerts.append(("error", f"{c.name}: '{c.mcm}' is not an MCM species"))
         if not c.mcm:
             if c.surrogate:

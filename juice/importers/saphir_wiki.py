@@ -447,7 +447,19 @@ def events_to_import(events: List[WikiEvent], date: str = "", T_K: float = 298.0
                 imp.checks.append(("warning", f"{t}: '{label}' ({a0['ppbc']:g} ppbC) has no recipe file — recorded only until the mixture is defined"))
                 continue
             rc = ic.resolve_compound(desc)
-            if rc.status == "mcm":
+            hit = ic.find_in_addons(desc) if rc.status != "mcm" else None
+            if hit:                                    # not in the MCM, but an add-on brings it (FURAN of NOAA_BB)
+                sp, aid, arc = hit
+                arc.mw = arc.mw or rc.mw; arc.density = arc.density or rc.density
+                ppb, delivery, expl, alerts = amount_for_compound(desc, arc, T_K, P_hPa, ch)
+                if sp not in imp.precursors:
+                    imp.precursors.append(sp)
+                add_event("voc", sp, sp, f"{ppb:.4g}" if ppb is not None else "0", t, dur,
+                          f"wiki: {desc[:60]} | {expl} | add-on {aid}", delivery=delivery)
+                imp.checks.append(("warning", f"{t}: " + ic.addon_note(sp, aid)))
+                for msg in alerts:
+                    imp.checks.append(("warning", f"{t}: {sp} — {msg}"))
+            elif rc.status == "mcm":
                 ppb, delivery, expl, alerts = amount_for_compound(desc, rc, T_K, P_hPa, ch)
                 if rc.mcm not in imp.precursors:
                     imp.precursors.append(rc.mcm)

@@ -33,7 +33,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 HERE = _JUICE_ROOT
 MECH_DIR = os.path.join(HERE, "chemistry", "mechanisms")
@@ -214,6 +214,34 @@ def species_names(base_id: str) -> Dict[str, str]:
                     if 0 <= i_mcm < len(cols) and cols[i_mcm]:
                         out[cols[i_mcm].upper()] = cols[i_formula]
     return out
+
+
+def starting_compounds(base_id: str) -> List[Tuple[str, str, str]]:
+    """(name, formula, note) of the compounds a complete base starts from: a GECKO-A mechanism's primaries (several
+    for a mixture run; older manifests name one), a lumped mechanism's species with an MCM name (C5H8 -> ISO).
+    [] for an MCM base, whose compounds are the whole MCM."""
+    try:
+        b = base(base_id)
+    except KeyError:
+        return []
+    formulas = species_names(base_id)
+    if b.is_gecko:
+        g = b.gecko or {}
+        prim = g.get("primaries") or [{"name": g.get("precursor", ""), "code": g.get("primary_code", ""),
+                                       "notation": g.get("primary_notation", "")}]
+        return [(p["name"].upper(), formulas.get(p["name"].upper(), ""),
+                 f"GECKO-A primary {p.get('code', '')} {p.get('notation', '')}".strip()) for p in prim if p.get("name")]
+    if b.is_lumped:
+        return sorted((m.upper(), formulas.get(m.upper(), ""), f"{b.id} species {o}")
+                      for m, o in ((b.lumped or {}).get("mcm_names") or {}).items())
+    return []
+
+
+def addon_holding(name: str, base_id: str = "") -> List[str]:
+    """Ids of the installed add-ons (compatible with base_id, if given) that bring species `name`."""
+    up = (name or "").strip().upper()
+    return [a.id for a in load_addons().values()
+            if (not base_id or a.compatible(base_id)) and up in {s.upper() for s in a.adds_species}]
 
 
 def addons_for(base_id: str, ids: Optional[List[str]] = None) -> List[AddOn]:

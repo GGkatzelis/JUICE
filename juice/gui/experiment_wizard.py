@@ -19,7 +19,7 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor
 from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
@@ -130,6 +130,29 @@ class MCMSpeciesDelegate(QStyledItemDelegate):
     def setModelData(self, editor, model, index):
         txt = editor.text().strip()
         model.setData(index, _MCM_ENTRY_TO_NAME.get(txt, txt))
+
+
+class MechanismSpeciesDelegate(QStyledItemDelegate):
+    """Cell editor with a completer over the species of the chosen mechanism (`names()` is asked each time the
+    editor opens, so it follows the base, add-ons and chosen compounds)."""
+
+    def __init__(self, parent, names):
+        super().__init__(parent)
+        self._names = names
+
+    def createEditor(self, parent, option, index):
+        ed = QLineEdit(parent)
+        comp = QCompleter(QStringListModel(self._names(), ed), ed)
+        comp.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        comp.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp.setMaxVisibleItems(12)
+        ed.setCompleter(comp)
+        ed.setPlaceholderText("type to search the mechanism")
+        return ed
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.text().strip())
 
 
 class MultiSelectCombo(QComboBox):
@@ -714,11 +737,6 @@ class ChemistryPage(QWizardPage):
                            "step under its MCM name where one exists, otherwise as G<GECKO code>. Mechanisms of this size run best "
                            "with the twostep solver profile."), 3, 0, 1, 2)
         lay.addWidget(self.gecko_box)
-        # gas-particle-wall partitioning: for every base; live where the base has the scheme (GECKO-A), else pending
-        from juice.gui.partitioning_panel import PartitioningBox
-        self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
-        self.partition.context = self._partition_context
-        lay.addWidget(self.partition)
         self.mcm_box = QWidget(); ml = QVBoxLayout(self.mcm_box); ml.setContentsMargins(0, 0, 0, 0)
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
         self.mode_existing = QRadioButton("Existing mechanism include set")
@@ -726,9 +744,10 @@ class ChemistryPage(QWizardPage):
         self.mode_inorganic.setToolTip("NOx, O3, HOx, CO, SO2 chemistry and photolysis plus the chamber's own HONO and HCHO sources —\n"
                                        "for tests such as dilution, NO/O3 titration, CO or zero-air experiments.")
         self.mode_compounds.setChecked(True)
-        hb = QHBoxLayout(); hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); ml.addLayout(hb)
+        self.mode_row = QWidget(); hb = QHBoxLayout(self.mode_row); hb.setContentsMargins(0, 0, 0, 0)
+        hb.addWidget(self.mode_compounds); hb.addWidget(self.mode_existing); hb.addWidget(self.mode_inorganic); hb.addStretch(); ml.addWidget(self.mode_row)
         g = QGridLayout()
-        g.addWidget(QLabel("Search MCM and add-on species (name or formula)"), 0, 0)
+        self.search_label = QLabel("Search MCM and add-on species (name or formula)"); g.addWidget(self.search_label, 0, 0)
         self.search = QLineEdit(); self.search.textChanged.connect(self._filter); g.addWidget(self.search, 0, 1)
         self.candidates = QListWidget(); g.addWidget(self.candidates, 1, 0, 1, 2)
         self.candidates.itemDoubleClicked.connect(lambda _it: self._add_selected())
@@ -738,10 +757,11 @@ class ChemistryPage(QWizardPage):
         g.addWidget(QLabel("Chosen compounds"), 0, 2)
         self.chosen = QListWidget(); g.addWidget(self.chosen, 1, 2, 2, 1)
         ml.addLayout(g)
+        self.mcm_extra = QWidget(); mx = QVBoxLayout(self.mcm_extra); mx.setContentsMargins(0, 0, 0, 0); ml.addWidget(self.mcm_extra)
         hb2 = QHBoxLayout(); hb2.addWidget(QLabel("Existing mechanism"))
         self.mech_combo = QComboBox(); self.mech_combo.setEditable(True)
         self.mech_combo.addItems([""] + list(scan_mechanisms(wiz.include_dir))); hb2.addWidget(self.mech_combo, stretch=1)
-        ml.addLayout(hb2)
+        mx.addLayout(hb2)
         # more folders with include files: an imported FACSIMILE experiment keeps its mechanism where it is
         hb2b = QHBoxLayout(); hb2b.addWidget(QLabel("Include folders"))
         self.include_dirs = QListWidget(); self.include_dirs.setMaximumHeight(52)
@@ -750,23 +770,16 @@ class ChemistryPage(QWizardPage):
         hb2b.addWidget(self.include_dirs, stretch=1)
         vb = QVBoxLayout(); b = QPushButton("Add …"); b.clicked.connect(self._add_include_dir); vb.addWidget(b)
         b = QPushButton("Remove"); b.clicked.connect(self._remove_include_dir); vb.addWidget(b); hb2b.addLayout(vb)
-        ml.addLayout(hb2b)
-        ml.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
+        mx.addLayout(hb2b)
+        mx.addWidget(_info("Compounds not in the MCM (e.g. emission mixtures) are represented by MCM surrogates; "
                            "the CHANEL template shows how a mixture is written as mole fractions."))
 
         lay.addWidget(self.mcm_box)
 
         # first-generation products of the compounds, from whichever base is chosen (first_generation.py):
         # one block per compound, one column per reaction partner, products listed downwards, rate on hover
-        tb = QGroupBox("First-generation chemistry (untick to hide)"); tb.setCheckable(True); tb.setChecked(True)
+        tb = QGroupBox("First-generation chemistry (untick to hide)"); tb.setCheckable(True); tb.setChecked(True); self.tree_box = tb
         tl = QVBoxLayout(tb)
-        self.tree_row = QWidget(); hr = QHBoxLayout(self.tree_row); hr.setContentsMargins(0, 0, 0, 0)
-        hr.addWidget(QLabel("Compounds"))
-        self.tree_names = QLineEdit(); self.tree_names.setPlaceholderText("names separated by commas, MCM names work (e.g. C5H8, APINENE)")
-        self.tree_names.setToolTip("A GECKO-A or lumped mechanism is used whole, so there is no list of chosen compounds: name the ones to show.\n"
-                                   "MCM names are translated through the mechanism's ALIAS lines (APINENE is RACM2's API).")
-        self.tree_names.editingFinished.connect(self.update_tree); hr.addWidget(self.tree_names, stretch=1)
-        tl.addWidget(self.tree_row)
         self.tree_tabs = QTabWidget(); self.tree_tabs.setDocumentMode(True); self.tree_tabs.setMaximumHeight(230)
         tl.addWidget(self.tree_tabs)
         hb3 = QHBoxLayout(); b = QPushButton("Update"); b.clicked.connect(self.update_tree); hb3.addWidget(b)
@@ -776,6 +789,12 @@ class ChemistryPage(QWizardPage):
         self._tree_widgets = [self.tree_tabs] + [hb3.itemAt(i).widget() for i in range(hb3.count()) if hb3.itemAt(i).widget()]
         tb.toggled.connect(self._toggle_tree)
         lay.addWidget(tb)
+
+        # gas-particle-wall partitioning: for every base; live where the base has the scheme (GECKO-A), else pending
+        from juice.gui.partitioning_panel import PartitioningBox
+        self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
+        self.partition.context = self._partition_context
+        lay.addWidget(self.partition)
 
         # reaction adjustments = EASY k[...] overrides
         ab = QGroupBox("Reaction adjustments (written exactly as EASY does it)"); al = QVBoxLayout(ab)
@@ -810,15 +829,20 @@ class ChemistryPage(QWizardPage):
 
     def _gecko_changed(self):
         g, lumped = self.is_gecko(), self.is_lumped()
-        self.gecko_box.setVisible(g); self.mcm_box.setVisible(not (g or lumped))
-        self.tree_row.setVisible(g or lumped)
-        if g:                                        # a GECKO-A mechanism is made for one compound: show it
-            prim = (self._bases[self.base_id()].gecko or {}).get("precursor", "")
-            if prim and prim.upper() not in [n.upper() for n in self.tree_compounds()]:
-                self.tree_names.setText(prim)
+        self.gecko_box.setVisible(g)
+        self.mode_row.setVisible(not (g or lumped)); self.mcm_extra.setVisible(not (g or lumped))
+        self.search_label.setText(f"Search the starting compounds of {self.base_id()} (name or formula)" if (g or lumped)
+                                  else "Search MCM and add-on species (name or formula)")
+        if g or lumped:                              # keep only compounds this mechanism starts from
+            start = {n for n, _f, _note in mreg.starting_compounds(self.base_id())}
+            for i in reversed(range(self.chosen.count())):
+                if self.chosen.item(i).text().upper() not in start:
+                    self.chosen.takeItem(i)
+            if g and self.chosen.count() == 0 and len(start) == 1:     # a single-compound GECKO-A run: that compound
+                self.chosen.addItem(next(iter(start)))
         if hasattr(self, "partition"):
             self.partition.set_base(self._bases.get(self.base_id()))
-        if self.tree_tabs.isVisible() or self.tree_tabs.count():
+        if self.tree_box.isChecked():
             self.update_tree()
         if lumped:                                   # a whole mechanism: nothing to choose, say what it is
             b = self._bases[self.base_id()]; d = b.lumped or {}
@@ -863,7 +887,8 @@ class ChemistryPage(QWizardPage):
         b = self._bases.get(self.base_id())
         if b is not None:
             probs = b.verify()
-            self.base_info.setText((f"v{b.version}, downloaded {b.source.get('downloaded', '?')[:60]}" if not probs
+            ver = ("v" if b.version[:1].isdigit() else "") + b.version
+            self.base_info.setText((ver + (f", downloaded {b.source['downloaded'][:60]}" if b.source.get("downloaded") else "") if not probs
                                     else "⚠ " + "; ".join(probs)[:120]))
         keep = self.addon_ids()
         addons = mreg.addons_for(self.base_id())
@@ -896,8 +921,6 @@ class ChemistryPage(QWizardPage):
         return self.is_gecko() or self.is_lumped()
 
     def tree_compounds(self) -> List[str]:
-        if self._complete():
-            return [n.strip() for n in self.tree_names.text().replace(";", ",").split(",") if n.strip()]
         return [self.chosen.item(i).text() for i in range(self.chosen.count())]
 
     def update_tree(self):
@@ -977,6 +1000,15 @@ class ChemistryPage(QWizardPage):
         self.candidates.clear()
         q = text.strip().upper()
         n = 0
+        if self._complete():
+            for name, formula, note in mreg.starting_compounds(self.base_id()):
+                if not q or q in name or q in formula.upper() or q in note.upper():
+                    self.candidates.addItem(f"{name}   {formula or '(formula not given)'}   [{note}]")
+            if not self.candidates.count():
+                it = QListWidgetItem(f"no starting compound of {self.base_id()} matches '{text.strip()}'" if q
+                                     else f"{self.base_id()} names no starting compounds")
+                it.setFlags(Qt.ItemFlag.NoItemFlags); self.candidates.addItem(it)
+            return
         # the ticked add-ons' compounds first (they are few): '[add-on <id>]' says where they come from
         for name, (formula, aid) in sorted(self._addon_species().items()):
             if not q or q in name or q in formula.upper():
@@ -1059,14 +1091,14 @@ class ChemistryPage(QWizardPage):
         spec.gecko_partitioning = self.gecko_part.isChecked()
         self.partition.store(spec)
         if self.is_lumped():                            # the whole mechanism; no subset, no add-ons yet
-            spec.inorganic_only = False; spec.mechanism_stem = ""; spec.precursors = []
+            spec.inorganic_only = False; spec.mechanism_stem = ""; spec.precursors = self.tree_compounds()
             spec.reaction_adjustments = [(a, b_, c) for a, b_, c in _rows(self.adjust) if a.strip()]
             spec.base_mechanism = self.base_id(); spec.addons = []; spec.include_dirs = self.include_dir_list()
             return
         if self.is_gecko():
             b = self._bases[self.base_id()]
             spec.inorganic_only = False; spec.mechanism_stem = ""
-            spec.precursors = [p for p in [(b.gecko or {}).get("precursor", "")] if p]
+            spec.precursors = self.tree_compounds() or [p for p in [(b.gecko or {}).get("precursor", "")] if p]
             spec.reaction_adjustments = [(a, b_, c) for a, b_, c in _rows(self.adjust) if a.strip()]
             spec.base_mechanism = self.base_id(); spec.addons = []; spec.include_dirs = self.include_dir_list()
             return
@@ -1173,6 +1205,23 @@ class InjectionsPage(QWizardPage):
             b = QPushButton(label); b.clicked.connect(fn); hb.addWidget(b)
         hb.addStretch(); lay.addLayout(hb)
         self.koh_total = QLabel(""); self.koh_total.setStyleSheet("color:#555"); self.koh_total.setWordWrap(True); lay.addWidget(self.koh_total)
+        # every compound the injections put in the chamber (mixtures expanded), checked against the chosen mechanism
+        cb = QGroupBox("Injected compounds — each injection split into the compounds it delivers"); cbl = QVBoxLayout(cb)
+        self.comp_info = _info("")
+        cbl.addWidget(self.comp_info)
+        self.comp = _table(["Start", "Injection", "Compound", "Share", "Amount [ppb]", "In the mechanism?", "Use instead (search the mechanism)"])
+        self.comp.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.comp.horizontalHeader().setStretchLastSection(True)
+        self.comp.horizontalHeaderItem(6).setToolTip(
+            "Type part of a name or formula and pick a species of the chosen mechanism: it replaces this compound in the\n"
+            "injection's product (the share is kept). An orange row is a compound the mechanism does not contain: it is\n"
+            "injected but nothing reacts with it.")
+        self.comp.setItemDelegateForColumn(6, MechanismSpeciesDelegate(self.comp, self._mechanism_names))
+        self.comp.itemChanged.connect(self._comp_changed)
+        self.comp.setMinimumHeight(150)
+        cbl.addWidget(self.comp); lay.addWidget(cb)
+        self._comp_timer = QTimer(self); self._comp_timer.setSingleShot(True); self._comp_timer.timeout.connect(self.refresh_compounds)
+        self.table.itemChanged.connect(lambda it: self._comp_timer.start(300) if it is not None and it.column() in (1, 2, 3, 5) else None)
         self.help = _more_info("Amount = total ppb injected, spread over the duration. Product = MCM species, or mole fractions (0.9*A+0.1*B).", [
             "<b>Product cell</b>: type a name (isoprene), an MCM name or a formula (C5H8) and pick from the list "
             "(formula, molar mass and SMILES are shown).",
@@ -1252,6 +1301,126 @@ class InjectionsPage(QWizardPage):
         for r in range(self.table.rowCount()):
             self._koh_row(r, T, p)
         self._koh_sum()
+
+    # ── the injected compounds, checked against the mechanism ──
+    ORANGE = QColor(255, 167, 38, 110)
+
+    def showEvent(self, e):                            # the base, add-ons or chosen compounds may have changed
+        super().showEvent(e)
+        self.refresh_compounds()
+
+    def _mechanism(self):
+        """(species the mechanism knows, base id, ticked add-ons, MCM base?) for the experiment as it stands."""
+        try:
+            spec = self.wiz.collect_spec()
+        except Exception:
+            return set(), "", [], True
+        from juice.core.experiment_spec import known_species_for
+        try:
+            known = known_species_for(spec, getattr(self.wiz, "include_dir", ""))
+        except Exception:
+            known = set()
+        return known, spec.base_mechanism, list(spec.addons), not mreg.is_complete(spec.base_mechanism)
+
+    def _mechanism_names(self) -> List[str]:
+        """What the 'Use instead' search offers: the mechanism's species (for the MCM: the whole MCM and the add-ons)."""
+        known, base, _addons, is_mcm = self._mechanism()
+        names = set(known)
+        if is_mcm:
+            names |= set(MCM_DB)
+            for a in mreg.addons_for(base):
+                names |= {s.upper() for s in a.adds_species}
+        return sorted(n for n in names if n and n[0].isalpha())
+
+    @staticmethod
+    def _terms(prod: str) -> List[Tuple[float, str]]:
+        out = []
+        for t in prod.replace(" ", "").split("+"):
+            if not t:
+                continue
+            m = re.match(r"^([0-9.eEdD+\-]+)\*(.+)$", t)
+            try:
+                out.append((float(m.group(1).replace("D", "E").replace("d", "e")), m.group(2).upper()) if m else (1.0, t.upper()))
+            except ValueError:
+                out.append((1.0, t.upper()))
+        return out
+
+    def _status(self, sp: str, known: set, base: str, addons: List[str], is_mcm: bool) -> Tuple[bool, str]:
+        if sp in known:
+            return True, f"✔ in {base}" + (f" + {', '.join(addons)}" if addons else "")
+        held = [a for a in mreg.addon_holding(sp, base) if a not in addons] if is_mcm else []
+        if held:
+            return False, f"in the add-on {held[0]}: tick it on the Chemistry step"
+        if is_mcm and sp in MCM_DB:
+            return False, "an MCM species, but not among the chosen compounds (Chemistry step)"
+        return False, f"✖ not in {base}" + (" — used as a whole" if not is_mcm else " — pick a surrogate")
+
+    def refresh_compounds(self):
+        known, base, addons, is_mcm = self._mechanism()
+        rows, bad_rows = [], set()
+        starts = {}                                    # an extra channel row has no start: its injection's
+        for r in range(self.table.rowCount()):
+            n_it, s_it = self.table.item(r, 1), self.table.item(r, 5)
+            if n_it is not None and s_it is not None and s_it.text().strip():
+                starts.setdefault(n_it.text().strip(), s_it.text().strip())
+        for r in range(self.table.rowCount()):
+            cell = lambda c: (self.table.item(r, c).text().strip() if self.table.item(r, c) else "")
+            prod, total = cell(2), cell(3)
+            if not prod:
+                continue
+            try:
+                tot = float(total)
+            except ValueError:
+                tot = None
+            for k, (share, sp) in enumerate(self._terms(prod)):
+                ok, why = self._status(sp, known, base, addons, is_mcm)
+                if not ok:
+                    bad_rows.add(r)
+                rows.append((r, k, cell(5) or starts.get(cell(1), ""), cell(1), sp, share, tot, ok, why))
+        self.comp.blockSignals(True)
+        self.comp.setRowCount(len(rows))
+        for i, (r, k, start, name, sp, share, tot, ok, why) in enumerate(rows):
+            vals = [start, name, sp, f"{share:.3g}", (f"{share * tot:.4g}" if tot is not None else "–"), why, ""]
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if c != 6:
+                    it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if not ok:
+                    it.setBackground(self.ORANGE)
+                it.setData(Qt.ItemDataRole.UserRole, (r, k))
+                self.comp.setItem(i, c, it)
+        self.comp.blockSignals(False)
+        self.table.blockSignals(True)                  # the product cell of an injection with a missing compound: orange
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 2)
+            if it is not None:
+                it.setBackground(self.ORANGE if r in bad_rows else QColor(0, 0, 0, 0))
+                it.setToolTip("a compound of this product is not in the mechanism — see Injected compounds below" if r in bad_rows else "")
+        self.table.blockSignals(False)
+        n_bad = sum(1 for row in rows if not row[7])
+        self.comp_info.setText(
+            (f"{len(rows)} compound(s) injected; {n_bad} not in the mechanism (orange): they are injected but nothing reacts "
+             f"with them. Pick a species of {base} under 'Use instead', or "
+             + ("tick the add-on / choose the compound on the Chemistry step." if is_mcm else
+                "choose a base mechanism that contains them (Chemistry step).") if n_bad else
+             f"{len(rows)} compound(s) injected, all in {base}" + (f" + {', '.join(addons)}" if addons else "") + ".")
+            if rows else "No modelled injections yet: rows with a product appear here, mixtures split into their compounds.")
+
+    def _comp_changed(self, item: QTableWidgetItem):
+        if item is None or item.column() != 6 or not item.text().strip():
+            return
+        new = item.text().strip().upper()
+        r, k = item.data(Qt.ItemDataRole.UserRole)
+        cell = self.table.item(r, 2)
+        if cell is None:
+            return
+        terms = self._terms(cell.text())
+        if k >= len(terms):
+            return
+        terms[k] = (terms[k][0], new)
+        text = " + ".join(sp if share == 1.0 and len(terms) == 1 else f"{share:g}*{sp}" for share, sp in terms)
+        cell.setText(text)                             # itemChanged of the main table refreshes this table
+        self._comp_timer.start(50)
 
     def _add_compounds(self):
         page = self.wiz.page_chem
@@ -1359,6 +1528,7 @@ class InjectionsPage(QWizardPage):
         _set_rows(self.chain, [[a, b, c] for inj in spec.injections for a, b, c in inj.chain])
         self.chain_box.setChecked(self.chain.rowCount() > 0)
         self.refresh_koh()
+        self._comp_timer.start(100)
 
     def get(self) -> List[InjectionEvent]:
         events: Dict[str, InjectionEvent] = {}
