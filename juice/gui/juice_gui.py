@@ -439,6 +439,12 @@ class ReviewPanel(QWidget):
                         None)
             return (2, "A remark from the wiki import: check the injection it refers to; the note stays as a record of what the import assumed.", None)
         m = _re.search(r"Injection '([^']+)': product '([^']+)' is not a species", msg)
+        if m and "used as a whole" in msg:
+            name, sp = m.group(1), m.group(2)
+            return (1, f"'{sp}' is injected but the chosen base mechanism does not contain it, and a GECKO-A or lumped "
+                       f"mechanism is used as a whole, so nothing can be added to it. Choose a base that contains '{sp}' "
+                       f"(for GECKO-A: import a generator run made for it, button 'Import GECKO-A output…'), or go to "
+                       f"Injections and replace it in '{name}' by a species of this mechanism.", None)
         if m:
             name, sp = m.group(1), m.group(2)
 

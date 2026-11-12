@@ -1193,10 +1193,12 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
                 msgs.append(("warning", f"Injection '{inj.name}': amount '{inj.total_ppb}' is an expression, "
                                         "it will be written verbatim."))
             if known_species:
+                whole = "" if spec.mechanism_stem or not mreg.is_complete(spec.base_mechanism) else spec.base_mechanism
                 for term in inj.products.replace(" ", "").split("+"):
                     sp = re.sub(r"^[0-9.eE+\-]*\*", "", term).upper()
                     if sp and sp not in known_species:
-                        msgs.append(("warning", f"Injection '{inj.name}': product '{sp}' is not a species of the mechanism."))
+                        msgs.append(("warning", f"Injection '{inj.name}': product '{sp}' is not a species of the mechanism"
+                                                + (f" {whole} (used as a whole, so it cannot be added)." if whole else ".")))
         elif not inj.start:
             msgs.append(("warning", f"Injection '{inj.name}': neither modelled nor timed — it has no effect."))
         seen_cols.add(col)
@@ -1212,13 +1214,18 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
 def known_species_for(spec: ExperimentSpec, include_dir: str, out_dir: str = "") -> set:
     """Species an injection may produce without a warning: the standard chamber species, the species of
     an existing include set (mechanism_stem) or — compounds mode — the chosen compounds, the add-on
-    species, and whatever a previously generated chemistry/ folder of the experiment contains."""
+    species, and whatever a previously generated chemistry/ folder of the experiment contains.
+    A complete base (GECKO-A, or a lumped mechanism such as CRACMM) is used whole: only its own species table
+    counts, so neither the precursors (ignored for such a base) nor the common inorganics are assumed."""
     names = mechanism_species(include_dir, spec.mechanism_stem) if spec.mechanism_stem else mechanism_species("", "")
     for d in (spec.include_dirs if spec.mechanism_stem else []):       # an imported experiment's own include folders
         if d and os.path.isdir(d):
             names |= mechanism_species(d, spec.mechanism_stem)
-    names |= {p.upper() for p in spec.precursors}
-    names |= {"NO", "NO2", "O3", "CO", "CO2", "HONO", "H2O2", "HNO3", "SO2", "H2", "CH4", "HCHO"}
+    names |= {t.upper() for t in spec.chamber.tracer_dilution}          # chamber tracers are defined by the dilution lines
+    complete = not spec.mechanism_stem and mreg.is_complete(spec.base_mechanism)
+    if not complete:
+        names |= {p.upper() for p in spec.precursors}
+        names |= {"NO", "NO2", "O3", "CO", "CO2", "HONO", "H2O2", "HNO3", "SO2", "H2", "CH4", "HCHO"}
     for inj in spec.injections:                        # holding species of a delayed release are defined by the chain itself
         for lhs, rhs, _rate in inj.chain:
             names |= {t.upper() for t in re.findall(r"[A-Za-z][A-Za-z0-9_]*", f"{lhs}+{rhs}")}

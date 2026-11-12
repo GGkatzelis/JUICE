@@ -687,6 +687,18 @@ class ChemistryPage(QWizardPage):
         mg.addWidget(self.addon_combo, 1, 1)
         self.addon_info = _info("none chosen"); mg.addWidget(self.addon_info, 1, 2)
         lay.addLayout(mg)
+        lay.addWidget(_more_info(
+            "Import GECKO-A output…: makes a GECKO-A run usable here, as one more base mechanism in this list.",
+            ["<b>What you need</b>: the output folder of a GECKO-A generator run (OUT/&lt;mechanism&gt;/ with dictionary.out, "
+             "reactionswithcom.dum, pvap.nan.dat, pero*.dat and scheme.log). GECKO-A itself is not run; JUICE only reads these files.",
+             "<b>What you set</b>: the MCM name of the compound the run was made for (e.g. C2H5OH, used by the injections), "
+             "a folder name, and optionally a generation cut (products beyond it stop reacting, a smaller mechanism), "
+             "a C* limit for gas–particle partitioning and the wall parameters (Krechmer or GECKO-A's own).",
+             "<b>What you get</b>: EASY include files in chemistry/mechanisms/base/&lt;id&gt;/ with checksums of the GECKO-A files, "
+             "and the new entry, selected, in the base list. Done once per GECKO-A run; GECKOA_ethanol was made this way.",
+             "<b>Injections</b>: a GECKO-A mechanism is used as a whole. The checks warn about every injected species "
+             "it does not contain; nothing can be added to it as with the MCM compounds."],
+            "ⓘ What does Import do?"))
         # a GECKO-A base: the generator's primary is the compound; two choices remain
         self.gecko_box = QGroupBox("GECKO-A mechanism"); gl = QGridLayout(self.gecko_box)
         self.gecko_info = _info(""); gl.addWidget(self.gecko_info, 0, 0, 1, 2)
@@ -1549,7 +1561,7 @@ class ReviewPage(QWizardPage):
         try:
             spec = self.wiz.collect_spec()
             self.preview.setPlainText(render_easy(spec))
-            known = known_species_for(spec, self.wiz.include_dir) if spec.mechanism_stem else None
+            known = known_species_for(spec, self.wiz.include_dir)
             msgs = validate(spec, known)
             self.checks.clear()
             self._has_error = False
