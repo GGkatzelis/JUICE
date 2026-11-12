@@ -311,7 +311,8 @@ authors.
   - Furfural photolysis is integrated from F0AM's cross section and its TUV actinic fluxes, the way
     F0AM computes it.
 
-All are marked *draft* until reviewed. The other mechanisms of the catalogue (CB05, CB6r2, CB7,
+These four are marked *reviewed* (12 Nov 2026), on the agreement with F0AM above; a newly converted
+mechanism starts as *draft*. The other mechanisms of the catalogue (CB05, CB6r2, CB7,
 SAPRC-07B, GEOS-Chem, MCM v3.2) are listed but not converted yet.
 
 ### GECKO-A mechanisms

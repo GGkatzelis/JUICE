@@ -855,6 +855,8 @@ class ChemistryPage(QWizardPage):
         ids = self.addon_ids()
         self.addon_info.setText("none chosen — the base mechanism as published" if not ids else
                                 "on top of the base: " + ", ".join(ids))
+        if hasattr(self, "candidates"):                # the search lists the compounds of the ticked add-ons only
+            self._filter(self.search.text())
 
     def _base_changed(self, _i: int = 0):
         b = self._bases.get(self.base_id())
@@ -951,11 +953,14 @@ class ChemistryPage(QWizardPage):
             _add_row(self.adjust, [data[0], data[1], f"from {self.base_id()}; edit the expression or set 0"])
 
     def _addon_species(self) -> Dict[str, Tuple[str, str]]:
-        """NAME -> (formula, add-on id) of the compounds an add-on installed for the chosen base can start from
-        (its precursors, e.g. NOAA_BB's FURAN): its radicals and hydroperoxides only form, so they are not listed."""
+        """NAME -> (formula, add-on id) of the compounds the ticked add-ons can start from (their precursors,
+        e.g. NOAA_BB's FURAN): nothing until an add-on is chosen; its radicals and hydroperoxides only form."""
         out: Dict[str, Tuple[str, str]] = {}
+        ticked = self.addon_ids()
+        if not ticked:
+            return out
         try:
-            for a in mreg.addons_for(self.base_id()):
+            for a in mreg.addons_for(self.base_id(), ticked):
                 for name in (a.precursors or list(a.adds_species or {})):
                     out.setdefault(name.upper(), ((a.adds_species or {}).get(name, "") or "", a.id))
         except Exception:
@@ -966,7 +971,7 @@ class ChemistryPage(QWizardPage):
         self.candidates.clear()
         q = text.strip().upper()
         n = 0
-        # add-on species first (they are few): '[add-on <id>]' says where they come from; choosing one ticks it
+        # the ticked add-ons' compounds first (they are few): '[add-on <id>]' says where they come from
         for name, (formula, aid) in sorted(self._addon_species().items()):
             if not q or q in name or q in formula.upper():
                 self.candidates.addItem(f"{name}   {formula or '(formula not given)'}   [add-on {aid}]")

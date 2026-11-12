@@ -35,7 +35,7 @@
   "license": "GPL-3.0 (F0AM)"
  },
  "citation": "Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header)",
- "status": "draft",
+ "status": "reviewed",
  "notes": "JHO2NO2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHO2NO2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM",
  "lumped": {
   "family": "lumped",

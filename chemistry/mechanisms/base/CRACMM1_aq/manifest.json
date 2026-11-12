@@ -35,7 +35,7 @@
   "license": "GPL-3.0 (F0AM)"
  },
  "citation": "Place et al. (2023); F0AM version of the CMAQ mech.def by B. Place (EPA)",
- "status": "draft",
+ "status": "reviewed",
  "notes": "JHNO4_RACM2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHNO4_RACM2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM2; O3 =: rate zero in a chamber or box (a.*ILLUMINATED.*OPEN_OCEAN)",
  "lumped": {
   "family": "lumped",

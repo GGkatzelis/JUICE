@@ -3,7 +3,7 @@
  "id": "NOAA_BB",
  "name": "NOAA biomass burning: furans, furfurals, phenolics",
  "version": "F0AM Chem/MCMv331/NOAA_BiomassBurning, built 2026-11-10",
- "status": "draft",
+ "status": "reviewed",
  "compatible_with": [
   "MCM_v3.3.1"
  ],
