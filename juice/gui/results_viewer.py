@@ -655,6 +655,51 @@ class BudgetEngine:
 
         return prod, dest
 
+    def pathway_source(self, df):
+        """(producers(species) -> [pathways.Producer], time axis in hours) for pathways.Tracer: the rate constants and
+        concentrations are evaluated once, the reactions are indexed by product, the rates computed on demand."""
+        from juice.chemistry.pathways import Producer
+        if not self._ready:
+            return (lambda _sp: []), df.index.values.astype(float)
+        n = len(df)
+        ctx = self._prepare_ctx(df)
+        M_arr = ctx['M']
+        index = {}
+        for rxn in self.mechanism.reactions:
+            for coeff, name in self._parse_stoich(rxn.products):
+                index.setdefault(name, []).append((rxn, coeff))
+        rates = {}
+
+        def rate(rxn):
+            key = id(rxn)
+            if key not in rates:
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore')
+                        k = eval(rxn.safe_expr, globals(), ctx)
+                except Exception:
+                    k = 0.0
+                if callable(k):
+                    k = 0.0
+                v = np.maximum(np.full(n, float(k)) if np.isscalar(k) else np.asarray(k, dtype=float), 0.0).copy()
+                for r_coeff, r_name in self._parse_stoich(rxn.reactants):
+                    conc = ctx.get(r_name)
+                    if conc is None:
+                        v = np.zeros(n); break
+                    c = np.full(n, float(conc)) if np.isscalar(conc) else np.asarray(conc, dtype=float)
+                    v *= np.maximum(c, 0.0) ** r_coeff
+                rates[key] = np.maximum(v / M_arr, 0.0) * 1e9 * 3600.0
+            return rates[key]
+
+        def producers(species):
+            out = []
+            for rxn, coeff in index.get(species.upper(), []):
+                expr = getattr(rxn, 'rate_expression', '') or ''
+                out.append(Producer(self._parse_stoich(rxn.reactants), coeff, rate(rxn), self._make_label(rxn),
+                                    bool(re.search(r'\bJ\w*|PHTFKT|KHV', expr.upper())), expr))
+            return out
+        return producers, df.index.values.astype(float)
+
     def compute_reactivity(self, radical, df):
         """Return {label: np.array} pseudo-first-order loss rate coefficients (s⁻¹)."""
         if not self._ready:
@@ -1241,6 +1286,9 @@ class ResultsViewer(QMainWindow):
         rx_layout.addWidget(self.rx_toolbar, 0)
         rx_layout.addWidget(self.rx_canvas, 1)
         self.right_tabs.addTab(rx_widget, "Reactivity")
+
+        # Tab 2b – Pathways: the chains of reactions that formed a species
+        self._build_pathways_tab()
 
         # Tab 3 – Carbon Budget
         _progress("Building the tabs: Carbon budget, Chemical space", 65)
@@ -1978,6 +2026,105 @@ class ResultsViewer(QMainWindow):
             print(f"[BudgetEngine] Load failed: {e}")
 
     # ── Process Analysis tab ──────────────────────────────────────────────────
+    # ── Pathways tab ───────────────────────────────────────────────────────────
+    def _build_pathways_tab(self):
+        """Pick a species: the reaction chains that formed it in a time window, back to the injected compounds, each
+        step as thick and as dark as its share of the species formed (juice.chemistry.pathways)."""
+        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(2, 2, 2, 0); lay.setSpacing(2)
+        row = QHBoxLayout(); row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Species:"))
+        self.pw_species = QComboBox(); self.pw_species.setEditable(True); self.pw_species.setMinimumWidth(140)
+        names = sorted(c for c in self.df.columns if c != 'M' and not c.upper().startswith('SAPHIR_'))
+        self.pw_species.addItems(names)
+        self.pw_species.setCurrentText(next((c for c in ('PAN', 'HCHO', 'O3') if c in names), names[0] if names else ""))
+        from PyQt6.QtWidgets import QCompleter
+        comp = QCompleter(names, self.pw_species); comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchFlag.MatchContains); self.pw_species.setCompleter(comp)
+        row.addWidget(self.pw_species)
+        t = self.df.index.values.astype(float)
+        row.addWidget(QLabel("from"))
+        self.pw_t0 = QDoubleSpinBox(); self.pw_t1 = QDoubleSpinBox()
+        for sb, v in ((self.pw_t0, t[0]), (self.pw_t1, t[-1])):
+            sb.setRange(float(t[0]), float(t[-1])); sb.setDecimals(2); sb.setSingleStep(0.25); sb.setSuffix(" h"); sb.setValue(float(v))
+        row.addWidget(self.pw_t0); row.addWidget(QLabel("to")); row.addWidget(self.pw_t1)
+        row.addWidget(QLabel("hide steps below"))
+        self.pw_thresh = QDoubleSpinBox(); self.pw_thresh.setRange(0.5, 50.0); self.pw_thresh.setDecimals(1)
+        self.pw_thresh.setSingleStep(1.0); self.pw_thresh.setValue(5.0); self.pw_thresh.setSuffix(" %")
+        self.pw_thresh.setToolTip("routes contributing less than this to the species formed are summed per box as 'other routes'")
+        row.addWidget(self.pw_thresh)
+        row.addWidget(QLabel("steps back"))
+        self.pw_depth = QSpinBox(); self.pw_depth.setRange(1, 20); self.pw_depth.setValue(8); row.addWidget(self.pw_depth)
+        self.pw_struct = QCheckBox("structures"); self.pw_struct.setChecked(True); row.addWidget(self.pw_struct)
+        b = QPushButton("Draw"); b.clicked.connect(self._update_pathways); row.addWidget(b)
+        row.addStretch()
+        lay.addLayout(row)
+        info = QLabel("The reactions that formed the species in the window, traced back to where its carbon came from. Each "
+                      "arrow's width and colour is its share of the species formed (net of equilibria); the partner (OH, NO, hν …) "
+                      "is written on it. Dashed boxes are sources without carbon of their own: an injection, a holding species of "
+                      "a delayed release, a chamber wall source. Click a box to trace that species.")
+        info.setWordWrap(True); info.setStyleSheet("color: #555; font-size: 10px;"); lay.addWidget(info)
+        self.pw_fig = Figure(figsize=(12, 6))
+        self.pw_canvas = FigureCanvas(self.pw_fig)
+        self.pw_toolbar = NavigationToolbar(self.pw_canvas, self)
+        from PyQt6.QtWidgets import QScrollArea
+        self.pw_scroll = QScrollArea(); self.pw_scroll.setWidgetResizable(True); self.pw_scroll.setWidget(self.pw_canvas)
+        lay.addWidget(self.pw_toolbar, 0); lay.addWidget(self.pw_scroll, 1)   # a long chain scrolls instead of shrinking
+        self.pw_canvas.mpl_connect('button_press_event', self._pathways_clicked)
+        self.pw_species.lineEdit().returnPressed.connect(self._update_pathways)
+        self._pw_source = None; self._pw_pos = {}
+        self.right_tabs.addTab(w, "Pathways")
+
+    def _species_info(self):
+        db = MCM_DB
+
+        def get(name, attr):
+            try:
+                if hasattr(db, attr) and callable(getattr(db, attr)):
+                    return getattr(db, attr)(name) or ""
+                e = db.get(name) if hasattr(db, "get") else None
+                return getattr(e, attr, "") or ""
+            except Exception:
+                return ""
+        return (lambda n: get(n, "formula")), (lambda n: get(n, "smiles"))
+
+    def _update_pathways(self):
+        from juice.chemistry import pathways as pw
+        sp = self.pw_species.currentText().strip().upper()
+        if not sp:
+            return
+        if self.budget_engine is None or not getattr(self.budget_engine, "_ready", False):
+            self.pw_fig.clear()
+            self.pw_fig.text(0.5, 0.5, "The pathways need the run's scenario (.json next to the results) for the reaction rates.",
+                             ha="center", va="center")
+            self.pw_canvas.draw(); return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            if self._pw_source is None:                       # rate constants and concentrations: evaluated once per run
+                self._pw_source = self.budget_engine.pathway_source(self.df)
+            producers, t = self._pw_source
+            formula, smiles = self._species_info()
+            t0, t1 = sorted((self.pw_t0.value(), self.pw_t1.value()))
+            g = pw.Tracer(producers, t, formula, (t0, t1)).trace(sp, self.pw_thresh.value() / 100.0, self.pw_depth.value())
+            self._pw_pos = pw.draw(self.pw_fig, g, formula, smiles, structures=self.pw_struct.isChecked())
+            self._pw_graph = g
+            w_in, h_in = pw.figure_size(self._pw_pos)
+            self.pw_canvas.setMinimumSize(int(w_in * 100), int(h_in * 100))      # ~150 px per structure box
+        except Exception as e:
+            self.pw_fig.clear(); self.pw_fig.text(0.5, 0.5, f"Pathways of {sp} not drawn: {e}", ha="center", va="center")
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.pw_canvas.draw()
+
+    def _pathways_clicked(self, event):
+        from juice.chemistry.pathways import BW, BH
+        if event.inaxes is None or event.xdata is None or self.pw_toolbar.mode:
+            return
+        for n, (x, y) in self._pw_pos.items():
+            if not n.startswith("source:") and abs(event.xdata - x) <= BW / 2 and abs(event.ydata - y) <= BH / 2:
+                if n != self.pw_species.currentText().upper():
+                    self.pw_species.setCurrentText(n); self._update_pathways()
+                return
+
     def _update_budget(self, species):
         self._pa_species = species                      # remembered so the 'Other' threshold can redraw
         self.pa_fig.clear()
