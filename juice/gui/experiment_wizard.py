@@ -717,6 +717,7 @@ class ChemistryPage(QWizardPage):
         # gas-particle-wall partitioning: for every base; live where the base has the scheme (GECKO-A), else pending
         from juice.gui.partitioning_panel import PartitioningBox
         self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
+        self.partition.context = self._partition_context
         lay.addWidget(self.partition)
         self.mcm_box = QWidget(); ml = QVBoxLayout(self.mcm_box); ml.setContentsMargins(0, 0, 0, 0)
         self.mode_compounds = QRadioButton("Compounds (MCM subset is generated)")
@@ -886,6 +887,11 @@ class ChemistryPage(QWizardPage):
         if on and self.tree_tabs.count() == 0:
             self.update_tree()
 
+    def _partition_context(self):
+        """(chamber profile, temperature in K, date) from the conditions step, for the partitioning panel."""
+        c = self.wiz.page_cond.get()
+        return c.chamber_name, c.temperature_K, c.date
+
     def _complete(self) -> bool:
         return self.is_gecko() or self.is_lumped()
 
@@ -1043,6 +1049,7 @@ class ChemistryPage(QWizardPage):
         self.mech_combo.setCurrentText(spec.mechanism_stem)
         i = self.gecko_core.findData(spec.gecko_core or "gecko"); self.gecko_core.setCurrentIndex(i if i >= 0 else 0)
         self.gecko_part.setChecked(bool(spec.gecko_partitioning))
+        self.partition.load(spec)
         (self.mode_existing if spec.mechanism_stem else self.mode_inorganic if spec.inorganic_only else self.mode_compounds).setChecked(True)
         _set_rows(self.adjust, [[a, b, c] for a, b, c in spec.reaction_adjustments])
         self.update_tree()
@@ -1050,6 +1057,7 @@ class ChemistryPage(QWizardPage):
     def apply(self, spec: ExperimentSpec):
         spec.gecko_core = self.gecko_core.currentData() or "gecko"
         spec.gecko_partitioning = self.gecko_part.isChecked()
+        self.partition.store(spec)
         if self.is_lumped():                            # the whole mechanism; no subset, no add-ons yet
             spec.inorganic_only = False; spec.mechanism_stem = ""; spec.precursors = []
             spec.reaction_adjustments = [(a, b_, c) for a, b_, c in _rows(self.adjust) if a.strip()]

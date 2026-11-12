@@ -347,7 +347,22 @@ files' SHA-256, the options). From then on it is a base mechanism like the MCM d
 "GECKO-A: …", and the page leaves two decisions — the **inorganic core** (GECKO-A's own, with its photolysis
 anchored on the measured jNO₂/jO¹D; or the MCM v3.3.1 core with the SAPHIR measured-J include, GECKO-A's
 names aliased, for a like-for-like comparison with an MCM run) and whether the **partitioning** include is
-loaded. Everything else — injections, chamber sources, dilution, photolysis, field emissions, studies —
+loaded.
+
+The partitioning panel on the Chemistry step draws the scheme and lists the rate constants the run uses. The
+**particles** set the condensation sink CS (Fuchs–Sutugin, D_g = 5e-6 m² s⁻¹, M = 200 g mol⁻¹, α = 1):
+
+- *None* (the default): CS = 0, the condensable species exchange with the walls only.
+- *One size*: a diameter and a number concentration, e.g. 100 nm and 1e4 cm⁻³, held constant.
+- *Size distribution file* (SMPS or similar): CS at every time, written to the ENZ file as column `CS`. The
+  first column is the time (any form the measured-inputs file takes); every other column is one size bin with
+  its mid diameter in nm as the header (`100`, `100.5 nm`, `Dp_100.5`); values dN/dlogDp or number per bin, in cm⁻³.
+
+The wall terms of the include were set for SAPHIR (A/V = 320 m² / 276 m³). In another chamber the gas–wall
+deposition k_gw and the wall capacity C_w are scaled with the chamber profile's A/V; a profile without its wall
+area keeps SAPHIR's values (noted under 'Needs attention'). The particle wall loss k_pw is not per chamber yet.
+
+Everything else — injections, chamber sources, dilution, photolysis, field emissions, studies —
 is written as for any experiment; the run folder gets the includes under `chemistry/`, so FACSIMILE runs
 it too, and the EASY header states the generator provenance. Two things an MCM include set brings in its
 `.saphir.incl` and a GECKO-A mechanism has to bring itself are written by the import and the writer: the

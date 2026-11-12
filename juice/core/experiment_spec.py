@@ -252,6 +252,13 @@ class ExperimentSpec:
     reference_cs: str = ""                                      # FACSIMILE results of the same experiment: 'Compare with FACSIMILE' on the Run step
     gecko_core: str = "gecko"           # GECKO-A base: inorganic core 'gecko' (as generated) or 'mcm' (MCM v3.3.1 + aliases, measured J include)
     gecko_partitioning: bool = True     # GECKO-A base: load the gas <-> particle <-> wall partitioning include (Nannoolal C*)
+    # particles for the partitioning (particles.py): "none" (CS = 0, walls only), "mono" (one size and number) or
+    # "file" (a measured size distribution → CS at every time, ENZ column CS)
+    particles: str = "none"
+    particle_d_nm: float = 100.0
+    particle_n_cm3: float = 1e4
+    particle_file: str = ""
+    particle_file_values: str = "dNdlogDp"   # or "dN": number per bin
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -614,6 +621,13 @@ def enz_columns(spec: ExperimentSpec) -> Tuple[np.ndarray, Dict[str, np.ndarray]
     for sp in c.constrain_species:
         if sp not in cols:
             notes.append(f"constrained species {sp} has no ENZ column")
+    if particles_from_file(spec):                           # the condensation sink of a measured size distribution
+        from juice.core import particles as pt
+        try:
+            cols["CS"] = pt.cs_on_grid(spec.particle_file, c.date, grid, c.temperature_K or 298.15, spec.particle_file_values)
+        except Exception as e:
+            notes.append(f"CS: size distribution not read ({e}); no particles (CS = 0)")
+            cols["CS"] = np.zeros(n)
     if c.j_source == "measured" or light == "lamps":
         rows, j_notes = measured_j_rows(c, grid)
         notes.extend(j_notes)
@@ -660,6 +674,50 @@ GECKO_ANCHOR_PHTFKT = {"jo1d": "6.073D-05,1.743,-0.474", "jno2": "1.165D-02,0.24
                        "jhono": "2.644D-03,0.261,-0.288", "jhcho_r": "4.642D-05,0.762,-0.353", "jhcho_m": "6.853D-05,0.477,-0.323"}
 
 
+def particles_from_file(spec: ExperimentSpec) -> bool:
+    """A GECKO-A run with partitioning whose condensation sink comes from a size-distribution file (ENZ column CS)."""
+    try:
+        return (spec.particles == "file" and spec.gecko_partitioning and is_gecko_base(spec.base_mechanism)
+                and "soa" in mreg.base(spec.base_mechanism).files)
+    except KeyError:
+        return False
+
+
+def particle_cs(spec: ExperimentSpec) -> Tuple[Optional[float], str]:
+    """(constant CS in 1/s, or None when it comes from the size-distribution file; what it is)."""
+    from juice.core import particles as pt
+    T = spec.conditions.temperature_K or 298.15
+    if spec.particles == "mono":
+        cs = pt.condensation_sink(spec.particle_d_nm, spec.particle_n_cm3, T)
+        return cs, f"{spec.particle_d_nm:g} nm, {spec.particle_n_cm3:g} cm-3"
+    if spec.particles == "file":
+        return None, f"size distribution {os.path.basename(spec.particle_file) or '(no file chosen)'}"
+    return 0.0, "no particles"
+
+
+def partitioning_lines(spec: ExperimentSpec) -> List[str]:
+    """EASY lines after the partitioning include: the condensation sink of the chosen particles, and the wall terms
+    scaled to this chamber's wall area per volume (the include's values are SAPHIR's; same chamber, no lines)."""
+    from juice.core import chambers, particles as pt
+    cs, what = particle_cs(spec)
+    out = [f"; PARTICLES: {what}"]
+    if cs is None:
+        out += ["CS_in = input(CS)", "KCOND = CONST(CS_in)   ; condensation sink from the size distribution (ENZ column CS)"]
+    else:
+        out.append(f"KCOND = CONST({cs:.4E})   ; condensation sink (Fuchs-Sutugin, D_g 5e-6 m2/s, alpha 1)")
+    try:
+        p = _profile(spec.conditions)
+        s = pt.wall_scale(p.surface_m2, p.volume_m3)
+    except Exception:
+        s = None
+    if s is not None and abs(s - 1.0) > 1e-9:
+        v = pt.read_soa_include(mreg.base(spec.base_mechanism).path("soa"))
+        out += [f"; WALL: {spec.conditions.chamber_name} A/V = {p.surface_m2 / p.volume_m3:.3g} 1/m, {s:.3g} x SAPHIR's: "
+                "gas-wall deposition and wall capacity scaled",
+                f"KFWALL = CONST({v['KFWALL'] * s:.4E})", f"CW_SCALE = CONST({v['CW_SCALE'] * s:.4g})"]
+    return out
+
+
 def gecko_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False) -> None:
     """Apply a GECKO-A base to a form whose photolysis rows are already set: include files, the .dil pair, the
     inorganic core choice (GECKO-A's own core drops the MCM anorg set and the SAPHIR measured-J include with its MCM
@@ -680,6 +738,8 @@ def gecko_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False) -> None:
     if core == "gecko":
         f.jmeasured_include = ""
         f.j_overrides = {}
+    if spec.gecko_partitioning and "soa" in mreg.base(spec.base_mechanism).files:
+        f.extra_statements += partitioning_lines(spec)
     have = {r.name for r in f.j_rows if r.mode != "off"}
     for j, n in lp.MEASURED_J.items():
         if j in have:
@@ -1170,6 +1230,18 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         pass
     if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only and not mreg.is_complete(spec.base_mechanism):
         msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
+    if spec.gecko_partitioning and is_gecko_base(spec.base_mechanism) and "soa" in mreg.base(spec.base_mechanism).files:
+        from juice.core import particles as pt
+        if spec.particles == "file" and not os.path.isfile(spec.particle_file or ""):
+            msgs.append(("error", "Particles: the size-distribution file is not found — choose it on the Chemistry step, "
+                                  "or 'No particles' / one size."))
+        try:
+            p = _profile(c)
+            if pt.wall_scale(p.surface_m2, p.volume_m3) is None:
+                msgs.append(("info", f"Walls: the wall area of {c.chamber_name} is not known (chamber profile), so the "
+                                     "gas-wall terms keep SAPHIR's values."))
+        except Exception:
+            pass
     if c.j_source == "measured" and c.source == "manual" and light == "sun" and not dark_run:
         msgs.append(("warning", "Measured J values selected without archive data: the J columns will be 0 "
                                 "(no photolysis). Use 'clear sky' or provide archive data."))
