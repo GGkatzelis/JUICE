@@ -1457,6 +1457,7 @@ class ResultsViewer(QMainWindow):
         """Double-click: context-aware action based on the active right tab.
         - Timeseries tab  → plot the species on the timeseries canvas.
         - Process Analysis tab → run the budget for this species.
+        - Pathways tab → draw the reaction chains that formed it.
         - Other tabs → no-op.
         """
         if item.childCount() != 0:
@@ -1467,6 +1468,8 @@ class ResultsViewer(QMainWindow):
             self.add_selected()
         elif active == "Process Analysis":
             self._update_budget(item.text(0))
+        elif active == "Pathways":
+            self.set_pathways_species(item.text(0))
 
     # ── Search / filter ───────────────────────────────────────────────────────
     def filter_list(self, text):
@@ -2032,14 +2035,11 @@ class ResultsViewer(QMainWindow):
         step as thick and as dark as its share of the species formed (juice.chemistry.pathways)."""
         w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(2, 2, 2, 0); lay.setSpacing(2)
         row = QHBoxLayout(); row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel("Species:"))
-        self.pw_species = QComboBox(); self.pw_species.setEditable(True); self.pw_species.setMinimumWidth(140)
-        names = sorted(c for c in self.df.columns if c != 'M' and not c.upper().startswith('SAPHIR_'))
-        self.pw_species.addItems(names)
-        self.pw_species.setCurrentText(next((c for c in ('PAN', 'HCHO', 'O3') if c in names), names[0] if names else ""))
-        from PyQt6.QtWidgets import QCompleter
-        comp = QCompleter(names, self.pw_species); comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        comp.setFilterMode(Qt.MatchFlag.MatchContains); self.pw_species.setCompleter(comp)
+        names = [c for c in self.df.columns if c != 'M' and not c.upper().startswith('SAPHIR_')]
+        self._pw_target = next((c for c in ('PAN', 'HCHO', 'O3') if c in names), names[0] if names else "")
+        self.pw_species = QLabel()                    # the species comes from a double-click in the list on the left
+        self.pw_species.setToolTip("Double-click a species in the list on the left (or a box in the drawing) to trace it")
+        self._pw_show_target()
         row.addWidget(self.pw_species)
         t = self.df.index.values.astype(float)
         row.addWidget(QLabel("from"))
@@ -2061,7 +2061,8 @@ class ResultsViewer(QMainWindow):
         info = QLabel("The reactions that formed the species in the window, traced back to where its carbon came from. Each "
                       "arrow's width and colour is its share of the species formed (net of equilibria); the partner (OH, NO, hν …) "
                       "is written on it. Dashed boxes are sources without carbon of their own: an injection, a holding species of "
-                      "a delayed release, a chamber wall source. Click a box to trace that species.")
+                      "a delayed release, a chamber wall source. Double-click a species on the left, or click a box, to "
+                      "trace that species.")
         info.setWordWrap(True); info.setStyleSheet("color: #555; font-size: 10px;"); lay.addWidget(info)
         self.pw_fig = Figure(figsize=(12, 6))
         self.pw_canvas = FigureCanvas(self.pw_fig)
@@ -2070,7 +2071,6 @@ class ResultsViewer(QMainWindow):
         self.pw_scroll = QScrollArea(); self.pw_scroll.setWidgetResizable(True); self.pw_scroll.setWidget(self.pw_canvas)
         lay.addWidget(self.pw_toolbar, 0); lay.addWidget(self.pw_scroll, 1)   # a long chain scrolls instead of shrinking
         self.pw_canvas.mpl_connect('button_press_event', self._pathways_clicked)
-        self.pw_species.lineEdit().returnPressed.connect(self._update_pathways)
         self._pw_source = None; self._pw_pos = {}
         self.right_tabs.addTab(w, "Pathways")
 
@@ -2087,9 +2087,18 @@ class ResultsViewer(QMainWindow):
                 return ""
         return (lambda n: get(n, "formula")), (lambda n: get(n, "smiles"))
 
+    def _pw_show_target(self):
+        self.pw_species.setText(f"Species: <b>{self._pw_target or '—'}</b>")
+
+    def set_pathways_species(self, name):
+        """Trace `name` in the Pathways tab (the double-click on the left, or a click on a box)."""
+        self._pw_target = name.strip().upper()
+        self._pw_show_target()
+        self._update_pathways()
+
     def _update_pathways(self):
         from juice.chemistry import pathways as pw
-        sp = self.pw_species.currentText().strip().upper()
+        sp = (self._pw_target or "").strip().upper()
         if not sp:
             return
         if self.budget_engine is None or not getattr(self.budget_engine, "_ready", False):
@@ -2121,8 +2130,8 @@ class ResultsViewer(QMainWindow):
             return
         for n, (x, y) in self._pw_pos.items():
             if not n.startswith("source:") and abs(event.xdata - x) <= BW / 2 and abs(event.ydata - y) <= BH / 2:
-                if n != self.pw_species.currentText().upper():
-                    self.pw_species.setCurrentText(n); self._update_pathways()
+                if n != self._pw_target.upper():
+                    self.set_pathways_species(n)
                 return
 
     def _update_budget(self, species):

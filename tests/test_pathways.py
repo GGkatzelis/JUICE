@@ -100,3 +100,13 @@ def test_ethanol_run():
     parents = {x.parent for x in h.edges}
     assert "CH3O2NO2" not in parents                                  # the CH3O2 <-> CH3O2NO2 equilibrium is net
     assert {"CH3O", "HOCH2CH2O", "CH3CO3"} <= parents
+    # a double-click on a species in the list on the left draws it when the Pathways tab is open
+    from PyQt6.QtWidgets import QTreeWidgetItemIterator
+    v.right_tabs.setCurrentIndex(v._tab("Pathways"))
+    it = QTreeWidgetItemIterator(v.var_tree)
+    while it.value() and it.value().text(0) != "CH3CHO":
+        it += 1
+    assert it.value() is not None
+    v._on_tree_double_click(it.value(), 0)
+    assert v._pw_target == "CH3CHO" and v._pw_graph.target == "CH3CHO"
+    assert ("C2H5OH", "CH3CHO") in {(x.parent, x.child) for x in v._pw_graph.edges}
