@@ -21,19 +21,15 @@ from typing import Dict
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPalette, QPen, QPolygonF, QStandardItemModel
-from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                              QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
                              QRadioButton, QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from juice.core.particles import read_soa_include, soa_defaults as _defaults
 
-# volatility methods: (label, available). Only GECKO-A's own vapour pressures are wired to a run.
-CSTAR_METHODS = [
-    ("Nannoolal et al. (2008), as GECKO-A computes it (pvap.nan.dat)", True),
-    ("SIMPOL.1 (Pankow and Asher, 2008), group contributions from the SMILES (pending)", False),
-    ("EVAPORATION (Compernolle et al., 2011) (pending)", False),
-    ("Measured or literature C* from a table (pending)", False),
-]
+# A GECKO-A base brings its own C* (the generator's pvap.nan.dat). For the MCM the user chooses one of
+# chemistry/volatility.py METHODS; a new method there appears in the drop-down without a change here.
+GECKO_CSTAR = "Nannoolal et al. (2008), as GECKO-A computes it (pvap.nan.dat)"
 PARTICLE_MODES = ("none", "mono", "file")
 
 
@@ -130,6 +126,11 @@ class PartitioningBox(QGroupBox):
         top = QHBoxLayout()
         self.enable = QCheckBox("Partition the condensable species between gas, particles and the chamber wall")
         self.enable.setChecked(True); top.addWidget(self.enable, stretch=1)
+        self._on = {"gecko": True, "computed": False}     # the tick per kind of base (ExperimentSpec.gecko_partitioning / .partitioning)
+        self._kind = ""
+        self._preview: Dict = {}
+        self.spec_provider = None                         # () -> the experiment as set up so far (for 'Show the species')
+        self.enable.toggled.connect(self._enable_toggled)
         self.toggle = QPushButton("ⓘ Scheme and values"); self.toggle.setCheckable(True); self.toggle.setFlat(True)
         self.toggle.setStyleSheet("QPushButton { color: #6a4c93; border: none; padding: 0 4px; } QPushButton:checked { font-weight: bold; }")
         self.toggle.setMinimumWidth(self.toggle.fontMetrics().horizontalAdvance(self.toggle.text()) + 24)
@@ -172,13 +173,23 @@ class PartitioningBox(QGroupBox):
         self.details = QWidget(); dl = QVBoxLayout(self.details); dl.setContentsMargins(0, 0, 0, 0)
         self.diagram = PartitionDiagram(); dl.addWidget(self.diagram)
         mrow = QHBoxLayout(); mrow.addWidget(QLabel("C* (volatility) from"))
-        self.method = QComboBox(); model: QStandardItemModel = self.method.model()
-        for label, ok in CSTAR_METHODS:
-            self.method.addItem(label)
-            model.item(self.method.count() - 1).setEnabled(ok)
-        self.method.setToolTip("C* = p_sat · M / (R T) in µg m⁻³. Only the GECKO-A vapour pressures are wired to a run so far;\n"
-                               "the other methods are listed for the discussion and not selectable yet.")
-        mrow.addWidget(self.method, stretch=1); dl.addLayout(mrow)
+        self.method = QComboBox(); self._method_id = "simpol"; self._fill_methods("")
+        self.method.setToolTip("C* = p_sat · M / (R T) in µg m⁻³ at 298 K, for every closed-shell organic species.\n"
+                               "The methods differ by orders of magnitude; the choice is written into the run's files.")
+        self.method.currentIndexChanged.connect(self._method_changed)
+        mrow.addWidget(self.method, stretch=1)
+        self.limit_label = QLabel("leave out species with C* above"); mrow.addWidget(self.limit_label)
+        self.limit = QLineEdit("1e7"); self.limit.setMaximumWidth(70)
+        self.limit.setToolTip("µg m⁻³; 0 = partition every species. Six reactions are written per species, so a limit keeps\n"
+                              "the mechanism small; species far above the organic mass and the wall capacity stay in the gas anyway.")
+        self.limit_unit = QLabel("µg m⁻³")
+        mrow.addWidget(self.limit); mrow.addWidget(self.limit_unit)
+        self.preview_btn = QPushButton("Show the species"); self.preview_btn.clicked.connect(self.preview)
+        self.preview_btn.setToolTip("Builds the mechanism of the chosen compounds and lists what partitions with this method")
+        mrow.addWidget(self.preview_btn)
+        dl.addLayout(mrow)
+        self.method_info = QLabel(); self.method_info.setWordWrap(True); self.method_info.setStyleSheet("color: #888;")
+        dl.addWidget(self.method_info)
         self.params = QTableWidget(0, 4); self.params.setHorizontalHeaderLabels(["Symbol", "Meaning", "Value in the run", "Source"])
         self._table_style(self.params); dl.addWidget(self.params)
         self.species_label = QLabel(); self.species_label.setStyleSheet("color: #888;"); dl.addWidget(self.species_label)
@@ -213,7 +224,72 @@ class PartitioningBox(QGroupBox):
     def particle_mode(self) -> str:
         return PARTICLE_MODES[max(0, self.p_group.checkedId())]
 
+    # ── the volatility method ──
+    def _fill_methods(self, kind: str):
+        """The drop-down for this kind of base: GECKO-A's own C*, or the methods of chemistry/volatility.py."""
+        from juice.chemistry import volatility as vol
+        self.method.blockSignals(True)
+        self.method.clear()
+        if kind == "gecko":
+            self.method.addItem(GECKO_CSTAR, "gecko")
+        else:
+            model: QStandardItemModel = self.method.model()
+            for m in vol.METHODS.values():
+                ok, why = m.available()
+                self.method.addItem(m.label + ("" if ok else "  (not installed)"), m.id)
+                it = model.item(self.method.count() - 1)
+                it.setEnabled(ok)
+                it.setToolTip(m.reference + ("" if ok else "\n" + why))
+            i = self.method.findData(self._method_id)
+            self.method.setCurrentIndex(i if i >= 0 else 0)
+        self.method.blockSignals(False)
+
+    def _method_changed(self, *_):
+        if self._kind == "computed" and self.method.currentData():
+            self._method_id = self.method.currentData()
+            self._preview = {}
+            self.refresh()
+
+    def _enable_toggled(self, on: bool):
+        if self._kind in self._on:
+            self._on[self._kind] = bool(on)
+
+    def cstar_limit(self) -> float:
+        try:
+            return max(0.0, float(self.limit.text()))
+        except ValueError:
+            return 1.0e7
+
+    def preview(self):
+        """Build the mechanism subset of the experiment as set up so far and list what partitions (MCM only)."""
+        import copy, shutil, tempfile
+        from juice.core import experiment_spec as es
+        if self.spec_provider is None:
+            return
+        tmp = tempfile.mkdtemp(prefix="juice_partition_")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            spec = copy.deepcopy(self.spec_provider())
+            spec.partitioning, spec.volatility_method, spec.partition_cstar_max = True, self._method_id, self.cstar_limit()
+            spec.mechanism_stem = ""
+            res = es.ensure_mechanism(spec, tmp).get("partitioning")
+            if not res:
+                self._preview = {"error": "choose compounds first (Chemistry step, 'Compounds')"}
+            else:
+                self._preview = dict(res, values=read_soa_include(res["include"]))
+        except Exception as e:
+            self._preview = {"error": f"{type(e).__name__}: {e}"}
+        finally:
+            QApplication.restoreOverrideCursor()
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.refresh()
+
     def load(self, spec):
+        self._on = {"gecko": bool(spec.gecko_partitioning), "computed": bool(getattr(spec, "partitioning", False))}
+        self._method_id = getattr(spec, "volatility_method", "simpol") or "simpol"
+        self.limit.setText(f"{float(getattr(spec, 'partition_cstar_max', 1e7)):g}")
+        self._preview = {}
+        self._kind = None                                 # refresh() sets the tick and the drop-down for the base again
         {"mono": self.p_mono, "file": self.p_file}.get(spec.particles, self.p_none).setChecked(True)
         self.p_d.setValue(float(spec.particle_d_nm)); self.p_n.setText(f"{float(spec.particle_n_cm3):g}")
         self.p_path.setText(spec.particle_file or "")
@@ -221,6 +297,8 @@ class PartitioningBox(QGroupBox):
         self.refresh()
 
     def store(self, spec):
+        spec.gecko_partitioning, spec.partitioning = self._on["gecko"], self._on["computed"]
+        spec.volatility_method, spec.partition_cstar_max = self._method_id, self.cstar_limit()
         spec.particles = self.particle_mode()
         spec.particle_d_nm = float(self.p_d.value())
         try:
@@ -263,9 +341,17 @@ class PartitioningBox(QGroupBox):
     def refresh(self):
         from juice.core import chambers, particles as pt
         b = self._b
-        live = bool(b is not None and getattr(b, "is_gecko", False) and b.path("soa"))
-        v = read_soa_include(b.path("soa") if live else "")
-        src = os.path.basename(v["path"]) if live else "make_soa_condensation.py defaults (proposal)"
+        gecko = bool(b is not None and getattr(b, "is_gecko", False) and b.path("soa"))
+        kind = "gecko" if gecko else ("computed" if b is not None and getattr(b, "kind", "") == "base" else "")
+        live = bool(kind)
+        if kind != self._kind:
+            self._kind = kind
+            self._fill_methods(kind)
+            self.enable.blockSignals(True); self.enable.setChecked(self._on.get(kind, False)); self.enable.blockSignals(False)
+        pv = self._preview if kind == "computed" else {}
+        v = read_soa_include(b.path("soa")) if gecko else (dict(pv["values"]) if pv.get("values") else read_soa_include(""))
+        src = (os.path.basename(v["path"]) if gecko else
+               "the scheme's standard values (make_soa_condensation.py)" if kind == "computed" else "make_soa_condensation.py defaults")
         try:
             chamber, T, date = self.context()
         except Exception:
@@ -289,17 +375,29 @@ class PartitioningBox(QGroupBox):
         mode = self.particle_mode()
 
         self.setTitle("Gas–particle–wall partitioning" + ("" if live else " (pending)"))
-        self.enable.setVisible(live)                  # its tick is ExperimentSpec.gecko_partitioning: meaningless elsewhere
-        self.species.setVisible(live)
+        self.enable.setVisible(live)                  # its tick is the run switch for this kind of base: meaningless elsewhere
+        self.species.setVisible(gecko or bool(pv.get("values")))
         for w in (self.diagram, self.method, self.params, self.species, self.pbox):
             w.setEnabled(live)
+        for w in (self.limit_label, self.limit, self.limit_unit, self.preview_btn):
+            w.setVisible(kind == "computed")
+        self.method.setEnabled(kind == "computed")
         self.diagram.set_values(v)
         name = getattr(b, "id", "this mechanism")
+        if kind == "computed":
+            from juice.chemistry import volatility as vol
+            m = vol.METHODS.get(self._method_id)
+            self.method_info.setText((m.reference if m else "") + (
+                f". {pv['summary']}." if pv.get("summary") else f". Not listed: {pv['error']}." if pv.get("error") else
+                ". 'Show the species' lists what partitions for the chosen compounds."))
+        else:
+            self.method_info.setText("")
         self.status.setText(
-            f"Active for {name}: {len(v['species'])} condensable species, values from {src}; walls: {walls}." if live else
-            f"Pending for {name}: only GECKO-A mechanisms have the scheme so far (it needs C* for every product). "
-            "Shown greyed out with the values a GECKO-A run uses, as the starting point for deciding how other "
-            "mechanisms get it.")
+            f"Active for {name}: {len(v['species'])} condensable species, values from {src}; walls: {walls}." if gecko else
+            f"Available for {name} with chosen compounds: every closed-shell organic product gets the six partitioning "
+            f"reactions, with C* from the method below; values from {src}; walls: {walls}. Off unless ticked." if live else
+            f"Pending for {name}: a lumped mechanism has no structure per species, so no C* can be computed for it yet. "
+            "Shown greyed out with the scheme's standard values.")
         rows = [("CS = k_cond", "condensation sink onto the particles",
                  "from the size distribution, at every time" if mode == "file" else f"{cs:.3g} s⁻¹ ({_tau(cs)})",
                  {"none": "no particles", "mono": "one size and number, Fuchs–Sutugin",
@@ -320,7 +418,9 @@ class PartitioningBox(QGroupBox):
                 self.params.setItem(r, c, QTableWidgetItem(txt))
         self.params.setFixedHeight(self.params.horizontalHeader().height() + sum(self.params.rowHeight(i) for i in range(len(rows))) + 4)
         sp = sorted(v["species"], key=lambda s: s[1])
-        self.species_label.setText(f"Condensable species of {name}, lowest C* first ({len(sp)})" if live else
+        self.species_label.setText(f"Condensable species of {name}, lowest C* first ({len(sp)})" if gecko else
+                                   f"Partitioning species for the chosen compounds, lowest C* first ({len(sp)})" if pv.get("values") else
+                                   "" if kind == "computed" else
                                    "Condensable species: none (no partitioning include for this mechanism)")
         self.species.setRowCount(len(sp))
         coa = v["COA0"] or 0.5

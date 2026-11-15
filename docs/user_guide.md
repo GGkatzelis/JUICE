@@ -362,6 +362,29 @@ The wall terms of the include were set for SAPHIR (A/V = 320 m² / 276 m³). In 
 deposition k_gw and the wall capacity C_w are scaled with the chamber profile's A/V; a profile without its wall
 area keeps SAPHIR's values (noted under 'Needs attention'). The particle wall loss k_pw is not per chamber yet.
 
+**Partitioning with the MCM.** With chosen compounds the same scheme is available for the MCM; it is off unless
+ticked. Every closed-shell organic species of the mechanism subset and its add-ons gets the six reactions
+(radicals, CO, CO₂ and CH₄ do not), written to `chemistry/<name>.SOA.include`. Their volatility C* comes from
+the method chosen in the drop-down, which is one entry each in `juice/chemistry/volatility.py`:
+
+| Method | Needs | Reference |
+|---|---|---|
+| SIMPOL.1 (default) | the structure | Pankow and Asher (2008) |
+| Nannoolal (what GECKO-A uses) | the structure; UManSysProp and Open Babel | Nannoolal et al. (2008, 2004) |
+| EVAPORATION (not for aromatics) | the structure; UManSysProp and Open Babel | Compernolle et al. (2011) |
+| Li et al. with EVAPORATION for organic nitrogen | the formula | Li et al. (2016); routing F. Rohrer |
+| Li et al., volatility basis set | the formula | Li et al. (2016) |
+| Donahue et al., 2-D volatility basis set | the formula | Donahue et al. (2011) |
+
+The answers differ by orders of magnitude, so the choice is a modelling decision: the structure methods agree
+with each other within about 0.1 orders in the median (F. Rohrer, 387 limonene products), the formula methods
+are several orders lower and make organic nitrates and PANs condensable. The two UManSysProp methods are
+listed but not selectable until `pip install openbabel-wheel` and UManSysProp_public are installed (or the
+environment variable `UMANSYS` points to a checkout). *Leave out species with C\* above* (default 1e7 µg m⁻³)
+keeps the mechanism small; *Show the species* builds the subset and lists what partitions. A lumped mechanism
+(RACM2, CRACMM) has no structure per species; partitioning stays pending there. From code:
+`exp.partitioning = True; exp.volatility_method = 'li2016'; exp.particles = 'mono'`.
+
 Everything else — injections, chamber sources, dilution, photolysis, field emissions, studies —
 is written as for any experiment; the run folder gets the includes under `chemistry/`, so FACSIMILE runs
 it too, and the EASY header states the generator provenance. Two things an MCM include set brings in its

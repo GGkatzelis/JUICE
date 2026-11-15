@@ -790,10 +790,12 @@ class ChemistryPage(QWizardPage):
         tb.toggled.connect(self._toggle_tree)
         lay.addWidget(tb)
 
-        # gas-particle-wall partitioning: for every base; live where the base has the scheme (GECKO-A), else pending
+        # gas-particle-wall partitioning: GECKO-A brings the scheme; for the MCM it is written with a chosen
+        # volatility method; lumped mechanisms: pending
         from juice.gui.partitioning_panel import PartitioningBox
         self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
         self.partition.context = self._partition_context
+        self.partition.spec_provider = lambda: self.wiz.collect_spec()
         lay.addWidget(self.partition)
 
         # reaction adjustments = EASY k[...] overrides

@@ -252,6 +252,12 @@ class ExperimentSpec:
     reference_cs: str = ""                                      # FACSIMILE results of the same experiment: 'Compare with FACSIMILE' on the Run step
     gecko_core: str = "gecko"           # GECKO-A base: inorganic core 'gecko' (as generated) or 'mcm' (MCM v3.3.1 + aliases, measured J include)
     gecko_partitioning: bool = True     # GECKO-A base: load the gas <-> particle <-> wall partitioning include (Nannoolal C*)
+    # MCM (chosen compounds): the same scheme for every closed-shell organic product, with C* from the chosen
+    # method (chemistry/volatility.py METHODS); off unless asked for. partition_cstar_max: species more volatile
+    # than this (ug m-3) are left out (0 = every species)
+    partitioning: bool = False
+    volatility_method: str = "simpol"
+    partition_cstar_max: float = 1.0e7
     # particles for the partitioning (particles.py): "none" (CS = 0, walls only), "mono" (one size and number) or
     # "file" (a measured size distribution → CS at every time, ENZ column CS)
     particles: str = "none"
@@ -674,13 +680,26 @@ GECKO_ANCHOR_PHTFKT = {"jo1d": "6.073D-05,1.743,-0.474", "jno2": "1.165D-02,0.24
                        "jhono": "2.644D-03,0.261,-0.288", "jhcho_r": "4.642D-05,0.762,-0.353", "jhcho_m": "6.853D-05,0.477,-0.323"}
 
 
-def particles_from_file(spec: ExperimentSpec) -> bool:
-    """A GECKO-A run with partitioning whose condensation sink comes from a size-distribution file (ENZ column CS)."""
+def partitioning_kind(spec: ExperimentSpec) -> str:
+    """'gecko' (the base brings its partitioning include), 'computed' (MCM, chosen compounds: the include is written
+    for the mechanism subset with C* from spec.volatility_method) or '' (no partitioning in this run)."""
     try:
-        return (spec.particles == "file" and spec.gecko_partitioning and is_gecko_base(spec.base_mechanism)
-                and "soa" in mreg.base(spec.base_mechanism).files)
+        if is_gecko_base(spec.base_mechanism):
+            return "gecko" if spec.gecko_partitioning and "soa" in mreg.base(spec.base_mechanism).files else ""
+        if mreg.is_lumped(spec.base_mechanism):
+            return ""                                  # lumped species have no structure: pending
     except KeyError:
-        return False
+        return ""
+    return "computed" if spec.partitioning and (spec.precursors or spec.inorganic_only) else ""
+
+
+def soa_include_name(spec: ExperimentSpec) -> str:
+    return f"{spec.name}.SOA.include"
+
+
+def particles_from_file(spec: ExperimentSpec) -> bool:
+    """A run with partitioning whose condensation sink comes from a size-distribution file (ENZ column CS)."""
+    return spec.particles == "file" and bool(partitioning_kind(spec))
 
 
 def particle_cs(spec: ExperimentSpec) -> Tuple[Optional[float], str]:
@@ -711,7 +730,8 @@ def partitioning_lines(spec: ExperimentSpec) -> List[str]:
     except Exception:
         s = None
     if s is not None and abs(s - 1.0) > 1e-9:
-        v = pt.read_soa_include(mreg.base(spec.base_mechanism).path("soa"))
+        v = (pt.read_soa_include(mreg.base(spec.base_mechanism).path("soa")) if partitioning_kind(spec) == "gecko"
+             else pt.soa_defaults())                   # a computed include is written with the module's values
         out += [f"; WALL: {spec.conditions.chamber_name} A/V = {p.surface_m2 / p.volume_m3:.3g} 1/m, {s:.3g} x SAPHIR's: "
                 "gas-wall deposition and wall capacity scaled",
                 f"KFWALL = CONST({v['KFWALL'] * s:.4E})", f"CW_SCALE = CONST({v['CW_SCALE'] * s:.4g})"]
@@ -916,6 +936,10 @@ def easy_form(spec: ExperimentSpec) -> EasyForm:
         gecko_form(f, spec, lamps=lamps)
     elif mreg.is_lumped(spec.base_mechanism):
         lamp_lines = lumped_form(f, spec, lamps=lamps, lamp_lines=lamp_lines)
+    elif partitioning_kind(spec) == "computed":        # MCM: the include ensure_mechanism writes, then the run's values
+        if soa_include_name(spec) not in f.includes_other:
+            f.includes_other.append(soa_include_name(spec))
+        f.extra_statements += partitioning_lines(spec)
     if lamps and spec.addons:                          # add-ons with F0AM channels: their JN<k> under the lamps
         try:
             jn = sorted({k for a in mreg.addons_for(spec.base_mechanism, list(spec.addons)) for k in a.j_f0am})
@@ -967,6 +991,9 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
     if mreg.is_lumped(spec.base_mechanism):
         return _ensure_lumped(spec, out_dir)
     if spec.mechanism_stem or not (spec.precursors or spec.inorganic_only):
+        chem = os.path.join(out_dir, "chemistry")      # the subset exists already: only the partitioning may have changed
+        if partitioning_kind(spec) == "computed" and os.path.isfile(os.path.join(chem, spec.mechanism_stem + ".mech")):
+            return {"partitioning": write_partitioning_include(spec, chem)}
         return {}
     import io, contextlib, shutil
     from juice.chemistry.mcm_converter import convert_mcm_file
@@ -999,7 +1026,42 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
                 with open(ro2_incl, "w", encoding="latin-1", newline="\n") as fh:
                     fh.write(text[:-1] + " + " + " + ".join(extra) + ")\n")
     res["addons"] = [a.id for a in addons]
+    spec.extra_includes = [x for x in spec.extra_includes if not x.endswith(".SOA.include")]
+    if partitioning_kind(spec) == "computed":
+        res["partitioning"] = write_partitioning_include(spec, chem)
     return res
+
+
+def write_partitioning_include(spec: ExperimentSpec, chem: str) -> dict:
+    """<name>.SOA.include in the chemistry folder: gas <-> particle <-> wall partitioning (make_soa_condensation) of the
+    closed-shell organic species of the mechanism subset and its add-ons, C* by spec.volatility_method."""
+    from juice.chemistry import volatility as vol
+    from juice.chemistry.species_db import load_species_db
+    from juice.importers.make_soa_condensation import emit_soa
+    texts = []
+    for fn in sorted(os.listdir(chem)):
+        if fn.lower().endswith((".mech", ".incl")) and ".dil." not in fn.lower() and not fn.endswith(".SOA.include"):
+            with open(os.path.join(chem, fn), encoding="latin-1") as fh:
+                texts.append(fh.read())
+    names = vol.mechanism_species(texts)
+    r = vol.partitioning_species(names, load_species_db(base_id=spec.base_mechanism), spec.volatility_method,
+                                 float(spec.partition_cstar_max or 0.0))
+    path = os.path.join(chem, soa_include_name(spec))
+    emit_soa(r.species, path, seed=())
+    m = vol.method(spec.volatility_method)
+    with open(path, encoding="utf-8") as fh:
+        body = fh.read()
+    head = [f"; {soa_include_name(spec)} -- written by JUICE (experiment_spec.write_partitioning_include)",
+            f"; C* of every closed-shell organic species of the mechanism: {m.label}.",
+            f";   {m.reference}; 298.15 K; C* = p_sat M / (R T) in ug m-3.",
+            f"; {r.summary()}."
+            + (f" Limit: C* <= {spec.partition_cstar_max:g} ug m-3." if spec.partition_cstar_max else "")]
+    if r.skipped:
+        head.append(f"; NOT partitioned ({len(r.skipped)}): " + ", ".join(f"{k} [{v}]" for k, v in sorted(r.skipped.items())))
+    with open(path, "w", encoding="latin-1", errors="replace", newline="\n") as fh:
+        fh.write("\n".join(head) + "\n" + body)
+    return {"include": path, "method": spec.volatility_method, "species": len(r.species), "skipped": dict(r.skipped),
+            "above_limit": r.above_limit, "summary": r.summary()}
 
 
 def _ensure_gecko(spec: ExperimentSpec, out_dir: str) -> dict:
@@ -1232,7 +1294,20 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         pass
     if not spec.mechanism_stem and not spec.precursors and not spec.inorganic_only and not mreg.is_complete(spec.base_mechanism):
         msgs.append(("error", "No chemistry: choose compounds, an existing mechanism, or 'Inorganic chemistry only'."))
-    if spec.gecko_partitioning and is_gecko_base(spec.base_mechanism) and "soa" in mreg.base(spec.base_mechanism).files:
+    if spec.partitioning and not is_gecko_base(spec.base_mechanism):
+        if mreg.is_lumped(spec.base_mechanism) or not (spec.precursors or spec.inorganic_only):
+            msgs.append(("warning", "Gas-particle-wall partitioning is switched on, but it is available only for GECKO-A "
+                                    "mechanisms and for the MCM with chosen compounds: this run has none."))
+        else:
+            from juice.chemistry import volatility as vol
+            if spec.volatility_method not in vol.METHODS:
+                msgs.append(("error", f"Partitioning: unknown volatility method '{spec.volatility_method}'."))
+            else:
+                ok, why = vol.METHODS[spec.volatility_method].available()
+                if not ok:
+                    msgs.append(("error", f"Partitioning: {vol.METHODS[spec.volatility_method].label} {why}. "
+                                          "Choose another volatility method on the Chemistry step."))
+    if partitioning_kind(spec):
         from juice.core import particles as pt
         if spec.particles == "file" and not os.path.isfile(spec.particle_file or ""):
             msgs.append(("error", "Particles: the size-distribution file is not found — choose it on the Chemistry step, "
