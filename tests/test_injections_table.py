@@ -105,3 +105,22 @@ def test_chosen_compound_outside_the_mcm_is_flagged():
     exp.precursors = ["C5H8", "FURAN"]                       # FURAN chosen, NOAA_BB not ticked
     exp.injections = [InjectionEvent("FURAN", "FURAN", "20", "09:10", 2)]
     assert any("add-on NOAA_BB" in m for _lvl, m in juice.check(exp))
+
+
+def test_addon_species_map_by_the_whole_compound_name():
+    """'5-methyl-furfural' is NOAA_BB's MEFURFURAL, never the FURFURAL its name contains; a compound the add-on
+    lacks (HMF) stays unmodelled instead of borrowing a shorter name."""
+    from juice.core import injection_calc as ic
+    from juice.chemistry import mechanism_registry as mreg
+    addons = mreg.load_addons()
+    if "NOAA_BB" not in addons:
+        return
+    extra = addons["NOAA_BB"].adds_species
+    want = {"5-methyl-furfural": "MEFURFURAL", "2-furfural": "FURFURAL", "2-methylfuran": "M2F",
+            "Creosol": "MGUAIACOL", "2,5-dimethylfuran": "DIMEFURAN", "Furan": "FURAN",
+            "5-(hydroxymethyl)-2-furfural": "", "2-furanmethanol": ""}
+    for name, sp in want.items():
+        assert ic.resolve_compound(name, extra_species=extra).mcm == sp, name
+        hit = ic.find_in_addons(name)
+        assert (hit[0] if hit else "") == sp, name
+    assert ic._same_formula("C10H16", "H16C10") and not ic._same_formula("C10H16", "C0H16")

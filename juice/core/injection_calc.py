@@ -252,6 +252,13 @@ FORMULAS: Dict[str, str] = {
     "2(3h)-furanone": "C4H4O2", "2-(3h)furanone": "C4H4O2", "furanone": "C4H4O2", "5-(hydroxymethyl)-2-furfural": "C6H6O3", "hmf": "C6H6O3",
 }
 _COMPOUND_KEYS = sorted(COMPOUNDS, key=len, reverse=True)
+# Common names of add-on species whose name is not the compound's name squeezed together (NOAA_BB uses F0AM's
+# short names).  Used only while that add-on is on; its formula is checked against the add-on's own.
+ADDON_NAMES: Dict[str, str] = {
+    "2-methylfuran": "M2F", "2,5-dimethylfuran": "DIMEFURAN", "2-furfural": "FURFURAL", "furfural": "FURFURAL",
+    "5-methyl-furfural": "MEFURFURAL", "5-methylfurfural": "MEFURFURAL", "2-methoxyphenol": "GUAIACOL",
+    "creosol": "MGUAIACOL", "4-methylguaiacol": "MGUAIACOL", "2,6-dimethoxyphenol": "SYRINGOL",
+}
 NON_MCM_OK = {"CO2"}                     # tracers that are fine as EASY species without an MCM entry
 
 try:
@@ -272,6 +279,16 @@ class ResolvedCompound:
     formula: str = ""
 
 
+def _same_formula(a: str, b: str) -> bool:
+    """C5H6O == C5H6O1 == OC5H6 (element counts, order and explicit 1 do not matter)."""
+    def counts(f: str) -> Dict[str, int]:
+        out: Dict[str, int] = {}
+        for el, n in re.findall(r"([A-Z][a-z]?)(\d*)", f or ""):
+            out[el] = out.get(el, 0) + int(n or 1)
+        return out
+    return counts(a) == counts(b)
+
+
 def resolve_compound(text: str, extra_species: Optional[Dict[str, str]] = None) -> ResolvedCompound:
     """Common name, MCM name or formula → ResolvedCompound.  Never raises.
     `extra_species` (NAME → formula) are the species of the chosen add-ons: they resolve
@@ -283,15 +300,17 @@ def resolve_compound(text: str, extra_species: Optional[Dict[str, str]] = None) 
         rc.note = "empty"; return rc
     extra = {k.upper(): v for k, v in (extra_species or {}).items()}
     if extra:
-        for key in _COMPOUND_KEYS:                   # common name whose add-on species exists
-            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", low):
-                cand = key.replace("-", "").replace(" ", "").upper()
-                hit = next((n for n in extra if n == cand or n == key.upper()), "")
-                if hit:
-                    mcm, mw, dens = COMPOUNDS[key]
-                    rc.mcm, rc.mw, rc.density, rc.status = hit, mw, dens, "mcm"
-                    rc.note = f"'{key}' → {hit} (add-on species)"; rc.formula = extra[hit]
-                    return rc
+        # the longest common name the text contains is the compound: only that name may map to an add-on species
+        # ('5-methyl-furfural' is MEFURFURAL or nothing, never the FURFURAL its name contains)
+        key = next((k for k in _COMPOUND_KEYS if re.search(rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", low)), "")
+        if key:
+            cand = key.replace("-", "").replace(" ", "").upper()
+            hit = next((n for n in extra if n == cand or n == key.upper() or n == ADDON_NAMES.get(key)), "")
+            if hit and (not FORMULAS.get(key) or not extra[hit] or _same_formula(FORMULAS[key], extra[hit])):
+                mcm, mw, dens = COMPOUNDS[key]
+                rc.mcm, rc.mw, rc.density, rc.status = hit, mw, dens, "mcm"
+                rc.note = f"'{key}' → {hit} (add-on species)"; rc.formula = extra[hit]
+                return rc
         if q.upper() in extra:
             rc.mcm, rc.status, rc.note, rc.formula = q.upper(), "mcm", f"add-on species {q.upper()}", extra[q.upper()]
             return rc
@@ -481,8 +500,12 @@ def resolve_mixture(m: Mixture) -> List[Tuple[str, str]]:
             alerts.append(("error", f"{c.name}: '{c.mcm}' is not an MCM species"))
         if not c.mcm:
             if c.surrogate:
-                if MCM_DB and c.surrogate not in MCM_DB:
+                sur_addon = find_in_addons(c.surrogate) if MCM_DB and c.surrogate not in MCM_DB else None
+                if MCM_DB and c.surrogate not in MCM_DB and not sur_addon:
                     alerts.append(("error", f"{c.name}: surrogate '{c.surrogate}' is not an MCM species"))
+                elif sur_addon:                        # a surrogate from an add-on (FURAN of NOAA_BB): the add-on must be on
+                    alerts.append(("warning", f"{c.name}: no MCM species — modelled as surrogate {c.surrogate}; "
+                                   + addon_note(sur_addon[0], sur_addon[1])))
                 else:
                     alerts.append(("warning", f"{c.name}: no MCM species — modelled as surrogate {c.surrogate}"))
             else:

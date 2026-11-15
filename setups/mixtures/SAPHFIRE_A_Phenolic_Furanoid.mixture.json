@@ -12,10 +12,10 @@
    "amount": 0.129416,
    "unit": "ppb/ul",
    "mcm": "",
-   "surrogate": "",
+   "surrogate": "FURAN",
    "mw": 84.074,
    "density": 1.209,
-   "note": "'2(3h)-furanone' is not an MCM species — no furanone in the MCM"
+   "note": "surrogate FURAN (NOAA_BB): the C4 furan ring it is made from; the OH rate of 2(3H)-furanone is uncertain"
   },
   {
    "name": "Furan",
@@ -62,10 +62,10 @@
    "amount": 0.069022,
    "unit": "ppb/ul",
    "mcm": "",
-   "surrogate": "",
+   "surrogate": "MEFURFURAL",
    "mw": 126.111,
    "density": 1.29,
-   "note": "'5-(hydroxymethyl)-2-furfural' is not an MCM species — no furan aldehyde in the MCM; low volatility, mostly on the walls/particles"
+   "note": "surrogate MEFURFURAL (NOAA_BB): 5-methylfurfural, the same furan aldehyde with CH3 for CH2OH"
   },
   {
    "name": "2-methylfuran",
@@ -92,10 +92,10 @@
    "amount": 0.053871,
    "unit": "ppb/ul",
    "mcm": "",
-   "surrogate": "",
+   "surrogate": "M2F",
    "mw": 98.101,
    "density": 1.13,
-   "note": "'2-furanmethanol' is not an MCM species — no furan alcohol in the MCM; M3F keeps the ring"
+   "note": "surrogate M2F (NOAA_BB): 2-methylfuran, the same furan with CH3 for CH2OH"
   },
   {
    "name": "Catechol",
@@ -142,10 +142,10 @@
    "amount": 0.010077,
    "unit": "ppb/ul",
    "mcm": "",
-   "surrogate": "",
+   "surrogate": "CYHEXOL",
    "mw": 154.253,
    "density": 0.9225,
-   "note": "'1,8-cineole' is not an MCM species — no MCM analogue; slow OH loss"
+   "note": "surrogate CYHEXOL (MCM): saturated cyclic C6 alcohol of similar, slow OH rate (cineole ~1.1e-11)"
   }
  ],
  "source": "SAPHFIRE_injection_smoldering_150ppb.xlsx",

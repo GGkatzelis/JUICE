@@ -132,10 +132,10 @@
    "amount": 0.021294,
    "unit": "ppb/ul",
    "mcm": "",
-   "surrogate": "",
+   "surrogate": "MACR",
    "mw": 100.117,
    "density": 0.94,
-   "note": "'methyl methacrylate' is not an MCM species — suggested surrogate MACR (unsaturated C4 carbonyl of similar OH rate (MMA 4e-11, MACR 3e-11))"
+   "note": "surrogate MACR (MCM): unsaturated C4 carbonyl of similar OH rate (MMA 4e-11, MACR 3e-11)"
   },
   {
    "name": "MACR",
