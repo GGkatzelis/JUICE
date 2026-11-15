@@ -1289,6 +1289,9 @@ class ResultsViewer(QMainWindow):
 
         # Tab 2b – Pathways: the chains of reactions that formed a species
         self._build_pathways_tab()
+        # Tab 2c – Phases: organic carbon and oxygen in gas, particles and on the wall (runs with partitioning)
+        if any(str(c).upper().startswith("SOA_") for c in self.df.columns):
+            self._build_phases_tab()
 
         # Tab 3 – Carbon Budget
         _progress("Building the tabs: Carbon budget, Chemical space", 65)
@@ -1895,6 +1898,8 @@ class ResultsViewer(QMainWindow):
                 self.rx_combo.setCurrentText("OH"); self._update_reactivity()
             elif name == "Budgets":
                 self._cb_mode_combo.setCurrentIndex(1); self._update_both_budgets()
+            elif name == "Phases":
+                self._update_phases()
             else:
                 return
             self._drawn_once.add(name)
@@ -1928,6 +1933,9 @@ class ResultsViewer(QMainWindow):
             figs.append((self.pa_fig.axes[0].get_title() if self.pa_fig.axes else "Process analysis", self.pa_fig))
         elif name == "Reactivity":
             figs.append((f"{self.rx_combo.currentText()} reactivity", self.rx_fig))
+        elif name == "Phases":
+            self._report_panel = (11.0, 4.5)
+            figs.append((f"Organic {'carbon' if self.ph_element.currentData() == 'C' else 'oxygen'} by phase", self.ph_fig))
         elif name == "Budgets":
             self._report_grid = (2, 1); self._report_panel = (11.0, 4.0)
             figs.append(("Carbon budget", self._cb_fig))
@@ -2073,6 +2081,50 @@ class ResultsViewer(QMainWindow):
         self.pw_canvas.mpl_connect('button_press_event', self._pathways_clicked)
         self._pw_source = None; self._pw_pos = {}
         self.right_tabs.addTab(w, "Pathways")
+
+    # ── Phases tab ─────────────────────────────────────────────────────────────
+    def _build_phases_tab(self):
+        """Organic carbon (or oxygen) in the gas, the particles and on the wall over the run, and at one time by
+        the volatility of the partitioning species (juice.chemistry.phase_budget)."""
+        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(2, 2, 2, 0); lay.setSpacing(2)
+        row = QHBoxLayout(); row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Element"))
+        self.ph_element = QComboBox(); self.ph_element.addItem("carbon", "C"); self.ph_element.addItem("oxygen", "O")
+        row.addWidget(self.ph_element)
+        row.addWidget(QLabel("volatility at"))
+        t = np.asarray(self.df.index, dtype=float); span = (t[-1] - t[0]) / 3600.0 if len(t) > 1 else 0.0
+        self.ph_time = QDoubleSpinBox(); self.ph_time.setRange(0.0, span); self.ph_time.setDecimals(2)
+        self.ph_time.setSingleStep(0.25); self.ph_time.setSuffix(" h after the start"); self.ph_time.setValue(span)
+        row.addWidget(self.ph_time)
+        b = QPushButton("Draw"); b.clicked.connect(self._update_phases); row.addWidget(b)
+        row.addStretch(); lay.addLayout(row)
+        self.ph_info = QLabel(); self.ph_info.setWordWrap(True); self.ph_info.setStyleSheet("color: #555; font-size: 10px;")
+        lay.addWidget(self.ph_info)
+        self.ph_fig = Figure(figsize=(11, 4.5)); self.ph_canvas = FigureCanvas(self.ph_fig)
+        lay.addWidget(NavigationToolbar(self.ph_canvas, self), 0); lay.addWidget(self.ph_canvas, 1)
+        self.ph_element.currentIndexChanged.connect(lambda *_: self._update_phases())
+        self._ph_budget = None
+        self.right_tabs.addTab(w, "Phases")
+
+    def _update_phases(self):
+        from juice.chemistry import phase_budget as pb
+        try:
+            if self._ph_budget is None:
+                from juice.chemistry.species_db import base_of_run, load_species_db
+                path = getattr(self, "csv_path", "") or ""
+                db = load_species_db(base_id=base_of_run(path) if path else "")
+                self._ph_budget = pb.build(self.df, db, path)
+            b = self._ph_budget
+            i = int(np.argmin(np.abs(b.t_hours - self.ph_time.value())))
+            pb.draw(self.ph_fig, b, self.ph_element.currentData(), i)
+            self.ph_info.setText(
+                f"{b.note}. Gas: every organic species of the run (not CO, CO2); particles, wall (vapour) and wall "
+                "(particles): the SOA_, WALL_ and WALL_PL_ companions of the partitioning species; flushed out: what "
+                "the replenishment flow carried away, summed over the run. The bars at the right hold the "
+                "partitioning species only, by the C* of the run's partitioning include.")
+        except Exception as e:
+            self.ph_fig.clear(); self.ph_fig.text(0.5, 0.5, f"Phases not drawn: {e}", ha="center", va="center")
+        self.ph_canvas.draw()
 
     def _species_info(self):
         db = MCM_DB

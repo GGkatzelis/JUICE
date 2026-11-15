@@ -11,8 +11,11 @@ Mechanism (MCM) and other mechanisms. JUICE replaces the IDL/EASY + FACSIMILE wo
 - **Field observations.** A constrained site, a plume, or a Lagrangian air parcel, from one input table.
 - **More than the MCM.** CRACMM 2, CRACMM 1, RACM2 and a biomass-burning add-on from the F0AM library, and
   GECKO-A generator output up to a million reactions.
-- **Results and studies.** Process analysis, OH reactivity, comparison with measurements, figure lists;
-  sweeps and isopleths over many runs.
+- **Gas, particles and walls.** Reversible gas–particle–wall partitioning for the MCM and GECKO-A, with the
+  volatility from one of six methods (SIMPOL, Nannoolal, EVAPORATION, Li et al., Donahue et al., ...) that you
+  compare on your experiment's species before choosing; particles from none, one size, or an SMPS file.
+- **Results and studies.** Process analysis, reaction pathways with structures, OH reactivity, comparison
+  with measurements, figure lists; sweeps and isopleths over many runs.
 
 ## Install
 
@@ -74,8 +77,12 @@ Every run the windows prepare also gets a `<name>_run.py` that rebuilds it in co
 ## Validation
 
 `python -m juice.tools.run_benchmark` runs every SAPHIR reference scene through JUICE and compares every
-column with FACSIMILE. With the default solver profile, every setting agrees and every species above 1 ppt
-is within 0.6 % in the six SAPHIR experiments (O3, NOx, OH and HO2 within 0.25 %). The tables, the solver
+column with FACSIMILE. The references were made with EASY up to 6.00, which holds settings such as the RO2
+sum for an output step, so the benchmark runs JUICE that way: every setting agrees and every species above
+1 ppt is within 0.6 % in the six SAPHIR experiments (O3, NOx, OH and HO2 within 0.25 %). JUICE's default
+re-evaluates those settings at every solver step (as EASY 7.01 and later, and as F0AM does for RO2); then
+it agrees with F0AM for every species within 2 %, and differs from the per-step references by up to a few
+per cent in single peroxy radicals (`--live`). The tables, the solver
 profiles (fast, precise, twostep) and the known limitations are in the
 [user guide](docs/user_guide.md#validation) and in [docs/architecture.md](docs/architecture.md).
 

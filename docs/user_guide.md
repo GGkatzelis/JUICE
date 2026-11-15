@@ -157,6 +157,13 @@ below which steps are summed as "other routes", and the number of steps back are
 Shares are net of equilibria (a fast shuttle such as CH3O2 ⇌ CH3O2NO2 is not a source), and a dashed box
 is a source without carbon of its own (an injection's holding species, a chamber wall source).
 
+For a run with gas–particle–wall partitioning the **Phases** tab shows where the organic carbon (or oxygen)
+is: in the gas (every organic species but CO and CO2), in the particles, taken up by the wall as vapour, lost
+to the wall with particles, and flushed out of the chamber by the replenishment flow (summed over the run);
+the legend gives the O:C of each. On the right, at a chosen time, the partitioning species by decade of C*,
+split the same way. In a SAPHIR α-pinene run the parts add up, with the CO and CO2 formed, to the carbon
+injected within a few per cent.
+
 ### Command line
 ```powershell
 python -m juice.core.scenario_runner path\to\<name>.json --toml settings.toml          # one prepared run
