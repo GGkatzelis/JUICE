@@ -17,7 +17,7 @@ Key design:
   Burst Injections tab (informational, marked "IDL", unchecked in GUI).
 
 Usage (API):
-    from idl_parser import parse_idl_easy
+    from juice.core.idl_parser import parse_idl_easy
     cfg = parse_idl_easy("path/to/scenario.easy", "path/to/kammer.enz")
 
 Usage (CLI):

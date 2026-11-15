@@ -159,6 +159,23 @@ To start from a template instead of an empty experiment:
 exp = juice.new_experiment("my_run", template="voc_photooxidation_low_nox")
 ```
 
+Run options for one run, on top of the solver profile, are passed as `options` (their list is
+`juice.RUN_OPTIONS`):
+
+```python
+run = juice.run(exp, "runs/held", solver="fast", options={"live_settings": False})   # as EASY 6.00 / the references
+```
+
+Gas–particle–wall partitioning (MCM with chosen compounds; GECKO-A bases bring their own):
+
+```python
+exp.partitioning = True                 # off by default
+exp.volatility_method = "simpol"        # simpol | nannoolal | evaporation | li_evap | li2016 | donahue2011
+exp.partition_cstar_max = 1e7           # leave out species more volatile than this (ug m-3); 0 = all
+exp.particles = "mono"                  # none (walls only) | mono | file
+exp.particle_d_nm, exp.particle_n_cm3 = 100, 1e4
+```
+
 ## 6. From the window to code
 
 When the Run step prepares an experiment, the run folder gets `<name>_run.py` besides the ENZ, EASY and

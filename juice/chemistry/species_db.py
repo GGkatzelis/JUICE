@@ -6,7 +6,7 @@ object from this subroutine." So every make_*/plot_* script that needs 'is X an 
 'what is X's formula / nC / nO / nN / nH / MW?' must get it from here, not re-parse TSVs.
 
 Usage:
-    from species_db import load_species_db
+    from juice.chemistry.species_db import load_species_db
     db = load_species_db()                 # cached singleton (reads every TSV once)
     db.is_ro2('APINAO2')                    # True / False (PeroxyRadical column)
     db.formula('C729CHO')                   # 'C7H12O2'  (TSV truth, NOT the MCM-code name)

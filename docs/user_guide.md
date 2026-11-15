@@ -107,7 +107,7 @@ python -m juice.gui.juice_gui path\to\<name>.easy      # the experiment window, 
 ```
 "Import a FACSIMILE experiment" (start menu, the Experiment step, or the File menu): an experiment
 modelled with FACSIMILE earlier becomes an ordinary JUICE experiment. The dialog takes the `.easy`
-(an `.elog` is accepted when its `.easy` lies next to it), finds the ENZ the `FILES[ENZ]` line names,
+or the `.elog`, finds the ENZ the `FILES[ENZ]` line names,
 and reads both back into the experiment description ([facsimile_import.py](../juice/importers/facsimile_import.py)):
 
 - the ENZ gives the date, time window and step, the roof times, and the start and duration of every
@@ -129,6 +129,12 @@ and "Prepare" lists any include file still not found. When the FACSIMILE results
 next to the inputs, the Run step offers **Compare with FACSIMILE** after the run (±2 %, as the
 benchmark; the full report goes to the experiment folder).
 
+When only the `.elog` is left (the expanded file EASY writes, with every include inline between
+`;#include name ! folder` markers), the dialog rebuilds the `.easy` and every include file from it into
+`<name>.from_elog\` next to the elog and imports that. This needs none of the folders the elog names
+(`E:/…`, `S:/…`) and gives back exactly what FACSIMILE ran, which may differ from the include files on
+disk today if they were edited after the run.
+
 JUICE reads the EASY version that made the run from the `.fac` / `.out` next to it and keeps it with
 the experiment, because EASY 5.96b and 6.00 differ in one rule: a `FUNCTION` macro defined more than
 once (as `PHTFKT` is in a SAPHIR scenario: clear-sky first, jNO2-scaled later) applies from its own
@@ -142,6 +148,14 @@ python -m juice.gui.results_viewer path\to\<name>.cs
 ```
 or drop a `.cs` file on the **JUICE** icon. Without a file, the viewer first asks whether you want
 the results of one experiment or of a study (a study opens in the study window).
+
+The **Pathways** tab draws the reaction chains that formed a species, back to the injected compounds:
+double-click a species in the list on the left (or a box in the drawing) to trace it. Each box shows the
+structure, name and formula and the share of the species that passed through it; each arrow is as wide
+and as dark as its share, labelled with the reaction partner (+OH, +NO, hν …). The time window, the share
+below which steps are summed as "other routes", and the number of steps back are set above the drawing.
+Shares are net of equilibria (a fast shuttle such as CH3O2 ⇌ CH3O2NO2 is not a source), and a dashed box
+is a source without carbon of its own (an injection's holding species, a chamber wall source).
 
 ### Command line
 ```powershell
@@ -429,6 +443,19 @@ OH 0.09 %, toluene 0.03 %). Output size is the next limit: the 24-h toluene `.cs
 α-pinene 6-h one 1.35 GB. GECKO-A
 itself is open source (GPL-3.0-or-later on Zenodo, AGPL-3.0 in its GitLab repositories); JUICE reads its output and ships none of its code (the test fixture
 `tests/fixtures/gecko_ethanol` is a small generator output folder).
+
+### Live settings
+
+Settings that depend on the model state — the RO2 sum, the organic aerosol mass COA of the partitioning,
+anything you build from species or from the model time `time` — are re-evaluated at every step the solver
+takes (*live settings*, the default since 15 November 2026, as in EASY 7.01 and later). EASY 6.00 and
+earlier held them for an output step; with one-minute steps that moves O3, NOx and OH by less than
+0.15 %, HO2 by up to 0.75 % and single peroxy radicals by a few per cent, and with hourly steps by much
+more. The old behaviour is `live_settings = "false"` in `settings.toml [solver]`, `--set live_settings=false`
+on `scenario_runner`, or `options={'live_settings': False}` in `juice.run`. `run_benchmark` uses it by
+default, because the FACSIMILE references were made that way (`--live` runs the default instead).
+Mechanisms with more than 20 000 reactions use four cores for the reaction terms (`ode_threads`);
+the results are identical to one core.
 
 ### Solver profiles: fast, precise or twostep
 
