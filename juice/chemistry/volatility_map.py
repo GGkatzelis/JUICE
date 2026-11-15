@@ -19,7 +19,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -89,7 +89,7 @@ class VolatilityMap:
         return w if w.sum() > 0 else np.ones(len(self.names))
 
 
-def build(spec, run_file: str = "") -> VolatilityMap:
+def build(spec, run_file: str = "", progress: Optional[Callable[[str, float], None]] = None) -> VolatilityMap:
     """The map for an ExperimentSpec (MCM with chosen compounds): its mechanism subset is built in a temporary folder.
     `run_file`: the .cs of a run of this experiment, for the weights (optional)."""
     from juice.core import experiment_spec as es
@@ -98,6 +98,8 @@ def build(spec, run_file: str = "") -> VolatilityMap:
     try:
         s = copy.deepcopy(spec)
         s.mechanism_stem, s.partitioning = "", False
+        if progress:
+            progress("Building the mechanism of the chosen compounds", 0.0)
         with contextlib.redirect_stdout(io.StringIO()):
             es.ensure_mechanism(s, tmp)
         chem = os.path.join(tmp, "chemistry")
@@ -109,13 +111,18 @@ def build(spec, run_file: str = "") -> VolatilityMap:
         shutil.rmtree(tmp, ignore_errors=True)
     names_all = vol.mechanism_species(texts)
     db = load_species_db(base_id=spec.base_mechanism)
-    return from_species(names_all, db, run_file)
+    return from_species(names_all, db, run_file, progress)
 
 
-def from_species(names_all: List[str], db, run_file: str = "") -> VolatilityMap:
+def from_species(names_all: List[str], db, run_file: str = "",
+                 progress: Optional[Callable[[str, float], None]] = None) -> VolatilityMap:
     per: Dict[str, Dict[str, float]] = {}
     unavailable: Dict[str, str] = {}
-    for mid, m in vol.METHODS.items():
+    for k, (mid, m) in enumerate(vol.METHODS.items()):
+        if progress:
+            progress(f"C* by {m.label}" + (" (loading Open Babel and UManSysProp the first time)"
+                                            if m.backend == "umansysprop" and "ok" not in vol._BACKEND else ""),
+                     0.1 + 0.8 * k / len(vol.METHODS))
         ok, why = m.available()
         if not ok:
             unavailable[mid] = why
@@ -158,21 +165,34 @@ def _hdr_level(z: np.ndarray, frac: float) -> float:
     return float(v[min(np.searchsorted(c, frac * c[-1]), len(v) - 1)])
 
 
-def cloud(ax, x, y, w, colour, lw=1.2, frac=0.8, label="", fill_alpha=0.0, grid=110):
-    """Draw the contour holding `frac` of the weighted points (Gaussian kernel density). Returns True if drawn."""
-    from scipy.stats import gaussian_kde
+def density(x, y, w, xlim, ylim, grid=200):
+    """Weighted Gaussian kernel density on a grid: the points binned onto it and smoothed with Scott's bandwidth
+    (per axis, n_eff = (sum w)^2 / sum w^2), which is gaussian_kde without the cross term, at a cost independent of
+    the number of species.  Returns (X, Y, Z) or None for too few or degenerate points."""
+    from scipy.ndimage import gaussian_filter
     ok = np.isfinite(x) & np.isfinite(y) & (w > 0)
     x, y, w = x[ok], y[ok], w[ok]
     if len(x) < MIN_CLOUD or np.ptp(x) == 0 or np.ptp(y) == 0:
+        return None
+    p = w / w.sum()
+    n_eff = 1.0 / np.sum(p ** 2)
+    f = n_eff ** (-1.0 / 6.0)
+    sx = f * math.sqrt(np.sum(p * (x - np.sum(p * x)) ** 2))
+    sy = f * math.sqrt(np.sum(p * (y - np.sum(p * y)) ** 2))
+    xe = np.linspace(xlim[0], xlim[1], grid + 1); ye = np.linspace(ylim[0], ylim[1], grid + 1)
+    H, _, _ = np.histogram2d(y, x, bins=[ye, xe], weights=p)
+    dx, dy = xe[1] - xe[0], ye[1] - ye[0]
+    Z = gaussian_filter(H, sigma=(max(sy / dy, 0.5), max(sx / dx, 0.5)), mode="constant")
+    X, Y = np.meshgrid((xe[:-1] + xe[1:]) / 2, (ye[:-1] + ye[1:]) / 2)
+    return X, Y, Z
+
+
+def cloud(ax, x, y, w, colour, lw=1.2, frac=0.8, label="", fill_alpha=0.0, grid=200):
+    """Draw the contour holding `frac` of the weighted points (Gaussian kernel density). Returns True if drawn."""
+    d = density(x, y, w, ax.get_xlim(), ax.get_ylim(), grid)
+    if d is None:
         return False
-    try:
-        kde = gaussian_kde(np.vstack([x, y]), weights=w / w.sum())
-    except Exception:
-        return False
-    (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
-    xs = np.linspace(x0, x1, grid); ys = np.linspace(y0, y1, grid)
-    X, Y = np.meshgrid(xs, ys)
-    Z = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
+    X, Y, Z = d
     lev = _hdr_level(Z, frac)
     if fill_alpha:
         ax.contourf(X, Y, Z, levels=[lev, Z.max() * 1.01], colors=[colour], alpha=fill_alpha)

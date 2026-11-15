@@ -567,6 +567,7 @@ def _graph_walk_filter(
         parsed.append((mech, rate, lhs, rhs))
 
     valid_idx = set()
+    valid_up = {v.upper() for v in valid}          # kept alongside `valid` (was rebuilt per reactant: 43 M str.upper calls)
     while True:
         added = False
         for i, (_, _, lhs, _) in enumerate(parsed):
@@ -576,13 +577,14 @@ def _graph_walk_filter(
             # don't appear in MCM standard reactions)
             if not lhs:
                 continue
-            if all(r.upper() in {v.upper() for v in valid} for r in lhs):
+            if all(r.upper() in valid_up for r in lhs):
                 valid_idx.add(i)
                 added = True
                 # Add products
                 for p in parsed[i][3]:
-                    if p.upper() not in {v.upper() for v in valid}:
+                    if p.upper() not in valid_up:
                         valid.add(p)
+                        valid_up.add(p.upper())
                         added = True
         if not added:
             break

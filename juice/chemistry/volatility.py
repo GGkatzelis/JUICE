@@ -316,11 +316,25 @@ def method(method_id: str) -> Method:
     return METHODS[method_id]
 
 
+_CSTAR: Dict[tuple, object] = {}                   # (method, molecule) -> C* or the error, for this session
+
+
 def cstar(method_id: str, m: Molecule) -> float:
-    c = float(method(method_id).fn(m))
-    if not (c > 0) or c != c or math.isinf(c):
-        raise ValueError("no finite C*")
-    return c
+    key = (method_id, m.smiles, m.nC, m.nH, m.nO, m.nN, round(m.mass, 3))
+    if key not in _CSTAR:
+        try:
+            c = float(method(method_id).fn(m))
+            if not (c > 0) or c != c or math.isinf(c):
+                raise ValueError("no finite C*")
+            _CSTAR[key] = c
+        except KeyError:
+            raise
+        except Exception as e:
+            _CSTAR[key] = e
+    v = _CSTAR[key]
+    if isinstance(v, Exception):
+        raise v
+    return v
 
 
 # ── the species of a mechanism ─────────────────────────────────────────────────────────────────────────────────

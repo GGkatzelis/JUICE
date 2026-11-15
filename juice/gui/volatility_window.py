@@ -9,14 +9,31 @@ from typing import Callable, Optional
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QPushButton,
-                             QTabWidget, QVBoxLayout, QWidget)
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QProgressBar,
+                             QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
 from juice.chemistry import volatility as vol
 from juice.chemistry import volatility_map as vmap
 
 WEIGHTS = [("√(peak concentration)", 0.5), ("each species once", 0.0), ("peak concentration", 1.0)]
+
+
+class _Builder(QThread):
+    """volatility_map.build in the background; step(text, fraction) while it runs, done(map or None, error) at the end."""
+    step = pyqtSignal(str, float)
+    done = pyqtSignal(object, str)
+
+    def __init__(self, spec, run_file: str):
+        super().__init__()
+        self.spec, self.run_file = spec, run_file
+
+    def run(self):
+        try:
+            vm = vmap.build(self.spec, self.run_file, progress=lambda t, f: self.step.emit(t, f))
+            self.done.emit(vm, "")
+        except Exception as e:
+            self.done.emit(None, f"{type(e).__name__}: {e}")
 
 
 class VolatilityWindow(QDialog):
@@ -60,21 +77,39 @@ class VolatilityWindow(QDialog):
         grow.addWidget(self.use_btn)
         self.tabs.widget(1).layout().insertLayout(0, grow)
 
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self.vm = vmap.build(spec, run_file if run_file and os.path.isfile(run_file) else "")
-            self.error = ""
-        except Exception as e:
-            self.vm, self.error = None, f"{type(e).__name__}: {e}"
-        finally:
-            QApplication.restoreOverrideCursor()
+        # the species and their C* are worked out in a thread: the window shows what it is doing meanwhile
+        self.busy = QWidget(); bl = QVBoxLayout(self.busy)
+        self.busy_label = QLabel("Starting…"); self.bar = QProgressBar(); self.bar.setRange(0, 100)
+        bl.addStretch(); bl.addWidget(self.busy_label); bl.addWidget(self.bar); bl.addStretch()
+        lay.insertWidget(lay.indexOf(self.tabs), self.busy)
+        self.tabs.setVisible(False); self.weight.setEnabled(False); self.group_method.setEnabled(False)
+        self.vm, self.error = None, ""
         i = self.group_method.findData(chosen)
         self.group_method.setCurrentIndex(i if i >= 0 else 0)
-        if self.vm is None or self.vm.peak is None:
+        self._worker = _Builder(spec, run_file if run_file and os.path.isfile(run_file) else "")
+        self._worker.step.connect(self._step)
+        self._worker.done.connect(self._built)
+        self._worker.start()
+
+    def _step(self, text: str, frac: float):
+        self.busy_label.setText(text + "…")
+        self.bar.setValue(int(100 * frac))
+
+    def _built(self, vm, error: str):
+        self.vm, self.error = vm, error
+        self._step("Drawing the clouds", 0.95)
+        QApplication.processEvents()
+        self.busy.setVisible(False); self.tabs.setVisible(True); self.group_method.setEnabled(True)
+        if self.vm is not None and self.vm.peak is None:
             self.weight.setCurrentIndex(1)
         self.weight.currentIndexChanged.connect(lambda *_: self.redraw())
         self.group_method.currentIndexChanged.connect(lambda *_: self.redraw(methods=False))
         self.redraw()
+
+    def closeEvent(self, e):
+        if self._worker.isRunning():
+            self._worker.wait(30000)                  # it cannot be interrupted; it ends within seconds
+        super().closeEvent(e)
 
     def _tab(self, title):
         w = QWidget(); v = QVBoxLayout(w); v.setContentsMargins(0, 0, 0, 0)

@@ -39,6 +39,11 @@ def test_cloud_holds_the_requested_fraction():
     Z = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
     inside = kde(np.vstack([x, y])) >= vmap._hdr_level(Z, 0.8)
     assert inside.mean() == pytest.approx(0.8, abs=0.03)
+    # the binned density used for drawing holds the same fraction
+    Xb, Yb, Zb = vmap.density(x, y, np.ones_like(x), (-5, 5), (-5, 5))
+    lev = vmap._hdr_level(Zb, 0.8)
+    ix = np.clip(((x + 5) / 10 * 200).astype(int), 0, 199); iy = np.clip(((y + 5) / 10 * 200).astype(int), 0, 199)
+    assert (Zb[iy, ix] >= lev).mean() == pytest.approx(0.8, abs=0.03)
 
 
 def _map():
@@ -77,6 +82,10 @@ def test_window_from_a_run(tmp_path):
     run = juice.run(e, str(tmp_path / "run"), solver="fast", kv_pd=False, script=False)
     chosen = []
     w = VolatilityWindow(e, "simpol", os.path.join(run.out_dir, "vmap.cs"), on_choose=chosen.append)
+    assert w.busy.isVisibleTo(w) and not w.tabs.isVisibleTo(w)          # opens at once, the work runs in a thread
+    assert w._worker.wait(120000)
+    app.processEvents()
+    assert not w.busy.isVisibleTo(w) and w.tabs.isVisibleTo(w), w.error
     assert w.vm is not None and w.vm.peak is not None and w.weight.currentData() == 0.5
     assert np.nanmax(w.vm.peak[w.vm.names.index("PINONALDEHYDE")]) > 1e9 if "PINONALDEHYDE" in w.vm.names else True
     w.group_method.setCurrentIndex(w.group_method.findData("li2016")); w._use()
