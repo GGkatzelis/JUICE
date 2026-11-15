@@ -990,6 +990,12 @@ def ensure_mechanism(spec: ExperimentSpec, out_dir: str, full_fac: str = "") -> 
         return _ensure_gecko(spec, out_dir)
     if mreg.is_lumped(spec.base_mechanism):
         return _ensure_lumped(spec, out_dir)
+    if (spec.mechanism_stem and (spec.precursors or spec.inorganic_only)
+            and spec.mechanism_stem.startswith(os.path.splitext(os.path.basename(base_fac(spec.base_mechanism)))[0])
+            and not os.path.isfile(os.path.join(out_dir, "chemistry", spec.mechanism_stem + ".mech"))):
+        # a subset JUICE built from the chosen compounds for another folder (the same experiment object written twice):
+        # build it here too, instead of running without the mechanism
+        spec.mechanism_stem = ""
     if spec.mechanism_stem or not (spec.precursors or spec.inorganic_only):
         chem = os.path.join(out_dir, "chemistry")      # the subset exists already: only the partitioning may have changed
         if partitioning_kind(spec) == "computed" and os.path.isfile(os.path.join(chem, spec.mechanism_stem + ".mech")):

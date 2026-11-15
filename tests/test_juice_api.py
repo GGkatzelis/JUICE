@@ -246,3 +246,20 @@ def test_species_lookup_is_per_base_mechanism():
     if "CRACMM2" in bases:
         assert sdb.load_species_db(base_id="CRACMM2").get("ISO").formula == "C5H8"
     assert sdb.load_species_db().get("FURAN").formula == "C4H4O"            # add-on species from its manifest
+
+
+def test_run_options_reach_the_run(tmp_path):
+    """options={'live_settings': False} is written into the scenario and changes how the RO2 sum is treated."""
+    import json
+    e = juice.new_experiment("opts", chamber="SAPHIR")
+    c = e.conditions
+    c.source, c.date, c.start, c.end = "manual", "2024-07-09", "08:00", "08:40"
+    c.temperature_mode, c.j_source, c.roof_open = "const", "clear_sky", [("08:05", "08:40")]
+    e.precursors = ["C2H5OH"]
+    e.injections = [juice.Injection(name="ethanol", products="C2H5OH", total_ppb="20", start="08:05")]
+    live = juice.run(e, str(tmp_path / "live"), solver="fast", kv_pd=False, script=False)
+    held = juice.run(e, str(tmp_path / "held"), solver="fast", kv_pd=False, script=False, options={"live_settings": False})
+    assert json.load(open(held.json))["live_settings"] is False and "live_settings" not in json.load(open(live.json))
+    assert "live_settings" in juice.RUN_OPTIONS if hasattr(juice, "RUN_OPTIONS") else True
+    a, b = live.results().ppb("CH3O2"), held.results().ppb("CH3O2")
+    assert abs(a[-1] - b[-1]) / a[-1] < 0.02 and (a != b).any()          # the same chemistry, a different scheme

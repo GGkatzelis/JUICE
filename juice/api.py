@@ -172,11 +172,19 @@ def write(spec: Spec, out_dir: str, toml: str = "") -> dict:
     return res
 
 
+RUN_OPTIONS = {"live_settings": "True (default): settings that depend on species or time (RO2, COA) are evaluated "
+                               "at every step of the solver; False: held for an output step, as EASY <= 6.00",
+               "ode_threads": "cores for the reaction kernels of mechanisms with at least ode_threads_min_reactions",
+               "ode_threads_min_reactions": "below this many reactions one core is used (default 20000)",
+               "atol_floor": "absolute tolerance floor in molecules cm-3 (default 100)"}
+
+
 def prepare(spec: Spec, out_dir: str, solver: Optional[str] = None, toml: str = "", kv_pd: bool = True,
-            files: Optional[dict] = None) -> str:
+            files: Optional[dict] = None, options: Optional[dict] = None) -> str:
     """Write the files (unless `files` from write() is given) and turn them into the solver input
     <name>.json: EASY -> ELOG -> scenario JSON, with the solver profile `solver` (None = the settings
     file's).  kv_pd: also export reaction rates and the k/v tables (slower, needed for Process Analysis).
+    options: run options on top of the profile for this run only, e.g. {'live_settings': False} (RUN_OPTIONS).
     Returns the JSON path."""
     toml = toml or default_toml()
     res = files or write(spec, out_dir, toml)
@@ -185,7 +193,7 @@ def prepare(spec: Spec, out_dir: str, solver: Optional[str] = None, toml: str = 
     else:
         extra, version = list(spec.include_dirs), (spec.easy_version or None)
     return sp.prepare_scenario(res, paths(toml)["include_dir"], kv_pd, toml, extra_dirs=extra,
-                               easy_version=version, solver=sp.solver_from_toml(toml, solver))
+                               easy_version=version, solver={**sp.solver_from_toml(toml, solver), **(options or {})})
 
 
 def solve(json_path: str, toml: str = "", log: Optional[str] = None) -> str:
@@ -340,9 +348,10 @@ class Run:
 
 
 def run(spec: Spec, out_dir: str = "", solver: Optional[str] = None, toml: str = "", kv_pd: bool = True,
-        log: Optional[str] = None, script: bool = True) -> Run:
+        log: Optional[str] = None, script: bool = True, options: Optional[dict] = None) -> Run:
     """write -> prepare -> solve.  out_dir: the run folder ('' = <output_root>/<name>, output_root from the
     settings file, runs/ by default).  script: also write <name>_run.py (this experiment as code).
+    options: run options for this run only, e.g. {'live_settings': False} (RUN_OPTIONS).
     Returns a Run (files, JSON, results file, run time)."""
     import time
     toml = toml or default_toml()
@@ -351,7 +360,7 @@ def run(spec: Spec, out_dir: str = "", solver: Optional[str] = None, toml: str =
     files = write(spec, out_dir, toml)
     if script:
         write_script(spec, os.path.join(os.path.abspath(out_dir), spec.name + "_run.py"), solver=solver, toml=toml, kv_pd=kv_pd)
-    js = prepare(spec, out_dir, solver, toml, kv_pd, files=files)
+    js = prepare(spec, out_dir, solver, toml, kv_pd, files=files, options=options)
     cs = solve(js, toml, log)
     out = Run(spec, os.path.abspath(out_dir), files, js, cs, time.time() - t0)
     if isinstance(spec, FieldSpec):                    # the field window's Run step writes it too
