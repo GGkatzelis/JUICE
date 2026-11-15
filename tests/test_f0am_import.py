@@ -214,6 +214,21 @@ def _bb_spec(chamber="SAPHIR"):
     return exp
 
 
+def test_photolysis_follows_the_light_switch(cracmm2, noaa_bb):
+    """Measured J come from the building roof and are non-zero with the chamber closed: every photolysis rate
+    must carry the switch (SAPHFIRE 2026-07-02: furfural photolysed in the dark)."""
+    exp = _spec(); exp.conditions.j_source = "measured"
+    lines = es.render_easy(exp).splitlines()
+    measured = [l for l in lines if re.match(r"J\d+ = CONST\(j", l)]
+    assert measured and all("*HV)" in l for l in measured), measured          # a lumped base: no '+ hv' in its reactions
+    assert not [l for l in lines if re.match(r"JN?\d+ = ", l) and "HV" not in l and "PHTFKT(" not in l
+                and "CONST(0.0)" not in l]                                   # PHTFKT of j_clear_sky.incl has the switch
+    text = open(noaa_bb.paths()[0], encoding="latin-1").read()              # an add-on of the MCM: '+ hv' like the MCM
+    rated_by_j = re.findall(r"^k\[(.+?)\]=CONST\([^\n]*\bJN?\d+\b", text, re.M)
+    assert "FURFURAL+hv-->FURAN+CO" in rated_by_j
+    assert all("+hv-->" in r for r in rated_by_j), [r for r in rated_by_j if "+hv-->" not in r]
+
+
 def test_noaa_bb_under_lamps_redefines_its_channels(noaa_bb):
     text = es.render_easy(_bb_spec("generic_lamps"))
     lines = text.splitlines()

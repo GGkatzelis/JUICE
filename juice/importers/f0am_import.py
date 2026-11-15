@@ -595,6 +595,16 @@ def build_addon(addon_id: str, folder: str, juice_base_fac: str, out_root: str =
             changed.append((mech.strip(), rate_def, re.sub(r"\s+", "", j_rate), re.sub(r"\s+", "", new_rate)))
     conv = [mc._convert_reaction(rt, r)[0] for rt, r in added]
 
+    def with_hv(mech: str, rate_def: str) -> Tuple[str, str]:
+        """A reaction on an F0AM channel (JN<k>) is a photolysis reaction: written with '+ hv' like the MCM's own,
+        so the light switch closes it (the converter adds hv for J<n> rates only; with measured J the PHTFKT of
+        saphir.jmeasured carries no switch, and furfural photolysed in the closed chamber)."""
+        if re.search(r"\bJN\d+\b", rate_def) and not re.search(r"\bhv\b", mech, re.I):
+            mech = re.sub(r"\s*-->", " + hv  -->", mech, count=1)
+            rate_def = rate_def.replace("-->", "+hv-->", 1)
+        return mech, rate_def
+    conv = [with_hv(m, rd) for m, rd in conv]
+
     juice_species = set(_species_of([r for _rt, r in juice_all if "=" in r], "="))
     used = _species_of([m for m, _ in conv], "-->")
     new_species = [s for s in used if s not in juice_species]

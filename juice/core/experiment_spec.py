@@ -819,7 +819,9 @@ def lumped_form(f: EasyForm, spec: ExperimentSpec, lamps: bool = False, lamp_lin
             if n not in defined:
                 lines.append(f"J{n} = CONST(0.0)   ; no lamp J{n}: this light source gives no value for it")
         elif n in measured:
-            lines.append(f"J{n} = CONST({measured[n]})   ; measured")
+            # measured on the building roof, so non-zero with the chamber closed: the reactions of a lumped base carry
+            # no '+ hv', the roof switch is applied here
+            lines.append(f"J{n} = CONST({measured[n]}*HV)   ; measured, with the light switch")
         elif n in mcm:
             l_, m_, n_ = mcm[n]
             lines.append(f"J{n} = PHTFKT({l_:.4e},{m_:g},{-n_:g})")
