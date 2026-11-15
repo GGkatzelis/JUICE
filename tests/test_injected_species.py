@@ -20,6 +20,9 @@ def _flagged(base, injected, precursors=()):
     ("CRACMM2", ["TOLUENE", "HCHO"], ["CO2", "H2"]),               # not in CRACMM2, though common elsewhere
 ])
 def test_complete_base_checks_its_own_species(base, inside, outside):
+    from juice.chemistry import mechanism_registry as mreg
+    if base not in mreg.load_bases():                  # GECKO-A imports other than ethanol are git-ignored (size)
+        pytest.skip(f"{base} is not imported on this machine")
     flagged = _flagged(base, inside + outside)
     assert set(flagged) == set(outside)
     assert all("used as a whole" in m for m in flagged.values())
