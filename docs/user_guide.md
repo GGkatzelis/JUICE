@@ -381,8 +381,9 @@ with each other within about 0.1 orders in the median (F. Rohrer, 387 limonene p
 closed-shell products of α-pinene and limonene in the MCM, the medians against SIMPOL are: Li et al. +0.7 orders
 for CHO species and −2.4 for nitrogen-containing ones; Donahue et al. −2.2 and −7.5 (it counts the nitrate oxygens
 and has no nitrogen term, so organic nitrates and PANs become condensable). The two UManSysProp methods are
-listed but not selectable until `pip install openbabel-wheel` and UManSysProp_public are installed (or the
-environment variable `UMANSYS` points to a checkout). *Leave out species with C\* above* (default 1e7 µg m⁻³)
+listed but not selectable until Open Babel and UManSysProp are there: `python -m pip install openbabel-wheel
+"setuptools<81"` with the Python that runs JUICE, and UManSysProp_public (no installer) unpacked as
+`GitHub/_external/UManSysProp_public` next to the JUICE folder, or anywhere with `UMANSYS` pointing to it. *Leave out species with C\* above* (default 1e7 µg m⁻³)
 keeps the mechanism small; *Show the species* builds the subset and lists what partitions. A lumped mechanism
 (RACM2, CRACMM) has no structure per species; partitioning stays pending there. From code:
 `exp.partitioning = True; exp.volatility_method = 'li2016'; exp.particles = 'mono'`.

@@ -27,8 +27,10 @@ on the 571 closed-shell products of alpha-pinene + limonene in the MCM, the medi
 orders (CHO) and -2.4 (with N); Donahue -2.2 (CHO) and -7.5 (with N: it counts the nitrate oxygens and has no
 nitrogen term, so organic nitrates and PANs become condensable).
 
-UManSysProp and Open Babel are optional: `pip install openbabel-wheel` and a checkout of
-github.com/loftytopping/UManSysProp_public, either installed or pointed to by the environment variable UMANSYS.
+UManSysProp and Open Babel are optional: `python -m pip install openbabel-wheel "setuptools<81"` (UManSysProp reads
+its tables with pkg_resources, which setuptools 81 removed) and a copy of github.com/loftytopping/UManSysProp_public
+(it has no installer): unpacked as GitHub/_external/UManSysProp_public next to JUICE, or anywhere with the
+environment variable UMANSYS pointing to it.
 """
 from __future__ import annotations
 
@@ -203,15 +205,21 @@ def umansysprop_backend() -> Tuple[bool, str]:
     if "ok" in _BACKEND:
         return bool(_BACKEND["ok"]), str(_BACKEND.get("why", ""))
     try:
-        path = os.environ.get("UMANSYS", "")
-        if path and os.path.isdir(path) and path not in sys.path:
-            sys.path.insert(0, path)
+        from juice._root import ROOT
+        for path in (os.environ.get("UMANSYS", ""),                       # a checkout named by the user
+                     os.path.join(os.path.dirname(ROOT), "_external", "UManSysProp_public")):   # next to JUICE
+            if path and os.path.isfile(os.path.join(path, "umansysprop", "vapour_pressures.py")):
+                if path not in sys.path:
+                    sys.path.append(path)
+                break
         from openbabel import pybel
         from umansysprop import boiling_points, vapour_pressures
         _BACKEND.update(ok=True, pybel=pybel, vp=vapour_pressures, bp=boiling_points)
     except Exception as e:
-        _BACKEND.update(ok=False, why=f"needs Open Babel and UManSysProp ({type(e).__name__}: {str(e)[:60]}); "
-                                      "pip install openbabel-wheel, and UManSysProp_public installed or in UMANSYS")
+        hint = ('python -m pip install "setuptools<81" (UManSysProp needs pkg_resources)' if "pkg_resources" in str(e) else
+                "python -m pip install openbabel-wheel" if "openbabel" in str(e) else
+                "unpack github.com/loftytopping/UManSysProp_public as GitHub/_external/UManSysProp_public, or set UMANSYS")
+        _BACKEND.update(ok=False, why=f"needs Open Babel and UManSysProp ({type(e).__name__}: {str(e)[:60]}); {hint}")
     return bool(_BACKEND["ok"]), str(_BACKEND.get("why", ""))
 
 

@@ -149,3 +149,15 @@ def test_chemistry_page_carries_the_choice():
     p.enable.setChecked(False); page.apply(out)
     assert out.partitioning is False and out.gecko_partitioning is True
     page.close()
+
+
+@pytest.mark.skipif(not vol.umansysprop_backend()[0], reason="UManSysProp / Open Babel not installed")
+def test_umansysprop_methods_agree_with_simpol_for_aliphatics():
+    pan = M("PAN", 2, 3, 5, 1, 121.05, "CC(=O)OON(=O)=O")
+    pinic = M("PINIC", 9, 14, 4, 0, 186.2, "CC1(C)C(CC1C(O)=O)CC(O)=O")
+    for m in (pan, pinic):
+        s = math.log10(vol.cstar_simpol(m))
+        assert abs(math.log10(vol.cstar_nannoolal(m)) - s) < 1.0 and abs(math.log10(vol.cstar_evaporation(m)) - s) < 1.0
+    # EVAPORATION is not for aromatic rings (catechol about 4 orders above SIMPOL; F. Rohrer saw the same)
+    cat = M("catechol", 6, 6, 2, 0, 110.1, "Oc1ccccc1O")
+    assert math.log10(vol.cstar_evaporation(cat)) - math.log10(vol.cstar_simpol(cat)) > 3
