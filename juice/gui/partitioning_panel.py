@@ -130,6 +130,7 @@ class PartitioningBox(QGroupBox):
         self._kind = ""
         self._preview: Dict = {}
         self.spec_provider = None                         # () -> the experiment as set up so far (for 'Show the species')
+        self.run_file_provider = lambda: ""               # () -> the .cs of a run of this experiment, if there is one
         self.enable.toggled.connect(self._enable_toggled)
         self.toggle = QPushButton("ⓘ Scheme and values"); self.toggle.setCheckable(True); self.toggle.setFlat(True)
         self.toggle.setStyleSheet("QPushButton { color: #6a4c93; border: none; padding: 0 4px; } QPushButton:checked { font-weight: bold; }")
@@ -187,6 +188,9 @@ class PartitioningBox(QGroupBox):
         self.preview_btn = QPushButton("Show the species"); self.preview_btn.clicked.connect(self.preview)
         self.preview_btn.setToolTip("Builds the mechanism of the chosen compounds and lists what partitions with this method")
         mrow.addWidget(self.preview_btn)
+        self.compare_btn = QPushButton("Compare methods"); self.compare_btn.clicked.connect(self.compare)
+        self.compare_btn.setToolTip("Where the experiment's species sit in volatility and oxidation state, by every method")
+        mrow.addWidget(self.compare_btn)
         dl.addLayout(mrow)
         self.method_info = QLabel(); self.method_info.setWordWrap(True); self.method_info.setStyleSheet("color: #888;")
         dl.addWidget(self.method_info)
@@ -284,6 +288,23 @@ class PartitioningBox(QGroupBox):
             shutil.rmtree(tmp, ignore_errors=True)
         self.refresh()
 
+    def compare(self):
+        """The window with every method's cloud (volatility_window.py)."""
+        from juice.gui.volatility_window import VolatilityWindow
+        if self.spec_provider is None:
+            return
+        def choose(mid):
+            self._method_id = mid
+            i = self.method.findData(mid)
+            if i >= 0:
+                self.method.setCurrentIndex(i)
+        try:
+            run = self.run_file_provider() or ""
+        except Exception:
+            run = ""
+        self._vol_window = VolatilityWindow(self.spec_provider(), self._method_id, run, self, on_choose=choose)
+        self._vol_window.show()
+
     def load(self, spec):
         self._on = {"gecko": bool(spec.gecko_partitioning), "computed": bool(getattr(spec, "partitioning", False))}
         self._method_id = getattr(spec, "volatility_method", "simpol") or "simpol"
@@ -379,7 +400,7 @@ class PartitioningBox(QGroupBox):
         self.species.setVisible(gecko or bool(pv.get("values")))
         for w in (self.diagram, self.method, self.params, self.species, self.pbox):
             w.setEnabled(live)
-        for w in (self.limit_label, self.limit, self.limit_unit, self.preview_btn):
+        for w in (self.limit_label, self.limit, self.limit_unit, self.preview_btn, self.compare_btn):
             w.setVisible(kind == "computed")
         self.method.setEnabled(kind == "computed")
         self.diagram.set_values(v)

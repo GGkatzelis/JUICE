@@ -796,6 +796,8 @@ class ChemistryPage(QWizardPage):
         self.partition = PartitioningBox(); self.gecko_part = self.partition.enable
         self.partition.context = self._partition_context
         self.partition.spec_provider = lambda: self.wiz.collect_spec()
+        self.partition.run_file_provider = lambda: next((p for p in [os.path.join(
+            self.wiz.out_dir(), self.wiz.page_start.name_edit.text().strip() + ".cs")] if os.path.isfile(p)), "")
         lay.addWidget(self.partition)
 
         # reaction adjustments = EASY k[...] overrides

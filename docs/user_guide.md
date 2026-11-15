@@ -388,6 +388,8 @@ keeps the mechanism small; *Show the species* builds the subset and lists what p
 (RACM2, CRACMM) has no structure per species; partitioning stays pending there. From code:
 `exp.partitioning = True; exp.volatility_method = 'li2016'; exp.particles = 'mono'`.
 
+*Compare methods* opens a window with every method at once: each closed-shell organic species of the experiment at its log₁₀ C\* and oxidation state (OSc = 2 O/C − H/C − 5 N/C, nitrogen counted as in a nitrate; Kroll et al., 2011), drawn as one cloud per method holding 80 % of the species, the chosen method in bold. A second tab splits one method's cloud into structural groups (PANs, organic nitrates, aromatics, hydroperoxides and peracids, acids, carbonyls, other oxygenates, hydrocarbons); a group with fewer than ten species is shown as points. Once the experiment has run, each species can be weighted by the square root of its peak concentration (the default then), by the concentration itself, or not at all; *Use this method* sets the panel to the method on show.
+
 Everything else — injections, chamber sources, dilution, photolysis, field emissions, studies —
 is written as for any experiment; the run folder gets the includes under `chemistry/`, so FACSIMILE runs
 it too, and the EASY header states the generator provenance. Two things an MCM include set brings in its
