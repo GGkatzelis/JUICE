@@ -16,7 +16,10 @@ def test_formula_methods_by_hand():
     pinic = M("PINIC", 9, 14, 4, 0, 186.2)                       # C9H14O4
     x = 9 * 4 / 13
     assert math.log10(vol.cstar_donahue(pinic)) == pytest.approx((25 - 9) * 0.475 - 4 * 2.3 + 2 * x * 0.3)
-    assert math.log10(vol.cstar_li(pinic)) == pytest.approx((22.66 - 9) * 0.4481 - 4 * 1.656 + 2 * x * 0.0779)
+    # Li et al. (2016) Table 1: bCO = -0.7790 for CHO and -0.07790 for CHON (a factor 10 apart; checked in the paper)
+    assert math.log10(vol.cstar_li(pinic)) == pytest.approx((22.66 - 9) * 0.4481 - 4 * 1.656 + 2 * x * 0.7790)
+    assert math.log10(vol.cstar_li(M("C10H16", 10, 16, 0, 0, 136.2))) == pytest.approx((23.80 - 10) * 0.4861)   # CH class
+    assert math.log10(vol.cstar_li(M("amine", 4, 11, 0, 1, 73.1))) == pytest.approx((24.59 - 4) * 0.4066 - 0.9619)  # CHN
     nit = M("N", 10, 17, 5, 1, 231.2)                            # an organic nitrate: the CHON coefficients
     x = 10 * 5 / 15
     assert math.log10(vol.cstar_li(nit)) == pytest.approx((24.13 - 10) * 0.3667 - 5 * 0.7732 + 2 * x * 0.0779 - 1.114)

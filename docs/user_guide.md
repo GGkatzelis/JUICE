@@ -377,8 +377,10 @@ the method chosen in the drop-down, which is one entry each in `juice/chemistry/
 | Donahue et al., 2-D volatility basis set | the formula | Donahue et al. (2011) |
 
 The answers differ by orders of magnitude, so the choice is a modelling decision: the structure methods agree
-with each other within about 0.1 orders in the median (F. Rohrer, 387 limonene products), the formula methods
-are several orders lower and make organic nitrates and PANs condensable. The two UManSysProp methods are
+with each other within about 0.1 orders in the median (F. Rohrer, 387 limonene products). On the 571
+closed-shell products of α-pinene and limonene in the MCM, the medians against SIMPOL are: Li et al. +0.7 orders
+for CHO species and −2.4 for nitrogen-containing ones; Donahue et al. −2.2 and −7.5 (it counts the nitrate oxygens
+and has no nitrogen term, so organic nitrates and PANs become condensable). The two UManSysProp methods are
 listed but not selectable until `pip install openbabel-wheel` and UManSysProp_public are installed (or the
 environment variable `UMANSYS` points to a checkout). *Leave out species with C\* above* (default 1e7 µg m⁻³)
 keeps the mechanism small; *Show the species* builds the subset and lists what partitions. A lumped mechanism

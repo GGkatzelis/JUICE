@@ -20,8 +20,12 @@ Chemistry step offers them in a drop-down.  A new method is a function (Molecule
 SIMPOL coefficients and SMARTS, the Li/Donahue forms and the li_evap routing are taken from F. Rohrer's
 make_simpol.py, compare_volatility_methods.py and b2_volatility.py (MCM_SAPHIR_Tool, branch easy-start-gui), which
 transcribe SIMPOL from UManSysProp (Topping et al., 2016).  His comparison on 387 limonene products: SIMPOL,
-EVAPORATION and Nannoolal agree within 0.1 orders of magnitude in the median; Donahue's 2-D VBS is about 7 orders
-lower, and makes every organic nitrate and PAN condensable.
+EVAPORATION and Nannoolal agree within 0.1 orders of magnitude in the median.  The Li and Donahue coefficients
+were checked against the papers on 2026-11-15 and differ from his scripts in two places: Donahue's bCO is -0.3
+(his scripts: +0.3), Li's CHO bCO is -0.7790 (his scripts: -0.07790, the CHON value).  With the papers' values,
+on the 571 closed-shell products of alpha-pinene + limonene in the MCM, the medians against SIMPOL are: Li +0.7
+orders (CHO) and -2.4 (with N); Donahue -2.2 (CHO) and -7.5 (with N: it counts the nitrate oxygens and has no
+nitrogen term, so organic nitrates and PANs become condensable).
 
 UManSysProp and Open Babel are optional: `pip install openbabel-wheel` and a checkout of
 github.com/loftytopping/UManSysProp_public, either installed or pointed to by the environment variable UMANSYS.
@@ -64,21 +68,28 @@ def _corridor(nC, nO, n0, bC, bO, bCO):
 
 
 def cstar_donahue(m: Molecule) -> float:
-    """Donahue et al. (2011), ACP 11, 3303: log10 C* = (25 - nC)*0.475 - nO*2.3 - 2*(nC*nO/(nC+nO))*(-0.3)."""
+    """Donahue et al. (2011), ACP 11, 3303, Eq. (3): log10 C0 = (nC0 - nC) bC - nO bO - 2 nC nO/(nC + nO) bCO with
+    nC0 = 25, bC = 0.475, bO = 2.3 and bCO = -0.3 (their Fig. 3), so the cross term raises C0."""
     return _corridor(m.nC, m.nO, 25.0, 0.475, 2.3, -0.3) if m.nC > 0 else 1e9
 
 
+# Li et al. (2016), ACP 16, 3327, Eq. (2) and Table 1 (checked against the paper 2026-11-15):
+#   log10 C0 = (n0C - nC) bC - nO bO - 2 nC nO/(nC + nO) bCO - nN bN - nS bS      class: (n0C, bC, bO, bCO, bN)
+LI_2016 = {"CH": (23.80, 0.4861, 0.0, 0.0, 0.0), "CHO": (22.66, 0.4481, 1.656, -0.7790, 0.0),
+           "CHN": (24.59, 0.4066, 0.0, 0.0, 0.9619), "CHON": (24.13, 0.3667, 0.7732, -0.07790, 1.114)}
+
+
 def cstar_li(m: Molecule) -> float:
-    """Li et al. (2016), ACP 16, 3327: the CHO coefficients, or the CHON ones for a compound with nitrogen."""
+    """Li et al. (2016) with the coefficients of the compound's class (CH, CHO, CHN or CHON)."""
     if m.nC <= 0:
         return 1e9
-    if m.nN > 0:
-        return _corridor(m.nC, m.nO, 24.13, 0.3667, 0.7732, -0.07790) * 10 ** (-m.nN * 1.114)
-    return _corridor(m.nC, m.nO, 22.66, 0.4481, 1.656, -0.07790)
+    cls = "CH" + ("O" if m.nO > 0 else "") + ("N" if m.nN > 0 else "")
+    n0, bC, bO, bCO, bN = LI_2016[cls]
+    return _corridor(m.nC, m.nO, n0, bC, bO, bCO) * 10 ** (-m.nN * bN)
 
 
 def _li_cho(nC, nO):
-    return _corridor(nC, nO, 22.66, 0.4481, 1.656, -0.07790) if nC > 0 else 1e9
+    return cstar_li(Molecule("", nC, 0, nO, 0, 0.0)) if nC > 0 else 1e9
 
 
 # ── SIMPOL.1 (RDKit) ───────────────────────────────────────────────────────────────────────────────────────────
@@ -228,6 +239,13 @@ def cstar_evaporation(m: Molecule, T: float = T_REF) -> float:
 LI_N_OFFSET = 2.977     # log10 offset of the nitrate fallback, calibrated against EVAPORATION (F. Rohrer, 2026-10-12)
 
 
+def _li_n_fallback(nC, nO, nN):
+    """F. Rohrer's fit for an organic nitrate without a usable structure: the CHO corridor on the oxygens that are not
+    in the nitrate group, with bCO = -0.0779 (not Li's -0.779 for CHO) and LI_N_OFFSET. The two numbers were fitted
+    together against EVAPORATION, so they stay as fitted; this is an empirical fit, not Li et al. (2016)."""
+    return _corridor(nC, max(1, nO - 2 * nN), 22.66, 0.4481, 1.656, -0.07790) * 10 ** LI_N_OFFSET
+
+
 def cstar_li_evap(m: Molecule, T: float = T_REF) -> float:
     """Li et al. (2016) for CHO; with nitrogen: Li (CHON) for an aromatic ring, EVAPORATION for a structure, else Li
     with the nitrate oxygens de-weighted and the EVAPORATION-calibrated offset (F. Rohrer's b2_volatility routing)."""
@@ -242,7 +260,7 @@ def cstar_li_evap(m: Molecule, T: float = T_REF) -> float:
                 return c
         except Exception:
             pass
-    return _li_cho(m.nC, max(1, m.nO - 2 * m.nN)) * 10 ** LI_N_OFFSET
+    return _li_n_fallback(m.nC, m.nO, m.nN)
 
 
 # ── the methods offered ────────────────────────────────────────────────────────────────────────────────────────
