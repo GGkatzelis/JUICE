@@ -71,6 +71,21 @@ def enz_name_in(path: str) -> str:
     return ""
 
 
+def easy_from_elog(elog_path: str, out_dir: str = "") -> Tuple[str, List[str]]:
+    """An experiment of which only the .elog is left: its master .easy and include files are rebuilt from the elog
+    (elog_generator.split_elog) into <elog folder>/<stem>.from_elog, or a temporary folder when that folder cannot be
+    written.  Returns (easy path, include files)."""
+    from juice.core.elog_generator import split_elog
+    stem = os.path.splitext(os.path.basename(elog_path))[0]
+    for d in ([out_dir] if out_dir else [os.path.join(os.path.dirname(os.path.abspath(elog_path)), stem + ".from_elog"),
+                                          tempfile.mkdtemp(prefix=f"juice_{safe_name(stem)}_")]):
+        try:
+            return split_elog(elog_path, d, stem)
+        except PermissionError:
+            continue
+    raise PermissionError(f"no folder to write the rebuilt {stem}.easy to")
+
+
 def find_enz(folder: str, stem: str, named: str) -> str:
     """The ENZ to use: the one FILES[ENZ] names, else <stem>.enz, else the only .enz in the folder."""
     for cand in ([named] if named else []) + [stem + ".enz"]:
@@ -449,7 +464,14 @@ if _QT:
             self.enz.setText(find_enz(self.folder, self.stem, enz_name_in(p)))
             self.name.setText(safe_name(self.stem))
             parts = []
-            if not os.path.isfile(self.easy_path):
+            if not os.path.isfile(self.easy_path) and p.lower().endswith(".elog"):
+                try:                                     # only the elog: the master file and its includes are rebuilt from it
+                    self.easy_path, incs = easy_from_elog(p)
+                    parts.append(f"no {self.stem}.easy next to it: rebuilt with its {len(incs)} include file(s) from the .elog "
+                                 f"in {os.path.dirname(self.easy_path)} (what FACSIMILE ran)")
+                except Exception as e:
+                    parts.append(f"✖ no {self.stem}.easy next to it, and the .elog could not be split: {e}")
+            elif not os.path.isfile(self.easy_path):
                 parts.append(f"✖ no {self.stem}.easy next to it — the import reads the master file (an .elog holds every include inline)")
             parts.append(f"EASY {self.ver} ({'5.96b rule: a redefined FUNCTION applies from its line on' if function_scope_for(self.ver) == FUNCTION_SCOPE_USE else '6.00 rule: the last FUNCTION definition applies everywhere'})"
                          if self.ver else "no .fac/.out next to it: EASY version unknown, JUICE's own rules (6.00)")
@@ -490,7 +512,9 @@ if _QT:
             if not os.path.isfile(enz):
                 QMessageBox.warning(self, "Import", "The ENZ file was not found: choose it."); return
             try:
-                spec, notes = import_facsimile(easy, enz, self.name.text().strip(), easy_version=self.ver)
+                cs = os.path.join(self.folder, self.stem + ".cs")        # next to the chosen file (an elog's master is rebuilt elsewhere)
+                spec, notes = import_facsimile(easy, enz, self.name.text().strip(), easy_version=self.ver,
+                                               reference_cs=cs if os.path.isfile(cs) else "")
             except Exception as e:
                 self.report.setPlainText(f"✖ The files could not be read: {e}"); return
             spec.include_dirs += [self.dirs.item(i).text() for i in range(self.dirs.count()) if self.dirs.item(i).text() not in spec.include_dirs]

@@ -87,3 +87,19 @@ def test_spec_round_trips_through_json():
     back = spec_from_dict(spec_to_dict(spec))
     assert back.include_dirs == spec.include_dirs and back.easy_version == spec.easy_version
     assert back.reference_cs == spec.reference_cs and [i.name for i in back.injections] == [i.name for i in spec.injections]
+
+
+@pytest.mark.parametrize("scene", ["scene_01", "scene_04", "scene_05", "scene_08", "scene_09"])
+def test_experiment_from_its_elog_alone(scene, tmp_path):
+    """Only the .elog is left: the master file and its include files are rebuilt from it, they expand to the elog
+    again (what FACSIMILE ran), and the rebuilt experiment imports like the original."""
+    from juice.core.elog_generator import generate_both
+    elog = os.path.join(IDL, scene, scene + ".elog")
+    easy, incs = fi.easy_from_elog(elog, str(tmp_path / "from_elog"))
+    assert os.path.basename(easy) == scene + ".easy" and all(os.path.isfile(p) for p in incs)
+    raw, _ = generate_both(easy, search_dirs=[str(tmp_path / "from_elog")], output_dir=str(tmp_path / "x"))
+    ok, diffs = statements_equivalent(raw, elog)
+    assert ok, diffs[:5]
+    if scene != "scene_01":                                    # scene_01 is a hand-written test without injections
+        spec, notes = fi.import_facsimile(easy, _scene(scene)[1])
+        assert not [n for n in notes if n.startswith("EASY:")], notes

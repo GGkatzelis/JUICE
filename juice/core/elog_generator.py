@@ -316,6 +316,59 @@ def case_variants(elog_path: str) -> dict:
     return {k: sorted(v) for k, v in seen.items() if len(v) > 1}
 
 
+_OPEN = re.compile(r"^;#include\s+(.+?)\s*!\s*(.*?)\s*$")
+
+
+def split_elog(elog_path: str, out_dir: str, stem: str = "") -> tuple:
+    """Rebuild the master EASY file and its include files from an elog (IDL's or JUICE's): every block between
+    ';#include NAME ! <folder>' and its closing ';#include NAME' becomes the file NAME in out_dir, and an
+    '#include NAME' line in the file that contained it.  The elog carries the text of every include, so this
+    works when the folders it names (E:/..., S:/...) do not exist here.  Returns (easy path, include files).
+    A NOT FOUND or CIRCULAR marker keeps its original #include line, as the generator wrote it."""
+    os.makedirs(out_dir, exist_ok=True)
+    stem = stem or os.path.splitext(os.path.basename(elog_path))[0].replace("_juice", "").replace(".canonical", "")
+    stack = [("", [])]                                   # (include name, lines of that file)
+    written = []
+    with open(elog_path, encoding="latin-1") as fh:
+        lines = fh.read().splitlines()
+    if lines and lines[0].startswith("\xef\xbb\xbf"):          # a UTF-8 byte-order mark read as latin-1 (scene_08)
+        lines[0] = lines[0][3:]
+    i = 0
+    if lines and lines[0].startswith("; JUICE elog generated from:"):   # JUICE's own header, not the master file's
+        while i < len(lines) and lines[i].startswith(";") and not lines[i].startswith(";TITLE") and lines[i].strip() != ";":
+            i += 1
+        if i < len(lines) and lines[i].strip() == ";":
+            i += 1
+    for line in lines[i:]:
+        m = _OPEN.match(line)
+        if m and m.group(2).upper() not in ("NOT FOUND", "CIRCULAR INCLUDE SKIPPED"):
+            stack.append((m.group(1), []))
+            continue
+        if m:                                            # unresolved: the next line is the original #include
+            continue
+        name = stack[-1][0]
+        if name:
+            close = re.search(r";#include\s+" + re.escape(name) + r"\s*$", line)
+            if close:
+                before = line[:close.start()]
+                if before.strip():
+                    stack[-1][1].append(before)
+                inc, body = stack.pop()
+                path = os.path.join(out_dir, inc)
+                with open(path, "w", encoding="latin-1", newline="\n") as out:
+                    out.write("\n".join(body) + "\n")
+                written.append(path)
+                stack[-1][1].append(f"#include {inc}")
+                continue
+        stack[-1][1].append(line)
+    if len(stack) != 1:
+        raise ValueError(f"{os.path.basename(elog_path)}: the include block of {stack[-1][0]} is not closed")
+    easy = os.path.join(out_dir, stem + ".easy")
+    with open(easy, "w", encoding="latin-1", newline="\n") as out:
+        out.write("\n".join(stack[0][1]) + "\n")
+    return easy, written
+
+
 # ---------------------------------------------------------------------------
 # Combined entry point: generate both files
 # ---------------------------------------------------------------------------
