@@ -21,6 +21,13 @@ each scene's full comparison to <work>/<scene>/<scene>_difference_JUICE_Facsimil
     python -m juice.tools.run_benchmark --kv-pd                  # also export and compare rate constants (k, v)
     python -m juice.tools.run_benchmark --solver precise         # the slower, tighter solver profile (default: the
                                                      # TOML's [solver] profile); work dir .../benchmark/<profile>
+    python -m juice.tools.run_benchmark --live                   # with live settings (see below)
+
+The FACSIMILE references were made with EASY 5.96b / 6.00, which hold every setting and rate constant that
+depends on concentrations through a setting (the RO2 sum) for one output step.  The benchmark therefore runs
+JUICE the same way (live_settings = false): like with like.  JUICE's default since 2026-11-15 is live settings
+(F. Rohrer; EASY 7.01 - 7.05), which moves individual peroxy radicals by a few percent against these references;
+--live runs that default.  New references need FACSIMILE decks from EASY 7.05.
 
 Exit code 0 when every scene's settings and concentrations are within --tol (default 2 %).
 
@@ -49,6 +56,7 @@ REF_ROOT = os.path.join(HERE, "validation", "IDL Input")
 TOML = os.path.join(HERE, "settings.toml")
 PROFILE: str | None = None          # --solver: fast | precise (None = the TOML's [solver] profile)
 PROFILE_DESC = ""                   # the resolved profile, for the report header
+LIVE = False                        # --live: live settings (JUICE's default); False = frozen per row, as the references
 S_LABEL = "1. s-values (settings)"
 C_LABEL = "2. c-values (concentrations)"
 
@@ -121,7 +129,7 @@ def prepare(scene: str, work: str, kv_pd: bool) -> str:
     # the reference folder (and its chemistry/ subfolder) is searched for include files first
     return sp.prepare_scenario(res, include_dir, export_kv_pd=kv_pd, toml_path=TOML,
                                extra_dirs=[src, os.path.join(src, "chemistry")],
-                               solver=sp.solver_from_toml(TOML, PROFILE))
+                               solver={**sp.solver_from_toml(TOML, PROFILE), "live_settings": LIVE})
 
 
 def prepare_quietly(scene: str, work: str, kv_pd: bool) -> tuple[str, str]:
@@ -218,8 +226,12 @@ def main(argv=None) -> int:
     ap.add_argument("--solver", choices=["fast", "precise", "twostep"], default=None,
                     help="solver profile (default: the TOML's [solver] profile). fast = rtol 1e-4, warm; "
                          "precise = rtol 1e-6, cold restart per ENZ row, ~2x slower, tightest agreement")
+    ap.add_argument("--live", action="store_true",
+                    help="run with live settings (JUICE's default). Without it the settings are frozen per ENZ row, "
+                         "as in the EASY 5.96b / 6.00 decks that made the FACSIMILE references")
     a = ap.parse_args(argv)
-    global TOML, PROFILE, PROFILE_DESC
+    global TOML, PROFILE, PROFILE_DESC, LIVE
+    LIVE = bool(a.live)
     if a.toml:
         TOML = os.path.abspath(a.toml)
     PROFILE = a.solver
@@ -228,7 +240,8 @@ def main(argv=None) -> int:
     from juice.core import scenario_prep as sp
     profile = sp.solver_from_toml(TOML, PROFILE)
     PROFILE_DESC = (f"{profile['solver_profile']} ({profile['solver_method']}, rtol {profile['rtol']:g}, "
-                    f"{'warm continuation' if profile['perstep_warm'] else 'cold restart per ENZ row'})")
+                    f"{'warm continuation' if profile['perstep_warm'] else 'cold restart per ENZ row'}; "
+                    f"{'live settings' if LIVE else 'settings frozen per ENZ row, as in the reference decks'})")
     print(f"solver profile: {PROFILE_DESC}")
     available = reference_scenes()
     scenes = a.scenes or available

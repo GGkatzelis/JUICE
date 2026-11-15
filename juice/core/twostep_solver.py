@@ -161,7 +161,7 @@ class PLSystem:
     extra_P(t, y, P) / extra_L(t, y, L) may add continuous sources, bursts, analytical dilution ...
     k_buf and env_vals are OWNED by the caller (the runner refreshes them per ENZ row)."""
 
-    def __init__(self, n_species, k_buf, env_vals, arrays, extra_P=None, extra_L=None, pairs=True):
+    def __init__(self, n_species, k_buf, env_vals, arrays, extra_P=None, extra_L=None, pairs=True, pre=None, par=None):
         (self.ode_r_rxn, self.ode_r_sp, self.ode_r_coeff,
          self.env_r_rxn, self.env_r_name_idx, self.env_r_coeff,
          self.stoich_rxn, self.stoich_sp, self.stoich_sc) = arrays
@@ -172,6 +172,8 @@ class PLSystem:
         self.L = np.zeros(n_species)
         self.extra_P = extra_P
         self.extra_L = extra_L
+        self.pre = pre          # pre(t, y): refresh k_buf / env_vals from the current state (live settings)
+        self.par = par          # (parallel_kernels.pl_par, layout arrays) -> multi-core kernel, bit-identical
         self.ncall = 0
         # reversible first-order pairs A <-> B, solved together inside each TWOSTEP iteration (pair_solve)
         self.pairs = find_exchange_pairs(arrays, n_species) if pairs else None
@@ -182,13 +184,18 @@ class PLSystem:
             self._vba = np.zeros(self.pairs[0].size)
 
     def __call__(self, t, y):
-        self.P[:] = 0.0
-        self.L[:] = 0.0
-        pl_kernel(self.k_buf, y, self.env_vals,
-                  self.ode_r_rxn, self.ode_r_sp, self.ode_r_coeff,
-                  self.env_r_rxn, self.env_r_name_idx, self.env_r_coeff,
-                  self.stoich_rxn, self.stoich_sp, self.stoich_sc,
-                  self.v_buf, self.P, self.L)
+        if self.pre is not None:
+            self.pre(t, y)
+        if self.par is not None:
+            self.par[0](self.k_buf, y, self.env_vals, *self.par[1], self.v_buf, self.P, self.L)
+        else:
+            self.P[:] = 0.0
+            self.L[:] = 0.0
+            pl_kernel(self.k_buf, y, self.env_vals,
+                      self.ode_r_rxn, self.ode_r_sp, self.ode_r_coeff,
+                      self.env_r_rxn, self.env_r_name_idx, self.env_r_coeff,
+                      self.stoich_rxn, self.stoich_sp, self.stoich_sc,
+                      self.v_buf, self.P, self.L)
         if self.extra_P is not None:
             self.extra_P(t, y, self.P)
         if self.extra_L is not None:
@@ -219,6 +226,54 @@ class PLSystem:
         y = np.maximum(y, SMALLC)
         P, L = self(t, y)
         return P - L * y
+
+
+# ----------------------------------------------------------------------------------------------------------
+# compiled one-pass helpers of the integrator (2026-11-15).  Each element is computed with the same IEEE
+# operations in the same order as the numpy expression it replaces (no fastmath), NaN included:
+# np.maximum and np.max propagate NaN, so the loops do it explicitly.
+# ----------------------------------------------------------------------------------------------------------
+@_NJIT
+def _k_sweep(w, g, P, L, smallc, out):
+    """out = np.maximum(smallc, (w + g*P) / (1.0 + g*L))"""
+    for i in range(len(out)):
+        x = (w[i] + g * P[i]) / (1.0 + g * L[i])
+        out[i] = x if (x > smallc or x != x) else smallc
+
+
+@_NJIT
+def _k_conv(ynext, ynew, atol, rtol):
+    """float(np.max(np.abs(ynext - ynew) / (atol + rtol*np.abs(ynext))))"""
+    m = -np.inf
+    for i in range(len(ynext)):
+        v = abs(ynext[i] - ynew[i]) / (atol[i] + rtol * abs(ynext[i]))
+        if v != v:
+            return np.nan
+        if v > m:
+            m = v
+    return m
+
+
+@_NJIT
+def _k_predict(a1, a2, ratio, y, yold, smallc, w, ynew0):
+    """w = a1*y + a2*yold;  ynew0 = np.maximum(smallc, y + ratio*(y - yold))"""
+    for i in range(len(y)):
+        w[i] = a1 * y[i] + a2 * yold[i]
+        x = y[i] + ratio * (y[i] - yold[i])
+        ynew0[i] = x if (x > smallc or x != x) else smallc
+
+
+@_NJIT
+def _k_err(c, cp1, ynew, y, yold, atol, rtol):
+    """float(np.max(np.abs(c*ynew - cp1*y + yold) / (atol + rtol*np.abs(y))))"""
+    m = -np.inf
+    for i in range(len(y)):
+        v = abs(c * ynew[i] - cp1 * y[i] + yold[i]) / (atol[i] + rtol * abs(y[i]))
+        if v != v:
+            return np.nan
+        if v > m:
+            m = v
+    return m
 
 
 # ----------------------------------------------------------------------------------------------------------
@@ -267,17 +322,30 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
 
     pair_solve = getattr(pl_fn, "pair_solve", None)
 
+    # Compiled one-pass forms of the array expressions below (same operations in the same order per element,
+    # so bit-identical; numpy needed ~11 passes with temporaries per sweep).  Without numba: the numpy forms.
+    _fastk = NUMBA
+    if _fastk:
+        atol_c = np.ascontiguousarray(atol_v, dtype=np.float64)
+
     def iterate(w, g, ynew, t_eval):
         nonlocal nfcn
         for it in range(numit_max):
             P, L = pl_fn(t0_abs + t_eval, ynew)
             nfcn += 1
-            ynext = np.maximum(smallc, (w + g * P) / (1.0 + g * L))
+            if _fastk:
+                ynext = np.empty(n)
+                _k_sweep(w, g, P, L, smallc, ynext)
+            else:
+                ynext = np.maximum(smallc, (w + g * P) / (1.0 + g * L))
             if pair_solve is not None:
                 pair_solve(ynew, w, g, ynext)      # fast reversible pairs A <-> B solved exactly
             if it + 1 >= numit and it + 1 < numit_max:
                 # converged? (max-norm change relative to the tolerance)
-                if float(np.max(np.abs(ynext - ynew) / (atol_v + rtol * np.abs(ynext)))) < conv:
+                if _fastk:
+                    if _k_conv(ynext, ynew, atol_c, rtol) < conv:
+                        return ynext
+                elif float(np.max(np.abs(ynext - ynew) / (atol_v + rtol * np.abs(ynext)))) < conv:
                     return ynext
             ynew = ynext
         return ynew
@@ -328,8 +396,12 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
             a1 = (c + 1.0) ** 2 / (c * c + 2.0 * c)
             a2 = -1.0 / (c * c + 2.0 * c)
             dtg = dt * (1.0 + c) / (2.0 + c)
-            w = a1 * y + a2 * yold
-            ynew0 = np.maximum(smallc, y + ratio * (y - yold))     # extrapolated predictor
+            if _fastk:
+                w = np.empty(n); ynew0 = np.empty(n)
+                _k_predict(a1, a2, ratio, y, yold, smallc, w, ynew0)
+            else:
+                w = a1 * y + a2 * yold
+                ynew0 = np.maximum(smallc, y + ratio * (y - yold))     # extrapolated predictor
             ynew = iterate(w, dtg, ynew0, t + dt)
             if fixed:
                 t += dtold
@@ -344,8 +416,11 @@ def twostep(pl_fn, y0, t0, t1, dtmin, dtmax, atol, rtol, numit=2, smallc=SMALLC,
                     break
                 continue
             # error estimate (local truncation error of BDF2, max-norm, scaled)
-            ytol = atol_v + rtol * np.abs(y)
-            errlte = float(np.max(np.abs(c * ynew - cp1 * y + yold) / ytol))
+            if _fastk:
+                errlte = _k_err(c, cp1, ynew, y, yold, atol_c, rtol)
+            else:
+                ytol = atol_v + rtol * np.abs(y)
+                errlte = float(np.max(np.abs(c * ynew - cp1 * y + yold) / ytol))
             errlte = 2.0 * errlte / (c + c * c)
             # NEWDT
             if errlte > 1.0 and dt > dtmin:

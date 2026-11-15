@@ -49,6 +49,20 @@ def build_ctx(s_vec, c_vec, enz_vec):
     return ctx
 
 
+def build_ctx_fast(s_vec, c_names_upper, c_values, enz_vec, extra=None):
+    """build_ctx without one object per species: c_names_upper / c_values are parallel lists,
+    `extra` = further c entries ({NAME: value}, e.g. the O1D steady state).  Same priority s > c > enz."""
+    ctx = dict(_MATH_CTX)
+    for e in enz_vec:
+        ctx[e.name.upper()] = e.value
+    ctx.update(zip(c_names_upper, c_values))
+    if extra:
+        ctx.update(extra)
+    for e in s_vec:
+        ctx[e.name.upper()] = e.value
+    return ctx
+
+
 def evaluate(call_string, function_entries, s_vec, c_vec, enz_vec):
     """Evaluate a definition string using the k/s/c/enz/function vectors.
 
@@ -178,7 +192,7 @@ def topological_sort(s_entries, function_entries):
         if name in visited:
             return
         visited.add(name)
-        for dep in deps.get(name, set()):
+        for dep in sorted(deps.get(name, ())):       # sorted: the same order in every run (set order is not)
             visit(dep)
         # Find the entry with this name (last-wins: take the last one)
         entry = next((e for e in reversed(s_entries)
@@ -230,17 +244,23 @@ def precompile_s_vec(s_entries, function_entries):
             entry._input_col = None
 
 
-def update_s_vec(s_entries, function_entries, c_vec, enz_vec, _ordered=None):
+def update_s_vec(s_entries, function_entries, c_vec, enz_vec, _ordered=None, _ctx=None, _c_vec_fn=None, _fast=None):
     """Evaluate all s entries in topological order and update their .value.
 
     Requires precompile_s_vec() to have been called first (entry._code set).
     The hot loop uses eval(code, ctx) — same speed as the old var_assignments.
     """
     ordered = _ordered if _ordered is not None else topological_sort(s_entries, function_entries)
-    ctx = build_ctx(s_entries, c_vec, enz_vec)
+    # _ctx: context prepared by the caller (build_ctx_fast); then c_vec may be None and is built by
+    # _c_vec_fn() only if an entry without precompiled code needs it.  Returns the context.
+    # _fast: {entry name: f(ctx) -> float} replaces the eval of that entry (sums over species as dot products).
+    ctx = _ctx if _ctx is not None else build_ctx(s_entries, c_vec, enz_vec)
     for entry in ordered:
         try:
-            if getattr(entry, '_input_col', None) is not None:
+            if _fast is not None and entry.name in _fast:
+                entry.value = float(_fast[entry.name](ctx))
+                ctx[entry.name] = entry.value
+            elif getattr(entry, '_input_col', None) is not None:
                 for e in enz_vec:
                     if e.name.upper() == entry._input_col:
                         entry.value = e.value
@@ -250,12 +270,15 @@ def update_s_vec(s_entries, function_entries, c_vec, enz_vec, _ordered=None):
                 entry.value = float(eval(entry._code, {"__builtins__": {}}, ctx))
                 ctx[entry.name] = entry.value
             else:
+                if c_vec is None and _c_vec_fn is not None:
+                    c_vec = _c_vec_fn()
                 entry.value = evaluate(
                     entry.definition, function_entries, s_entries, c_vec, enz_vec)
                 ctx[entry.name] = entry.value
         except Exception as ex:
             import warnings
             warnings.warn(f"update_s_vec: '{entry.name}' ({entry.definition[:50]}): {ex}")
+    return ctx
 
 
 def update_enz_vec(enz_vec, providers, t):

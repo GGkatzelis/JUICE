@@ -368,6 +368,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
     injection_switches  = {}   # var_upper -> ENZ_col (original case) or None
     input_names         = set()  # every name an INPUT() statement defines or reads (uppercase)
     held_species        = {}   # species = CONST(<expression of an INPUT>): held to the ENZ, not integrated
+    input_vars          = {}   # var_upper -> ENZ_col for every X = INPUT(col) (T/P source detection)
     source_consts       = {}   # var_upper -> py_expr  (SHONO/SHCHO/WALLDEP etc.)
 
     y_active    = False;  y_eqn     = ""
@@ -469,6 +470,7 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
         if inp and not is_commented:
             var_up  = inp.group(1).upper()
             enz_col = inp.group(2).strip()
+            input_vars[var_up] = enz_col
             mapping = (ENZ_COL_TO_ENV.get(enz_col.lower()) or
                        ENZ_COL_TO_ENV.get(var_up.lower()))
             input_names.update({var_up, enz_col.upper()})
@@ -509,7 +511,14 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 except (ValueError, TypeError):
                     # Non-numeric expr e.g. P = CONST(P_in): P_in = INPUT(press) already set
                     # env_map["PRESS"] = SAPHIR File — do NOT overwrite with a fixed value.
-                    if env_map.get("PRESS", {}).get("type") != "SAPHIR File":
+                    _src = expr.strip().upper()
+                    if _src in input_vars:
+                        # P = CONST(P_in) with P_in = INPUT(<col>): the ENZ column is the
+                        # source (any column name, e.g. 'Pressure'), not a fixed default.
+                        env_map["PRESS"] = {"type": "SAPHIR File", "value": input_vars[_src]}
+                        injection_switches.pop(_src, None)
+                        idl_parameters["P"] = py_expr
+                    elif env_map.get("PRESS", {}).get("type") != "SAPHIR File":
                         env_map["PRESS"] = {"type": "Fixed Constant", "value": "1013.25"}
                         idl_parameters["P"] = py_expr
 
@@ -521,7 +530,14 @@ def parse_idl_easy(easy_path: str, enz_path: str = None,
                 except (ValueError, TypeError):
                     # Non-numeric expr e.g. T = CONST(T_in): T_in = INPUT(t) already set
                     # env_map["TEMP"] = SAPHIR File — do NOT overwrite with a fixed value.
-                    if env_map.get("TEMP", {}).get("type") != "SAPHIR File":
+                    _src = expr.strip().upper()
+                    if _src in input_vars:
+                        # T = CONST(T_in) with T_in = INPUT(<col>): ENZ column (e.g. 'Temp'),
+                        # not the 298.15 K default (Li Xin RACM2 case, 2026-11-12).
+                        env_map["TEMP"] = {"type": "SAPHIR File", "value": input_vars[_src]}
+                        injection_switches.pop(_src, None)
+                        idl_parameters["T"] = py_expr
+                    elif env_map.get("TEMP", {}).get("type") != "SAPHIR File":
                         env_map["TEMP"] = {"type": "Fixed Constant", "value": "298.15"}
                         idl_parameters["T"] = py_expr
 

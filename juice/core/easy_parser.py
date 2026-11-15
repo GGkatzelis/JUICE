@@ -98,7 +98,7 @@ class EasyParser:
         """
         def _expand(side: str) -> list:
             coeff_map: dict = {}
-            for term in side.upper().replace(' ', '').split('+'):
+            for term in re.sub(r'\s+', '', side.upper()).split('+'):
                 if not term:
                     continue
                 m = re.match(r'^([\d.]+)\*(.+)$', term)
@@ -179,6 +179,7 @@ class EasyParser:
         # treated as overrides, not additions).
         self._rxn_map = {}       # normalised_key -> (reacs, prods, rate_expr)
         self._k_raw_defs = {}    # normalised_key -> original definition string (Phase 1)
+        self._k_generic_rhs = 0  # k[...] lines with a non-CONST/INPUT/FUNCTION right-hand side
         _species_seen = set(self.mech.species)   # membership set mirroring the ordered species list (process_side)
         full_content = self.preprocess(filename)
         lines = full_content.split('\n')
@@ -604,9 +605,21 @@ class EasyParser:
 
             # Rate definitions  k[...] = CONST/INPUT/FUNCTION(...)
             rate_def = re.match(r'k\[(.*?)\](?:\{[^}]*\})?\s*=\s*(?:CONST|INPUT|FUNCTION)?\s*\((.*)\)', line_for_rxn, re.I)
+            _rate_rhs = rate_def.group(2).strip() if rate_def else None
+            if not rate_def:
+                # Any other right-hand side, e.g. a direct call of a user FUNCTION
+                # (k[O3+NO-->NO2+O2]=ARRH(1.4e-12,1310.), RACM2 style) or a plain
+                # expression: FACSIMILE/EASY evaluates it as written, so the whole
+                # right-hand side is the rate expression (macro-expanded below).
+                # Before 2026-11-12 such lines did not match and the k stayed 0
+                # without any message (Li Xin's RACM2 case: 360 of 504 k).
+                rate_def = re.match(r'k\[(.*?)\](?:\{[^}]*\})?\s*=\s*(\S.*?)\s*$', line_for_rxn, re.I)
+                if rate_def:
+                    _rate_rhs = rate_def.group(2).strip()
+                    self._k_generic_rhs += 1
             if rate_def:
-                raw_key = rate_def.group(1).replace(' ', '').upper()
-                rate_val = expand_macros(rate_def.group(2).strip(), self.functions).upper()
+                raw_key = re.sub(r'\s+', '', rate_def.group(1)).upper()
+                rate_val = expand_macros(_rate_rhs, self.functions).upper()
                 # HV must NOT be injected into the rate constant — it is already a
                 # reactant in the reaction equation (reactants_env) and gates the
                 # reaction there at runtime.  Injecting HV here would cause the kv
@@ -659,7 +672,7 @@ class EasyParser:
                     # FACSIMILE rate-inheritance: bare reaction with no explicit k[]
                     # inherits the rate of a -/->-disabled reaction with same reactants.
                     reac_key = frozenset(
-                        t.upper() for t in left.replace(' ', '').split('+') if t)
+                        t.upper() for t in re.sub(r'\s+', '', left).split('+') if t)
                     rate = self._reactant_fallback_rates.get(reac_key, "0.0")
                 self._rxn_map[norm_key] = (reacs, prods, rate)
 
@@ -702,5 +715,16 @@ class EasyParser:
                 reactants=reacs,
                 products=prods,
             ))
+
+        # Report instead of silently running reactions at k = 0 (2026-11-12).
+        if self._k_generic_rhs:
+            print(f"  [PARSER] {self._k_generic_rhs} k[...] definition(s) with a direct "
+                  f"expression / FUNCTION call (e.g. ARRH(...)) taken as written")
+        _no_k = [ck for ck, (_r, _p, rx) in self._rxn_map.items()
+                 if ck not in self.disabled_rxn_keys and ck not in self._k_raw_defs
+                 and str(rx).strip() in ('0.0', '0', '')]
+        if _no_k:
+            print(f"  [PARSER] WARNING: {len(_no_k)} reaction(s) without any rate definition "
+                  f"run with k = 0, e.g. {', '.join(_no_k[:5])}")
 
         return self.mech

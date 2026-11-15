@@ -102,37 +102,21 @@ def _write_csv(path: str, df: pd.DataFrame, comment: str = "",
         # Time column with full float64 precision (.15E = 16 sig figs) so that
         # BDF boundary times like 773812899.9999847 are never rounded to the same
         # value as the exact boundary 773812900.0 (relative diff ~2e-14 needs >=14 sig figs).
-        # Formatting is pure Python (no C fast path exists for '%.6E'); large files
-        # (kv: 27 M cells) are formatted in parallel row chunks, byte-identical.
+        # One formatting call per row ('%' with a tuple runs in C; the text is byte-identical to the former
+        # per-cell f-strings: both end in the same float formatter, including NAN / INF).  Written in blocks,
+        # so the text of a large file (GECKO-A .cs: 1.2 GB) is never held in memory as a whole.
         data = np.column_stack(col_arrs) if col_arrs else np.empty((len(idx_vals), 0))
-        n_cells = data.size
-        n_workers = max(1, min(8, (os.cpu_count() or 2) - 1))
-        if n_cells >= 3_000_000 and n_workers > 1:
-            from concurrent.futures import ProcessPoolExecutor
-            n_chunks = n_workers * 2
-            bounds = np.linspace(0, len(idx_vals), n_chunks + 1).astype(int)
-            jobs = [(idx_vals[a:b], data[a:b]) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
-            try:
-                with ProcessPoolExecutor(max_workers=n_workers) as ex:
-                    chunks = list(ex.map(_format_rows, jobs))
-            except Exception as _e:          # e.g. BrokenProcessPool (frozen/odd main)
-                print(f"  [EXPORT] parallel formatting unavailable ({type(_e).__name__}); serial")
-                chunks = [_format_rows(j) for j in jobs]
-            for chunk in chunks:
-                fh.write(chunk)
-        else:
-            fh.write(_format_rows((idx_vals, data)))
+        _block = max(1, 4_000_000 // max(1, data.shape[1] + 1))          # rows per write, ~4 M cells
+        for a in range(0, len(idx_vals), _block):
+            fh.write(_format_rows((idx_vals[a:a + _block], data[a:a + _block])))
 
 
 def _format_rows(job):
     """Format (times, 2-D data) into FACSIMILE data lines: time .15E, values .6E."""
     idx_vals, data = job
-    out = []
-    for t_i in range(len(idx_vals)):
-        row = f'{idx_vals[t_i]:.15E}'
-        for v in data[t_i]:
-            row += f' {v:.6E}'
-        out.append(row)
+    fmt = '%.15E' + ' %.6E' * data.shape[1]
+    tl = np.asarray(idx_vals, dtype=np.float64).tolist()
+    out = [fmt % ((tl[t_i],) + tuple(data[t_i].tolist())) for t_i in range(len(tl))]
     return '\n'.join(out) + ('\n' if out else '')
 
 
@@ -184,6 +168,9 @@ from juice.core.load_saphir_environment import load_saphir_environment
 # All KMT/COMPRC/PHTFKT functions are inline-expanded by easy_parser.expand_macros
 # at parse time — the EASY script is the single authoritative source.
 
+
+_MODEL_TIME = 'MODELTIME__'   # internal name of the model time (EASY/FACSIMILE 'time')
+
 class CallableFloat(float):
     """A bulletproof float that returns 0.0 if accidentally called as a function."""
     def __call__(self, *args, **kwargs):
@@ -193,6 +180,24 @@ class SafeDict(dict):
     """A bulletproof dictionary for chemical math. If a variable is missing, it safely returns CallableFloat(0.0)."""
     def __missing__(self, key):
         return CallableFloat(0.0)
+
+def _eval_rates_full(compute_fn, reactions, ctx, kbuf):
+    """All rate constants into kbuf: the generated batch function; if it fails, one by one (0 for an
+    expression that cannot be evaluated); non-finite values are set to 0."""
+    try:
+        compute_fn(ctx, kbuf)
+    except Exception:
+        for i, rxn in enumerate(reactions):
+            try: kbuf[i] = eval(rxn.safe_expr, globals(), ctx)
+            except: kbuf[i] = 0.0
+    np.nan_to_num(kbuf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+
+def _as_bool(v, default=False):
+    """Option value -> bool: a bool as it is, None -> default, any other value is True only for the
+    texts 1 / true / yes / on (any case)."""
+    if isinstance(v, bool): return v
+    if v is None: return default
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
 
 class ScenarioRunner:
     def __init__(self, config_path):
@@ -211,6 +216,7 @@ class ScenarioRunner:
         self.t_span = None
         self.ctx_data = {}
         self.var_assignments = []
+        self._param_src = {}      # NAME -> source expression (elog parameters)
         self._ctx_data_protected = set()   # raw ENZ aliases (e.g. H2O_IN) — never overwritten by var_assignments
         self._idl_params_upper  = set()    # idl_parameter names — allowed to override env_map
         self.last_progress_print_time = -1
@@ -327,6 +333,18 @@ class ScenarioRunner:
             self.ctx_data[raw_header.upper()] = interp_func
         # Remember raw ENZ column names for INPUT-alias auto-detection later.
         self._enz_providers_up = {h.upper() for h in providers}
+        # Model time for EASY expressions (FR 2026-11-13): FACSIMILE's 'time' = seconds
+        # since the first ENZ line.  Registered like an ENZ column under an internal
+        # name, so INPUT(time) keeps returning the ENZ column (absolute time).  A bare
+        # 'time' in a setting or rate constant is redirected to it in
+        # _zero_implicit_enz_names.  With live settings (default, EASY 7.05) everything
+        # that depends on it is evaluated in every RHS call; with live_settings = false
+        # at the row start only (EASY 7.02).
+        _t_first = float(enz_times[0]) if len(enz_times) else float(t_min)
+        self._t_first = _t_first
+        self.ctx_data[_MODEL_TIME] = (lambda t, _t0=_t_first: np.asarray(t, dtype=float) - _t0
+                                      if isinstance(t, np.ndarray) else float(t) - _t0)
+        self._enz_providers_up.add(_MODEL_TIME)
 
         _using_elog = bool(self.cfg.get('elog_path', ''))
 
@@ -339,6 +357,14 @@ class ScenarioRunner:
                     val = float(mapping['value'])
                     self.ctx_data[internal_key] = (
                         lambda t, v=val: np.full_like(t, v) if isinstance(t, np.ndarray) else v)
+                elif internal_key in ('TEMP', 'PRESS'):
+                    # T / P read from an ENZ column of any name (e.g. 'Temp', 'Pressure'
+                    # via T = CONST(T_in), T_in = INPUT(TEMP)): bind the physical key to
+                    # that column so get_M and the snapshot see the ENZ value.
+                    col = str(mapping['value']).lower()
+                    hdr = next((h for h in providers if h.lower() == col), None)
+                    if hdr is not None:
+                        self.ctx_data[internal_key] = providers[hdr]
         else:
             # Non-ELOG (legacy mechanism_files) mode:
             # Process env_map fully: rename ENZ columns to internal names, force
@@ -408,6 +434,85 @@ class ScenarioRunner:
         # every M-dependent rate expression.
         return press / (temp * 1.379e-19)
 
+    def _zero_implicit_enz_names(self, m_part):
+        """FACSIMILE semantics for ENZ column names in elog mode.
+
+        In EASY/FACSIMILE an ENZ column is reachable ONLY through INPUT(col); the
+        column name itself never becomes a FACSIMILE variable.  A name that is used
+        in an expression, is not defined in the EASY script (setting, species,
+        FUNCTION) and only happens to match an ENZ column is therefore undeclared
+        in FACSIMILE -> default declaration PARAM 0.  JUICE loads every ENZ column
+        under its name, so without this step such a name silently reads the ENZ
+        (e.g. a commented-out 'jhono = AMAX(JHONO_in, 0)' -> 'jhono' would read
+        the ENZ column JHONO).  Replace those references by 0 and warn.
+        Expressions of the form X = INPUT(col) keep their column reference.
+        """
+        enz_up = getattr(self, '_enz_providers_up', set())
+        if not enz_up:
+            return
+        defined = ({k.upper() for k in m_part.parameters}
+                   | {s.upper() for s in m_part.species}
+                   | {f.upper() for f in m_part.functions}
+                   # env_map: in elog mode only Fixed-Constant entries and the
+                   # TEMP/PRESS binding define a name (idl_parser lists every
+                   # INPUT() column there as 'SAPHIR File' -- informational only)
+                   | {k.upper() for k, v in self.cfg.get('env_map', {}).items()
+                      if v.get('type') != 'SAPHIR File' or k.upper() in ('TEMP', 'PRESS')})
+        cand = enz_up - defined
+        # bare 'time' = model time (FACSIMILE variable), never an undeclared ENZ name
+        _time_is_model = 'TIME' not in defined
+        cand = cand - {'TIME', _MODEL_TIME} if _time_is_model else cand - {_MODEL_TIME}
+        if not cand and not _time_is_model:
+            return
+        inp = {e.name.upper() for e in m_part.s_entries
+               if re.match(r'\s*INPUT\s*\(', str(e.definition), re.I)}
+        _id = re.compile(r'(?<![\w.])([A-Za-z_]\w*)(?![\w(])(?!\s*\()')
+        hits = {}
+        time_users = set()
+
+        def _fix(expr, who):
+            if not expr:
+                return expr
+            def _rep(mo):
+                u = mo.group(1).upper()
+                if u == 'TIME' and _time_is_model:
+                    time_users.add(who)
+                    return _MODEL_TIME
+                if u in cand:
+                    hits.setdefault(u, set()).add(who)
+                    return '0.0'
+                return mo.group(0)
+            return _id.sub(_rep, expr)
+
+        for name in list(m_part.parameters):
+            if name.upper() not in inp:
+                m_part.parameters[name] = _fix(m_part.parameters[name], name)
+        for e in m_part.s_entries:
+            if e.name.upper() not in inp:
+                e.definition = _fix(e.definition, e.name)
+        for r in m_part.reactions:
+            r.rate_expression = _fix(r.rate_expression,
+                                     'k[' + '+'.join(r.reactants) + ']')
+        for e in m_part.k_entries:
+            e.definition = _fix(e.definition, 'k[' + e.name + ']')
+        for nm, users in sorted(hits.items()):
+            print(f"[WARNING] '{nm}' is not defined in the EASY script but is the name "
+                  f"of an ENZ column (used by {', '.join(sorted(users)[:4])}). FACSIMILE "
+                  f"reads ENZ columns only via INPUT({nm}) and declares '{nm}' as "
+                  f"PARAM 0 -> set to 0 (define it, e.g. {nm} = INPUT({nm}), to use the ENZ)")
+        self._implicit_enz_zeroed = hits
+        if time_users:
+            print(f"  [TIME] model time (s since the first ENZ line) used by "
+                  f"{', '.join(sorted(time_users)[:6])}")
+
+    def _parse_elog_cached(self, parser, elog_path):
+        """parser.parse(elog_path), with the parser state of large elog files kept in ~/.juice/parse_cache.
+        The key is a hash of the elog text (includes resolved), the parser sources and the Python version, so
+        any change of the inputs or of the parser gives a new entry.  `parse_cache = false` (JSON) switches it off."""
+        import juice.core.parse_cache as _pc        # the body of this method, moved to parse_cache.py (2026-11-15)
+        _on = _as_bool(self.cfg.get('parse_cache', 'true'), True)
+        return _pc.parse_cached(parser, elog_path, enabled=_on, source_file=__file__)   # key: the parser sources next to this file
+
     def _build_mechanism(self):
         # If a JUICE elog exists (generated by FR_GUI preprocessor), use it as the
         # single authoritative flat input — no separate mechanism files needed.
@@ -420,7 +525,8 @@ class ScenarioRunner:
             print(f"  [MECHANISM] Using JUICE elog: {os.path.basename(elog_path)}")
             parser = EasyParser(base_path=os.path.dirname(elog_path))
             self.mechanism = Mechanism()
-            m_part = parser.parse(elog_path)
+            m_part = self._parse_elog_cached(parser, elog_path)
+            self._zero_implicit_enz_names(m_part)
             self.mechanism.species.extend(m_part.species)
             self.mechanism.reactions.extend(m_part.reactions)
             self.mechanism.functions.update(m_part.functions)
@@ -436,6 +542,9 @@ class ScenarioRunner:
                     self._va_src[p_name.upper()] = p_clean
                     self.var_assignments.append(
                         (p_name.upper(), compile(p_clean, '<string>', 'eval')))
+                    # source text, used by the unresolved-name check to tell a missing
+                    # FUNCTION (call) from an undeclared variable
+                    self._param_src[p_name.upper()] = p_clean
                 except Exception as e:
                     print(f"[WARNING] Could not compile parameter {p_name}: {e}")
             # Store INITIAL[] directives from elog — used instead of cfg['initials']
@@ -529,10 +638,15 @@ class ScenarioRunner:
         # When files are parsed in sequence, a later SAPHIR override file may update
         # rates_map entries for reactions already materialised in an earlier .mech file.
         # Re-applying the final rates_map here ensures those overrides take effect.
+        _canon_memo = {}      # id(reaction) -> key: the key is needed three times below (rates, -/->, dedup)
+
         def _rxn_canon(r):
-            reac_str = '+'.join(str(x) for x in r.reactants)
-            prod_str  = '+'.join(str(x) for x in r.products)
-            return EasyParser._canon_rxn_key(reac_str, prod_str)
+            k = _canon_memo.get(id(r))
+            if k is None:
+                reac_str = '+'.join(str(x) for x in r.reactants)
+                prod_str  = '+'.join(str(x) for x in r.products)
+                k = _canon_memo[id(r)] = EasyParser._canon_rxn_key(reac_str, prod_str)
+            return k
 
         for rxn in self.mechanism.reactions:
             # rates_map is keyed exclusively on canonical form — single lookup.
@@ -884,7 +998,9 @@ class ScenarioRunner:
                         'HV', 'RH', 'DIL', 'DILUTE', 'FLOW', 'SZ', 'SZA',
                         'COSX', 'JNO2', 'LNO2', 'MNO2', 'NNO2', 'JSCALE',
                         'JO3', 'JNO3', 'JNO2_1', 'DENSITY'}
-        _known = _va_names | _sp_names | _env_names | _ctx_names | _math_names | _phys_names
+        _pss_names   = {s.upper() for s in getattr(self, '_pss_species', set())}
+        _known = (_va_names | _sp_names | _env_names | _ctx_names | _math_names | _phys_names
+                  | _pss_names)
         _unresolved = []
         _va_src = getattr(self, '_va_src', {})
         _added_species = {}
@@ -948,8 +1064,8 @@ class ScenarioRunner:
                              if col.lower() in {h.lower() for h in
                                                 getattr(self, '_enz_providers_up', set())}]
             # rebuild properly from ctx_data keys that are ENZ providers
-            _prov_names = {k for k in self.ctx_data
-                           if k.upper() in self._enz_providers_up}
+            _prov_names = [k for k in self.ctx_data          # list, not set: the same order in every run
+                           if k.upper() in self._enz_providers_up]
             self._enz_vec = [EnzEntry(name=n) for n in _prov_names]
             # Store the providers dict for update_enz_vec
             self._enz_providers = {n: self.ctx_data[n] for n in _prov_names}
@@ -1007,7 +1123,12 @@ class ScenarioRunner:
             self._eval_s_vec_njit = None
             self._svec_enz_names  = []   # ENZ column names in vals order
             self._svec_s_names    = []   # s_vec output names in vals order
-            if _NUMBA_AVAILABLE and self._eval_s_vec_batch is not None:
+            # Only the continuous mode (perstep_snap = false) calls this function; in the per-row modes its
+            # preparation is skipped (it cost ~55 s of regex work on a GECKO-A mechanism for nothing).
+            _nj_needed = not _as_bool(self.cfg.get('perstep_snap', False))
+            if not _nj_needed:
+                _nj_label = "batch only (compiled form not needed in per-row mode)"
+            elif _NUMBA_AVAILABLE and self._eval_s_vec_batch is not None:
                 import re as _re2
                 _MATH_WORDS = {'EXP','LOG','LOG10','SQRT','SIN','COS','TAN','ABS',
                                'AMAX','AMIN','MAX','MIN','NP','FLOAT','INT'}
@@ -1153,16 +1274,56 @@ class ScenarioRunner:
                     y0[idx] = floor_val
                 print(f"  [INIT] INITIAL[*] = {floor_val:.2e} molec/cm³ applied to all {self.solver.num_species} species")
 
-            for spec, expr in elog_ics.items():
-                if spec == '*': continue
-                spec_up = spec.upper()
-                if spec_up in self.solver.species_to_idx:
+            # EASY evaluates ALL settings before INITIAL[] (an INITIAL may use a
+            # setting defined further down the file, e.g. SOA_seed_initial).
+            # Settings at t0 = s_vec batch on ENZ(t0) + species(y0); a second
+            # pass re-evaluates them with the new initials (species-dependent
+            # settings), as EASY's parset sequence does.
+            def _settings_ctx(y_vec):
+                base = dict(_elog_ctx)
+                if not (getattr(self, '_s_vec', None)
+                        and getattr(self, '_eval_s_vec_batch', None)):
+                    return base
+                sc = SafeDict(base)
+                sc.update({'np': np, 'EXP': np.exp, 'LOG': np.log, 'LOG10': np.log10,
+                           'AMAX': np.maximum, 'AMIN': np.minimum, 'ABS': np.abs,
+                           'SQRT': np.sqrt, 'COS': np.cos, 'SIN': np.sin, 'TAN': np.tan})
+                try:
+                    from juice.core.evaluator import update_enz_vec as _uenz0
+                    _uenz0(self._enz_vec, self._enz_providers, self.t_span[0])
+                    for _e in self._enz_vec:
+                        sc[_e.name.upper()] = _e.value
+                        sc[_e.name.lower()] = _e.value
+                except Exception:
+                    pass
+                sc.update(zip([s.upper() for s in self.solver.species], y_vec.tolist()))
+                try:
+                    self._eval_s_vec_batch(sc)
+                except Exception:
+                    return base
+                for _k, _v in sc.items():
+                    if isinstance(_v, (int, float, np.floating)) and not isinstance(_v, bool):
+                        base.setdefault(_k.upper(), float(_v))
+                return base
+
+            _ic_items = [(s, e) for s, e in elog_ics.items()
+                         if s != '*' and s.upper() in self.solver.species_to_idx]
+            _ic_err = {}
+            for _pass in range(2):
+                _ctx0 = _settings_ctx(y0)
+                _ic_err = {}
+                for spec, expr in _ic_items:
                     try:
-                        val = float(eval(expr.replace('@', '**'), {}, _elog_ctx))
-                        y0[self.solver.species_to_idx[spec_up]] = val
-                        print(f"  [INIT] {spec_up} = {val:.3e} molec/cm³  ({val/M0*1e9:.4g} ppb)")
+                        val = float(eval(expr.replace('@', '**'), {}, _ctx0))
+                        y0[self.solver.species_to_idx[spec.upper()]] = val
                     except Exception as e:
-                        print(f"[WARNING] Could not evaluate INITIAL[{spec}] = {expr}: {e}")
+                        _ic_err[spec] = (expr, e)
+            for spec, expr in _ic_items:
+                if spec in _ic_err:
+                    print(f"[WARNING] Could not evaluate INITIAL[{spec}] = {expr}: {_ic_err[spec][1]}")
+                else:
+                    val = y0[self.solver.species_to_idx[spec.upper()]]
+                    print(f"  [INIT] {spec.upper()} = {val:.3e} molec/cm³  ({val/M0*1e9:.4g} ppb)")
         else:
             initials = self.cfg.get('initials', {})
             floor_ppb = float(initials.get('*', 0.0))
@@ -1222,19 +1383,28 @@ class ScenarioRunner:
             mapped_keys_upper = [k.upper() for k in self.cfg['env_map'].keys()]
             bulk_gases = ['O2', 'N2', 'M', 'RH', 'H2O'] + list(getattr(self, '_pss_species', set()))
             
+            # Each distinct rate text is normalised, compiled and test-evaluated once (large mechanisms repeat
+            # the same text for thousands of reactions); code objects are immutable and can be shared.
+            _rate_memo = {}      # raw text -> (code, clean text, error or None)
+            _zero_code = compile('0.0', '<string>', 'eval')
             for rxn in self.mechanism.reactions:
-                expr = getattr(rxn, 'rate_expression', getattr(rxn, 'rate_str', '0.0')).upper()
-                expr = expr.replace('@', '**') 
-                expr = fortran_d_to_e(expr)
-                expr = re.sub(r'J\((\d+)\)', r'J\1', expr)
-                try:
-                    rxn.safe_expr = compile(expr, '<string>', 'eval')
-                    eval(rxn.safe_expr, globals(), test_ctx)
-                    rxn.rate_str_clean = expr
-                except Exception as e:
-                    failed_rxns.append((expr, str(e)))
-                    rxn.safe_expr = compile('0.0', '<string>', 'eval')
-                    rxn.rate_str_clean = '0.0'
+                _raw = getattr(rxn, 'rate_expression', getattr(rxn, 'rate_str', '0.0'))
+                _hit = _rate_memo.get(_raw)
+                if _hit is None:
+                    expr = _raw.upper()
+                    expr = expr.replace('@', '**')
+                    expr = fortran_d_to_e(expr)
+                    expr = re.sub(r'J\((\d+)\)', r'J\1', expr)
+                    try:
+                        _code = compile(expr, '<string>', 'eval')
+                        eval(_code, globals(), test_ctx)
+                        _hit = (_code, expr, None)
+                    except Exception as e:
+                        _hit = (_zero_code, '0.0', (expr, str(e)))
+                    _rate_memo[_raw] = _hit
+                rxn.safe_expr, rxn.rate_str_clean = _hit[0], _hit[1]
+                if _hit[2] is not None:
+                    failed_rxns.append(_hit[2])
 
                 rxn.reactants_parsed = []
                 rxn.reactants_env = []  
@@ -1282,8 +1452,25 @@ class ScenarioRunner:
         _fn_lines = ["def _compute_rates(_ctx, _k):"]
         for name in sorted(_rate_co_names):
             _fn_lines.append(f"    {name} = _ctx['{name}']")
-        for i, rxn in enumerate(self.mechanism.reactions):
-            _fn_lines.append(f"    _k[{i}] = {rxn.rate_str_clean}")
+        # Distinct rate expressions (2026-11-14): large mechanisms repeat the same expression text for
+        # thousands of reactions (GECKO-A: RO2 + NO, RO2 + HO2 ...).  Each distinct text is evaluated once
+        # into _u and copied to its reactions (_k[:] = _u[_inv]) - the same value, computed the same way.
+        _ku_inv, _ku_buf, _ku_n = None, None, 0
+        _snap_fast_cfg = _as_bool(self.cfg.get('snapshot_fast', 'true'), True)
+        _ku_txt = {}
+        _ku_idx = [_ku_txt.setdefault(rxn.rate_str_clean.strip(), len(_ku_txt)) for rxn in self.mechanism.reactions]
+        if _snap_fast_cfg and len(_ku_txt) <= 0.7 * len(_ku_idx):
+            _ku_n = len(_ku_txt)
+            _ku_inv = np.array(_ku_idx, dtype=np.int64)
+            _ku_buf = np.zeros(_ku_n)
+            _fn_lines.append("    _u = _KU_BUF")
+            for _txt, _j in _ku_txt.items():
+                _fn_lines.append(f"    _u[{_j}] = {_txt}")
+            _fn_lines.append("    _k[:] = _u[_KU_INV]")
+        else:
+            for i, rxn in enumerate(self.mechanism.reactions):
+                _fn_lines.append(f"    _k[{i}] = {rxn.rate_str_clean}")
+        del _ku_txt, _ku_idx
         if len(_fn_lines) == 1:   # no reactions — guard against empty function body
             _fn_lines.append("    pass")
         _fn_src = "\n".join(_fn_lines)
@@ -1296,9 +1483,13 @@ class ScenarioRunner:
             'cos': np.cos,  'sin': np.sin,
             'sqrt': np.sqrt, 'SQRT': np.sqrt,
             'np': np,
+            '_KU_BUF': _ku_buf, '_KU_INV': _ku_inv,
         }
         exec(_fn_src, _batch_ns)
         _compute_rates = _batch_ns['_compute_rates']
+        if _ku_n:
+            print(f">>> [ODE] rate constants: {_ku_n} distinct expressions for {len(self.mechanism.reactions)} reactions "
+                  f"(each evaluated once per call)")
         _k_buf = np.zeros(len(self.mechanism.reactions))
         _v_buf = np.zeros(len(self.mechanism.reactions))  # reaction velocity buffer for Jacobian
         print(f">>> [ODE] Precompiled batch rate function: {len(self.mechanism.reactions)} reactions, "
@@ -1502,6 +1693,48 @@ class ScenarioRunner:
         _s_snap: dict = {}          # settings snapshot, rebuilt before each step
         _snap_active: set = set()   # active_constraints for the current snapshot
 
+        # Settings that reference a PSS species (O1D) need a second pass in the snapshot.
+        _svec_uses_pss = bool(_pss_species_set) and any(
+            re.search(r'(?<![\w])O1D(?![\w])', str(getattr(e, 'definition', '')), re.I)
+            for e in (self._s_vec or []))
+        if _svec_uses_pss:
+            print("  [PSS] settings use O1D -> second settings pass with the PSS value per snapshot")
+
+        def _M_row_end(y_end, t0, t1, M_snap_step):
+            """(M_new, M_old) for the density rescaling y *= M_new/M_old at a row end.
+
+            1. M of the settings equals get_M (T, P from the ENZ or constants): get_M(t1)
+               against the M of the row, as before.
+            2. The EASY file defines T/P/M by an expression get_M does not see: the new M
+               is taken from the settings evaluated at t1, as EASY/FACSIMILE does in parset
+               (before, the ratio mixed both sources and every row changed all
+               concentrations by M_getM/M_settings).
+            3. M is live (depends on the model time or on a species, EASY 7.05): the
+               concentrations already follow M inside the row (density term in the RHS),
+               so only the jump caused by the new ENZ row is applied: M_old = live M at
+               the row end with the inputs of the old row, M_new = M of the new row."""
+            if _M_live:
+                M_old = _M_of(SafeDict(_s_snap), t1, np.maximum(y_end, 0.0))
+                _make_snap(y_end, t1)
+                return float(_s_snap.get('M', M_old)), M_old
+            M_get0 = self.get_M(t0)
+            if M_snap_step > 0 and M_get0 > 0 and abs(M_snap_step / M_get0 - 1.0) < 1e-9:
+                return self.get_M(t1), M_snap_step
+            _make_snap(y_end, t1)
+            return float(_s_snap.get('M', self.get_M(t1))), M_snap_step
+
+        # Fast row snapshot (2026-11-14): needs setting names that are already upper case (then the context of
+        # the settings pass equals the context build_ctx would return).  `snapshot_fast = false` = old code.
+        from juice.core.evaluator import build_ctx_fast as _bctx_fast
+        _species_names_up = [_n.upper() for _n in _species_names]
+        _sp_all_upper = all(_n == _n.upper() for _n in _species_names)
+        _snap_dot = {}                  # setting name -> f(ctx): dot-product form, filled by the live block
+        _snap_y = [None]                # state vector of the snapshot being built (read by the dot forms)
+        _snap_keys = {'small': None, 'pairs': None}    # keys of the settings context that are not plain species;
+        #                                                species whose context value can differ from the state vector
+        _snap_fast = (_snap_fast_cfg and bool(self._s_vec)
+                      and all(_e.name == _e.name.upper() for _e in self._s_vec))
+
         def _make_snap(y_state, t_abs):
             """Build a settings snapshot from the current ODE state y_state and ENZ at t_abs."""
             M_s = self.get_M(t_abs)
@@ -1527,8 +1760,9 @@ class ScenarioRunner:
                           "COS": np.cos, "SIN": np.sin, "TAN": np.tan,
                           "SQRT": np.sqrt, "AMAX": np.maximum, "AMIN": np.minimum})
             # Load current ODE state (c-values feed into settings like KMT06=f(H2O))
-            for i, sp in enumerate(_species_names):
-                ctx_s[sp] = float(y_state[i])
+            _snap_pre_keys = set(ctx_s)          # keys written before the species (ENZ data, T, M, math names)
+            _y_list = [float(_v) for _v in y_state] if not _snap_fast else np.asarray(y_state, dtype=np.float64).tolist()
+            ctx_s.update(zip(_species_names, _y_list))
             # Held species: their value for this row, from the ENZ (ctx_s holds every column) and M
             for _hi, (_hname, _hcode) in self._held.items():
                 try:
@@ -1548,11 +1782,37 @@ class ScenarioRunner:
                 from juice.core.evaluator import update_enz_vec as _uenz, update_s_vec as _us, build_ctx as _bctx
                 from juice.core.mechanism import CEntry
                 _uenz(self._enz_vec, self._enz_providers, t_abs)
-                _c_vec = [CEntry(name=sp, value=float(y_state[i]))
-                          for i, sp in enumerate(_species_names)]
-                _us(self._s_vec, self._function_entries, _c_vec, self._enz_vec,
-                    _ordered=self._s_vec_ordered)
-                ctx_s.update(_bctx(self._s_vec, _c_vec, self._enz_vec))
+                if _snap_fast:
+                    # no object per species: context from the name / value lists (evaluator.build_ctx_fast);
+                    # the context of the settings pass is reused after the final values are written into it
+                    _c_vec = None
+                    _mk_cvec = lambda: [CEntry(name=_n, value=_v) for _n, _v in zip(_species_names, _y_list)]
+                    _snap_y[0] = np.asarray(y_state, dtype=np.float64)
+                    _dot = _snap_dot if (_live_on and _snap_dot) else None
+                    _cx = _us(self._s_vec, self._function_entries, None, self._enz_vec, _ordered=self._s_vec_ordered,
+                              _ctx=_bctx_fast(self._s_vec, _species_names_up, _y_list, self._enz_vec), _c_vec_fn=_mk_cvec,
+                              _fast=_dot)
+                    for _e in self._s_vec:
+                        _cx[_e.name.upper()] = _e.value
+                    if _sp_all_upper:
+                        # the species are in ctx_s already (same names, same values): merge only the other keys
+                        # (math names, ENZ columns, settings - a setting named like a species wins, as before)
+                        if _snap_keys['small'] is None:
+                            _spset = set(_species_names_up)
+                            _snm = {_e.name.upper() for _e in self._s_vec} | {_e.name.upper() for _e in self._enz_vec}
+                            _snap_keys['small'] = [k for k in _cx if (k not in _spset) or (k in _snm) or (k in _snap_pre_keys)]
+                            _nonplain = _snap_pre_keys | _snm | set(_snap_keys['small']) | {'O1D', 'H2O'}
+                            _snap_keys['pairs'] = [(n, i) for i, n in enumerate(_species_names) if n in _nonplain]
+                        for k in _snap_keys['small']:
+                            ctx_s[k] = _cx[k]
+                    else:
+                        ctx_s.update(_cx)
+                else:
+                    _c_vec = [CEntry(name=sp, value=float(y_state[i]))
+                              for i, sp in enumerate(_species_names)]
+                    _us(self._s_vec, self._function_entries, _c_vec, self._enz_vec,
+                        _ordered=self._s_vec_ordered)
+                    ctx_s.update(_bctx(self._s_vec, _c_vec, self._enz_vec))
             else:
                 _snap_env_guard = active_s - self._idl_params_upper if not self.cfg.get('elog_path') else set()
                 for _p in range(3):
@@ -1567,6 +1827,31 @@ class ScenarioRunner:
             # O1D PSS — dynamic from mechanism reactions
             if 'O1D' in _pss_species_set:
                 ctx_s['O1D'] = float(_pss_o1d(ctx_s))
+                if self._s_vec and _svec_uses_pss:
+                    # A setting uses O1D (e.g. DO3 = CONST(2.2e-10*O1D*H2O + ...)):
+                    # second settings pass with the PSS value, like FACSIMILE where
+                    # O1D is an ordinary species when parset runs.
+                    if _snap_fast:
+                        _o1d_x = {'O1D': ctx_s['O1D']}
+                        _mk_cvec = lambda: ([CEntry(name=_n, value=_v) for _n, _v in zip(_species_names, _y_list)]
+                                            + [CEntry(name='O1D', value=_o1d_x['O1D'])])
+                        _cx = _us(self._s_vec, self._function_entries, None, self._enz_vec, _ordered=self._s_vec_ordered,
+                                  _ctx=_bctx_fast(self._s_vec, _species_names_up, _y_list, self._enz_vec, _o1d_x),
+                                  _c_vec_fn=_mk_cvec, _fast=(_snap_dot if (_live_on and _snap_dot) else None))
+                        for _e in self._s_vec:
+                            _cx[_e.name.upper()] = _e.value
+                        if _sp_all_upper and _snap_keys['small'] is not None:
+                            for k in _snap_keys['small']:
+                                ctx_s[k] = _cx[k]
+                            ctx_s['O1D'] = _cx['O1D']
+                        else:
+                            ctx_s.update(_cx)
+                    else:
+                        _c_vec.append(CEntry(name='O1D', value=ctx_s['O1D']))
+                        _us(self._s_vec, self._function_entries, _c_vec, self._enz_vec,
+                            _ordered=self._s_vec_ordered)
+                        ctx_s.update(_bctx(self._s_vec, _c_vec, self._enz_vec))
+                    ctx_s['O1D'] = float(_pss_o1d(ctx_s))
             _s_snap.clear()
             _s_snap.update(ctx_s)
             _snap_active.clear()
@@ -1578,6 +1863,8 @@ class ScenarioRunner:
                     _compute_rates(ctx_s, _k_row_buf)
                     np.nan_to_num(_k_row_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
                     _k_row_valid[0] = True
+                    if _live_k_n:
+                        _lv_row_prepare(ctx_s)
                 except Exception:
                     _k_row_valid[0] = False
             # Optional observer (f0am_export.py): sees every settings snapshot exactly as the
@@ -1726,6 +2013,8 @@ class ScenarioRunner:
                         ctx[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                     except Exception:
                         pass
+                if _live_on:
+                    _live_settings(ctx, t_abs, y)
                 _prof['snap_read'] += time.perf_counter() - _t1
             else:
                 # Hybrid: settings evaluated live. Cache t-dependent env so Newton
@@ -1803,32 +2092,35 @@ class ScenarioRunner:
             # O1D PSS: use measured JO1D (k[O3+HV→O1D]) not theoretical J1.
             if 'O1D' in _pss_species_set:
                 ctx['O1D'] = float(_pss_o1d(ctx))
+                if _live_on and _live_uses_pss and _perstep_snap:
+                    _live_settings(ctx, t_abs, y)       # settings that use the PSS value
+                    ctx['O1D'] = float(_pss_o1d(ctx))
 
             _t1 = time.perf_counter()
             if _k_row_cacheable and _k_row_valid[0]:
                 np.copyto(_k_buf, _k_row_buf)
+                if _live_k_n:
+                    _live_rates(ctx, _k_buf)
             else:
-                try:
-                    _compute_rates(ctx, _k_buf)
-                except Exception:
-                    for i, rxn in enumerate(self.mechanism.reactions):
-                        try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx)
-                        except: _k_buf[i] = 0.0
-                np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                _eval_rates_full(_compute_rates, self.mechanism.reactions, ctx, _k_buf)
             _prof['rates'] += time.perf_counter() - _t1
 
             _t1 = time.perf_counter()
             if _use_numba:
                 for _ni, _nn in enumerate(_env_r_unique_names):
                     _env_vals_buf[_ni] = ctx[_nn]
-                _dydt_stoich_buf[:] = 0.0
-                _stoich_eval_numba(
-                    _k_buf, y, _env_vals_buf,
-                    _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
-                    _env_r_rxn, _env_r_name_idx, _env_r_coeff,
-                    _stoich_rxn, _stoich_sp, _stoich_sc,
-                    _v_buf_stoich, _dydt_stoich_buf,
-                )
+                if _par_rhs is not None:
+                    _par_rhs[0](_k_buf, np.ascontiguousarray(y, dtype=np.float64), _env_vals_buf, *_par_rhs[1],
+                                _v_buf_stoich, _dydt_stoich_buf)
+                else:
+                    _dydt_stoich_buf[:] = 0.0
+                    _stoich_eval_numba(
+                        _k_buf, y, _env_vals_buf,
+                        _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
+                        _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                        _stoich_rxn, _stoich_sp, _stoich_sc,
+                        _v_buf_stoich, _dydt_stoich_buf,
+                    )
                 dydt += _dydt_stoich_buf
             else:
                 for i, rxn in enumerate(self.mechanism.reactions):
@@ -1858,6 +2150,13 @@ class ScenarioRunner:
             # cannot capture this correctly.
 
             _extra_sources(t_abs, ctx, dydt)
+
+            # Density term (EASY 7.05): M changes inside the row (depends on the model
+            # time or on a species) -> every species gets c*(dM/dt)/M.
+            if _M_live and _perstep_snap:
+                _dl = _density_dlnm(ctx, t_abs, y, dydt)
+                _dlnm_last[0] = _dl
+                dydt += y * _dl
 
             if _held_idx.size:
                 dydt[_held_idx] = 0.0
@@ -1899,7 +2198,7 @@ class ScenarioRunner:
             _tp = getattr(self, '_toml_path', None) or \
                   os.path.join(_JUICE_ROOT, "settings.toml")
             with open(_tp, 'rb') as _fh:
-                _solver_toml = _tl.load(_fh).get('solver', {})
+                _solver_toml = dict(_tl.load(_fh).get('solver', {}))
         except Exception:
             _solver_toml = {}
         # Solver profile (fast | precise): a JSON written by scenario_prep carries rtol, perstep_warm and
@@ -1919,6 +2218,33 @@ class ScenarioRunner:
         print(f"  [SOLVER] profile={self.cfg.get('solver_profile', '?')}")
         step_limit = float(_hmax_easy) if _hmax_easy is not None \
                      else float(_solver_toml.get('hmax', 60.0))
+        # Multi-core reaction kernels (parallel_kernels.py, 2026-11-14): `ode_threads` (JSON or TOML [solver],
+        # default 4; 1 = the serial kernels) for mechanisms with at least `ode_threads_min_reactions` reactions
+        # (default 20000; below that the thread start costs more than it saves).  Results are bit-identical.
+        _par_rhs = _par_vel = _par_pl = None
+        if _use_numba:
+            try:
+                _nt = int(float(self.cfg.get('ode_threads', _solver_toml.get('ode_threads', 4))))
+                _nt_min = int(float(self.cfg.get('ode_threads_min_reactions', _solver_toml.get('ode_threads_min_reactions', 20000))))
+                if _nt > 1 and len(self.mechanism.reactions) >= _nt_min:
+                    import juice.core.parallel_kernels as _pk
+                    _nt = _pk.set_threads(_nt)
+                    _lay = _pk.build_layout(self.solver.num_species, len(self.mechanism.reactions),
+                                            _ode_r_rxn, _ode_r_sp, _ode_r_coeff, _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                                            _stoich_rxn, _stoich_sp, _stoich_sc, n_threads=_nt)
+                    if _lay is not None:
+                        _par_rhs = (_pk.rhs_par, _lay['v'] + _lay['s'])
+                        _par_vel = (_pk.vel_par, _lay['v'])
+                        _par_pl = (_pk.pl_par, _lay['v'] + _lay['p'] + _lay['l'])
+                        print(f">>> [ODE] reaction kernels on {_nt} cores (ode_threads; species dealt out by work)")
+                    else:
+                        print(">>> [ODE] reaction kernels on 1 core (reactant arrays not in reaction order)")
+                else:
+                    print(">>> [ODE] reaction kernels on 1 core" + ("" if _nt <= 1 else
+                          f" ({len(self.mechanism.reactions)} reactions < ode_threads_min_reactions {_nt_min})"))
+            except Exception as _e_par:
+                _par_rhs = _par_vel = _par_pl = None
+                print(f">>> [ODE] multi-core kernels not available ({_e_par}); serial kernels used")
         # rtol from JSON (set by GUI) takes precedence over TOML default
         _rtol_json = self.cfg.get('rtol', None)
         if _rtol_json is not None:
@@ -1936,8 +2262,9 @@ class ScenarioRunner:
         #                       ENZ boundaries, not within a segment. ~15s for scene_03.
         #               True  → Sub-step mode: settings frozen + BDF restart at EVERY
         #                       10-s output step (2520 restarts). Not what FACSIMILE does.
-        _perstep_snap = bool(self.cfg.get('perstep_snap',
-                             _solver_toml.get('perstep_snap', False)))
+        _tobool = _as_bool
+        _perstep_snap = _as_bool(self.cfg.get('perstep_snap',
+                                _solver_toml.get('perstep_snap', False)))
         # perstep_warm: True → per-ENZ-row WITHOUT cold restarts.  One scipy BDF
         #               instance is driven row by row (t_bound moved to the next
         #               ENZ boundary); the step-size/order history is kept across
@@ -1946,11 +2273,7 @@ class ScenarioRunner:
         #               refreshed once at every boundary.  Avoids the ~13 LU
         #               refactorisations per row caused by ramping h from
         #               first_step on every cold restart.
-        def _tobool(v, default=False):
-            if isinstance(v, bool): return v
-            if v is None: return default
-            return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
-        _perstep_warm = _tobool(self.cfg.get('perstep_warm',
+        _perstep_warm = _as_bool(self.cfg.get('perstep_warm',
                                 _solver_toml.get('perstep_warm', False)))
         _mode_lbl = ('per-ENZ-row (warm)' if (_perstep_snap and _perstep_warm)
                      else 'per-ENZ-row' if _perstep_snap else 'continuous')
@@ -1984,12 +2307,341 @@ class ScenarioRunner:
         # _make_snap and copied into _k_buf on every RHS / Jacobian call.
         _k_row_dep = (set(_rate_co_names) & _species_set_upper) |                      (set(_rate_co_names) & {s.upper() for s in getattr(self, '_pss_species', set())})
         _k_row_cacheable = (bool(_perstep_snap) and not _k_row_dep
-                            and _tobool(self.cfg.get('k_row_cache', True), True))
+                            and _as_bool(self.cfg.get('k_row_cache', True), True))
         _k_row_buf   = np.zeros(len(self.mechanism.reactions))
         _k_row_valid = [False]
+        # (the '[SOLVER] per-row k cache' line is printed after the live block, where the split is decided)
+
+        # ── Live settings (FR 2026-11-14; same rules as EASY 7.01 - 7.05) ─────────────────
+        # A setting that depends on an integrated species, on a PSS species or on the
+        # model time -- directly or through other settings -- changes inside an ENZ row.
+        # Such settings, and the rate constants that use them, are evaluated in every
+        # RHS / Jacobian call (dependency order); everything else stays frozen in the row
+        # snapshot and in the per-row k cache.  If M is such a setting, the species get
+        # the density term c*(dM/dt)/M.  live_settings = false ([solver] in the TOML or
+        # the scenario JSON) restores the frozen-per-row behaviour (EASY <= 7.00).
+        _live_on = (bool(_perstep_snap) and bool(self._s_vec)
+                    and _as_bool(self.cfg.get('live_settings', _solver_toml.get('live_settings', True)), True))
+        _live_entries, _live_names = [], set()
+        _live_plan, _live_fb_names, _lk_names, _ctx_sp_pairs = [], set(), set(), []
+        _live_k_idx = []
+        _lv_form, _lv_groups, _lv_fb_idx = {}, [], []
+        _lv_fn = {'fac': None, 'fb': None}
+        _lv_state = {'valid': False, 'checked': False}
+        _lv_fac_buf = np.zeros(len(self.mechanism.reactions))
+
+        import juice.core.live_forms as _lf            # the two pure expression analysers, moved to live_forms.py (2026-11-15)
+        _monomial_form = _lf.monomial_form
+
+        def _lv_build():
+            """(re)build the exponent groups and the two generated functions from _lv_form"""
+            _lv_groups.clear()
+            _lv_fb_idx.clear()
+            _byexp = {}
+            for i in _live_k_idx:
+                if i in _lv_form:
+                    _byexp.setdefault(_lv_form[i], []).append(i)
+                else:
+                    _lv_fb_idx.append(i)
+            for _ex, _ii in _byexp.items():
+                _lv_groups.append({'idx': np.array(_ii, dtype=np.int64), 'exp': list(_ex), 'fac': None})
+
+            def gen(fname, idx):
+                if not idx:
+                    return None
+                nms = set()
+                for i in idx:
+                    nms.update(self.mechanism.reactions[i].safe_expr.co_names)
+                ln = [f"def {fname}(_ctx, _k):"] + [f"    {n} = _ctx['{n}']" for n in sorted(nms)]
+                ln += [f"    _k[{i}] = {self.mechanism.reactions[i].rate_str_clean}" for i in idx]
+                exec(chr(10).join(ln), _batch_ns)
+                return _batch_ns[fname]
+            _lv_fn['fac'] = gen('_live_fac_raw', [i for i in _live_k_idx if i in _lv_form])
+            _lv_fn['fb'] = gen('_live_fb_raw', list(_lv_fb_idx))
+            _lv_state['valid'] = False
+
+        def _lv_apply(ctx, kbuf):
+            with np.errstate(all='ignore'):
+                for g in _lv_groups:
+                    v = g['fac']
+                    for nme, e in g['exp']:
+                        L = float(ctx[nme])
+                        v = v * L if e == 1.0 else (v / L if e == -1.0 else v * L ** e)
+                    kbuf[g['idx']] = v
+
+        def _lv_row_prepare(ctx_s):
+            """once per row (from _make_snap): the fixed factors = the expressions with the live settings = 1.
+            At the first row the array form is checked against the line-by-line form at test values;
+            a rate constant that disagrees goes back to the line-by-line path."""
+            if not _lv_groups:
+                return
+            _lvn = sorted({n for g in _lv_groups for n, _ in g['exp']})
+            try:
+                if not _lv_state['checked']:
+                    c2 = SafeDict(ctx_s)
+                    for j, n in enumerate(_lvn):
+                        c2[n] = 1.7 + 0.9 * j
+                    ref = np.zeros(len(_lv_fac_buf)); tst = np.zeros(len(_lv_fac_buf))
+                    _live_rates_raw(c2, ref)
+                    c1 = SafeDict(ctx_s)
+                    for n in _lvn:
+                        c1[n] = 1.0
+                    _lv_fn['fac'](c1, _lv_fac_buf)
+                    for g in _lv_groups:
+                        g['fac'] = _lv_fac_buf[g['idx']].copy()
+                    _lv_apply(c2, tst)
+                    ii = np.array([i for i in _live_k_idx if i in _lv_form], dtype=np.int64)
+                    with np.errstate(all='ignore'):
+                        bad = ~(np.abs(tst[ii] - ref[ii]) <= 1e-10 * np.abs(ref[ii]))
+                    if np.any(bad):
+                        for i in ii[bad].tolist():
+                            _lv_form.pop(i, None)
+                        _lv_build()
+                        print(f"  [LIVE] {int(bad.sum())} rate constants failed the array-form check -> line by line")
+                    print(f"  [LIVE] rate constants in array form: {sum(len(g['idx']) for g in _lv_groups)} in "
+                          f"{len(_lv_groups)} groups ("
+                          + "; ".join(" ".join(f"{n}^{e:g}" for n, e in g['exp']) + f": {len(g['idx'])}" for g in _lv_groups[:6])
+                          + f"), line by line: {len(_lv_fb_idx)}")
+                    _lv_state['checked'] = True          # only now: the comparison has run to its end
+                    if not _lv_groups:
+                        return
+                # live names = 1 for the factor evaluation: set in place and restored (no copy of the context)
+                _keep = [(n, ctx_s[n]) for n in _lvn]
+                try:
+                    for n in _lvn:
+                        ctx_s[n] = 1.0
+                    _lv_fn['fac'](ctx_s, _lv_fac_buf)
+                finally:
+                    for n, v in _keep:
+                        ctx_s[n] = v
+                for g in _lv_groups:
+                    g['fac'] = _lv_fac_buf[g['idx']].copy()
+                _lv_state['valid'] = True
+            except Exception as _e_lv:
+                _lv_state['valid'] = False          # this row: line by line; the check is repeated at the next row
+                if not _lv_state.get('warned'):
+                    _lv_state['warned'] = True
+                    print(f"  [LIVE] array form of the rate constants not usable in this row ({_e_lv}); line by line")
+
+        _affine_form = _lf.affine_form
+        _live_k_n = 0
+        _live_uses_pss = False
+        _M_live = False
+        _dlnm_last = [0.0]
+        _t_first = float(getattr(self, '_t_first', self.t_span[0]))
+        _LIVE_G = {"__builtins__": {}}
+        if _live_on:
+            _s_names_up = {e.name.upper() for e in self._s_vec_ordered}
+            _pss_up = {p.upper() for p in _pss_species_set}
+            _trig = {sp for sp in _species_set_upper if sp not in _s_names_up} | _pss_up | {_MODEL_TIME}
+            for _e in self._s_vec_ordered:
+                _c = getattr(_e, '_code', None)
+                if _c is None:
+                    continue
+                _deps = {n.upper() for n in _c.co_names}
+                if (_deps & _trig) or (_deps & _live_names):
+                    _live_entries.append((_e.name.upper(), _c))
+                    _live_names.add(_e.name.upper())
+                    if _deps & _pss_up:
+                        _live_uses_pss = True
+            _M_live = 'M' in _live_names
+            # Rate constants that change inside a row: they use a live setting or -- when rate
+            # expressions reference species / PSS species directly (_k_row_dep) -- the state
+            # itself.  Only these are re-evaluated in every call; all others come from the
+            # per-row cache (before 2026-11-14 a single species-dependent expression switched
+            # the cache off and all rate constants were recomputed in every call).
+            _k_split = (bool(_k_row_dep) and bool(_perstep_snap)
+                        and _as_bool(self.cfg.get('k_row_cache', True), True))
+            _kdep_names = _live_names | ((_species_set_upper | _pss_up) if _k_split else set())
+            _live_k_idx = [i for i, rxn in enumerate(self.mechanism.reactions)
+                           if {n.upper() for n in rxn.safe_expr.co_names} & _kdep_names]
+            if _k_split:
+                _k_row_cacheable = True
+            if _live_k_idx and _k_row_cacheable:
+                for i in _live_k_idx:
+                    _lk_names.update(self.mechanism.reactions[i].safe_expr.co_names)
+                _lk_lines = ["def _live_rates_raw(_ctx, _k):"]
+                for name in sorted(_lk_names):
+                    _lk_lines.append(f"    {name} = _ctx['{name}']")
+                for i in _live_k_idx:
+                    _lk_lines.append(f"    _k[{i}] = {self.mechanism.reactions[i].rate_str_clean}")
+                exec(chr(10).join(_lk_lines), _batch_ns)
+                _live_rates_raw = _batch_ns['_live_rates_raw']
+                _live_k_arr = np.array(_live_k_idx, dtype=np.int64)
+                _live_k_n = len(_live_k_idx)
+                # -- vectorised form: a rate constant that is (factor fixed in the row) x product of
+                #    live settings ^ exponent (KCOND*C/COA, K*RO2 ...) is computed as an array
+                #    statement per exponent set.  The factor = the expression with the live settings
+                #    set to 1, evaluated once per row.  Everything else stays line by line.
+                if _as_bool(self.cfg.get('live_k_vector', _solver_toml.get('live_k_vector', True)), True):
+                    _other_dep = _kdep_names - _live_names
+                    for i in _live_k_idx:
+                        _mf = _monomial_form(self.mechanism.reactions[i].rate_str_clean, _live_names, _other_dep)
+                        if _mf:
+                            _lv_form[i] = tuple(sorted(_mf.items()))
+                    _lv_build()
+            # -- settings needed inside the integration: those a rate constant, an env reactant,
+            #    a continuous source or the density uses (directly or through other settings).
+            #    The remaining live settings are diagnostics, evaluated at the outputs only.
+            _need = ({n.upper() for n in _rate_co_names} | {str(n).upper() for n in _env_r_unique_names}
+                     | {'M', 'T', 'TEMP', 'P', 'PRESS', 'H2O', 'RH', 'DIL'})
+            for _s in cont_sources:
+                _need.update(n.upper() for n in _s['code'].co_names)
+            _live_rhs = []
+            for _nm, _c in reversed(_live_entries):
+                if _nm in _need:
+                    _live_rhs.append((_nm, _c))
+                    _need.update(n.upper() for n in _c.co_names)
+            _live_rhs.reverse()
+            # -- settings that are linear in the species with numerical coefficients (RO2, COA,
+            #    sums) are evaluated as a dot product with the state vector; any other form
+            #    keeps the eval path.  A species that is also a setting / ENZ column / PSS
+            #    species is never taken from the state vector (the context value wins).
+            _sp_up_idx = {sp.upper(): i for i, sp in enumerate(_species_names)}
+            _fast_ok = all(sp == sp.upper() for sp in _species_names)
+            _no_fast = _s_names_up | {str(k).upper() for k in self.ctx_data} | _pss_up | {'H2O', 'RH'}
+            _src_of = {id(e._code): getattr(e, '_expr_str', None) for e in self._s_vec_ordered
+                       if getattr(e, '_code', None) is not None}
+            def _dot_form(_c):
+                _af = _affine_form(_src_of.get(id(_c))) if _fast_ok else None
+                if _af is None:
+                    return None
+                _ix, _cf, _oth = [], [], []
+                for _n, _v in _af[0].items():
+                    if _n in _sp_up_idx:
+                        if _n in _no_fast or _n in _live_names:
+                            return None
+                        _ix.append(_sp_up_idx[_n]); _cf.append(_v)
+                    else:
+                        _oth.append((_n, _v))
+                return (np.array(_ix, dtype=np.int64), np.array(_cf, dtype=float), float(_af[1]), _oth)
+
+            _plan_fast = {}
+            for _nm, _c in _live_rhs:
+                _fast = _dot_form(_c)
+                if _fast is None:
+                    _live_fb_names.update(n.upper() for n in _c.co_names)
+                _live_plan.append((_nm, _c, _fast))
+                _plan_fast[_nm] = _fast
+            # The row snapshot evaluates every live setting of this form with the same dot product
+            # (_live_settings: c0 + coef @ y[idx] + sum(other * ctx value)); settings with at least 8 species
+            # terms only - short expressions are as fast as written.
+            _entry_name = {id(e._code): e.name for e in self._s_vec_ordered if getattr(e, '_code', None) is not None}
+            for _nm, _c in _live_entries:
+                _f = _plan_fast[_nm] if _nm in _plan_fast else _dot_form(_c)
+                if _f is not None and len(_f[0]) >= 8 and id(_c) in _entry_name and _nm != 'M':
+                    def _mk(_f=_f):
+                        _ix, _cf, _c0, _oth = _f
+                        def _g(ctx):
+                            v = _c0 + float(_cf @ _snap_y[0][_ix])
+                            for _n, _w in _oth:
+                                v += _w * float(ctx[_n])
+                            return v
+                        return _g
+                    _snap_dot[_entry_name[id(_c)]] = _mk()
+            if not _live_entries and not _live_k_n:
+                _live_on = False
+            elif _live_entries:
+                _nf = sum(1 for p in _live_plan if p[2] is not None)
+                print(f"  [LIVE] {len(_live_entries)} settings depend on species / model time "
+                      f"({', '.join(n for n, _ in _live_entries[:8])}{' ...' if len(_live_entries) > 8 else ''}); "
+                      f"{len(_live_plan)} of them are needed inside the integration "
+                      f"({', '.join(p[0] for p in _live_plan[:6])}{' ...' if len(_live_plan) > 6 else ''}; "
+                      f"{_nf} as dot product), the others at the outputs only; "
+                      f"{len(_live_k_idx)} of {len(self.mechanism.reactions)} rate constants are evaluated in every call"
+                      + ("; M is live -> density term c*(dM/dt)/M in the RHS" if _M_live else ""))
+            # -- species the context must hold with their current value (TWOSTEP writes only these)
+            _cn = set(_live_fb_names) | {n.upper() for n in _lk_names} | {'H2O'}
+            for _s in cont_sources:
+                _cn.update(n.upper() for n in _s['code'].co_names)
+            for _rx in list(getattr(self, '_o1d_prod_rxns', [])) + list(getattr(self, '_o1d_loss_rxns', [])):
+                _cn.update(n.upper() for n in _rx.safe_expr.co_names)
+                for _r in getattr(_rx, 'reactants_parsed', []):
+                    _cn.add(str(self._sp_by_idx.get(_r['idx'], '')).upper())
+            _ctx_sp_pairs = [(_species_names[i], i) for n, i in _sp_up_idx.items() if n in _cn]
+        self._live_on = _live_on
+        # -- without live settings: the species TWOSTEP's per-call refresh must write into the context (those that
+        #    O1D, a species-dependent rate constant, a source or an env reactant reads); writing all species
+        #    cost more than the reaction kernel on large mechanisms (92 341 species: 18 ms per call)
+        _ctx_sp_frozen = None
+        if not _live_on:
+            _cnf = {'H2O'} | {str(n).upper() for n in _k_row_dep} | {str(n).upper() for n in _env_r_unique_names}
+            for _s in cont_sources:
+                _cnf.update(n.upper() for n in _s['code'].co_names)
+            for _rx in list(getattr(self, '_o1d_prod_rxns', [])) + list(getattr(self, '_o1d_loss_rxns', [])):
+                _cnf.update(n.upper() for n in _rx.safe_expr.co_names)
+                for _r in getattr(_rx, 'reactants_parsed', []):
+                    _cnf.add(str(self._sp_by_idx.get(_r['idx'], '')).upper())
+                for _r in getattr(_rx, 'reactants_env', []):
+                    _cnf.add(str(_r.get('name', '')).upper())
+            _ctx_sp_frozen = [(sp, i) for i, sp in enumerate(_species_names) if sp.upper() in _cnf]
+        self._svec_uses_pss = _svec_uses_pss
         if _perstep_snap:
-            print(f"  [SOLVER] per-row k cache: {'ON' if _k_row_cacheable else 'OFF'}"
-                  + (f" (rate expressions depend on {sorted(_k_row_dep)[:6]})" if _k_row_dep else ""))
+            if _k_row_cacheable and _live_k_n:
+                print(f"  [SOLVER] per-row k cache: ON for {len(self.mechanism.reactions) - _live_k_n} rate constants; "
+                      f"{_live_k_n} evaluated in every call"
+                      + (f" (rate expressions depend on {sorted(_k_row_dep)[:6]})" if _k_row_dep else ""))
+            elif _k_row_cacheable:
+                print("  [SOLVER] per-row k cache: ON")
+            else:
+                print("  [SOLVER] per-row k cache: OFF"
+                      + (f" (rate expressions depend on {sorted(_k_row_dep)[:6]}; live settings off)" if _k_row_dep
+                         else " (k_row_cache = false)"))
+
+        def _live_settings(ctx, t_abs, y=None):
+            """re-evaluate the live settings needed in the integration (dependency order) in ctx.
+            With the state vector y the linear ones are dot products; the others (and all of them
+            when y is None) are evaluated from ctx, which must then hold the current species."""
+            ctx[_MODEL_TIME] = t_abs - _t_first
+            for _nm, _code, _fast in _live_plan:
+                try:
+                    if _fast is not None and y is not None:
+                        _v = _fast[2]
+                        if len(_fast[0]):
+                            _v += float(_fast[1] @ y[_fast[0]])
+                        for _on, _oc in _fast[3]:
+                            _v += _oc * float(ctx[_on])
+                        ctx[_nm] = _v
+                    else:
+                        ctx[_nm] = float(eval(_code, _LIVE_G, ctx))
+                except Exception:
+                    pass
+
+        def _live_rates(ctx, kbuf):
+            """overwrite the rate constants that use live settings (the rest comes from the row cache)"""
+            try:
+                if _lv_groups and _lv_state['valid']:
+                    _lv_apply(ctx, kbuf)
+                    if _lv_fb_idx:
+                        _lv_fn['fb'](ctx, kbuf)
+                else:
+                    _live_rates_raw(ctx, kbuf)
+            except Exception:
+                for i in _live_k_idx:
+                    try: kbuf[i] = eval(self.mechanism.reactions[i].safe_expr, globals(), ctx)
+                    except Exception: kbuf[i] = 0.0
+            _v = kbuf[_live_k_arr]
+            if not np.all(np.isfinite(_v)):
+                kbuf[_live_k_arr] = np.nan_to_num(_v, nan=0.0, posinf=0.0, neginf=0.0)
+
+        def _M_of(ctx_base, t_abs, yv):
+            """M of the live settings for the state yv at t_abs (frozen inputs from ctx_base)"""
+            ctx_base.update(zip(_species_names, yv.tolist()))
+            _live_settings(ctx_base, t_abs, yv)
+            return float(ctx_base['M'])
+
+        def _density_dlnm(ctx, t_abs, y, f0):
+            """(dM/dt)/M along the solution.  dM/dt contains c' and c' contains the density term
+            itself: with A = dM/dt for f0 (RHS without the density term, incl. the explicit time
+            dependence) and B = change of M for a uniform scaling of all species,
+            dlnM/dt = A/(M - B)  (as in EASY 7.05; finite differences tau = 1e-3 s, eps = 1e-6)."""
+            M0 = float(ctx['M'])
+            if not M0 > 0.0:
+                return 0.0
+            A = (_M_of(SafeDict(ctx), t_abs + 1e-3, y + 1e-3 * f0) - M0) / 1e-3
+            B = (_M_of(SafeDict(ctx), t_abs, y * (1.0 + 1e-6)) - M0) / 1e-6
+            den = M0 - B
+            return A / den if den != 0.0 else 0.0
 
         _atol = float(_solver_toml.get('atol', 1e4))
         # Newton iteration control for the per-row modes.  scipy's defaults
@@ -2072,6 +2724,8 @@ class ScenarioRunner:
                     continue
                 try: ctx_j[k] = float(self.ctx_data[k.lower() if k.lower() in self.ctx_data else k](t_abs))
                 except: pass
+            if _live_on and _perstep_snap:
+                _live_settings(ctx_j, t_abs, y)     # same live settings as system_ode
             if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
                 h2o_vmr = ctx_j['H2O']
                 M_now = float(_s_snap.get('M', self.get_M(t_abs)))
@@ -2098,27 +2752,26 @@ class ScenarioRunner:
             # 10. Rate constants: per-row cache when available, else batch function
             if _k_row_cacheable and _k_row_valid[0]:
                 np.copyto(_k_buf, _k_row_buf)
+                if _live_k_n:
+                    _live_rates(ctx_j, _k_buf)
             else:
-                try:
-                    _compute_rates(ctx_j, _k_buf)
-                except Exception:
-                    for i, rxn in enumerate(self.mechanism.reactions):
-                        try: _k_buf[i] = eval(rxn.safe_expr, globals(), ctx_j)
-                        except: _k_buf[i] = 0.0
-                np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                _eval_rates_full(_compute_rates, self.mechanism.reactions, ctx_j, _k_buf)
             # 11. Reaction velocities: v[i] = k[i] * prod(y_ode^c) * prod(env^c)
             if _use_numba:
                 # Same kernel as the RHS; dydt scratch output is discarded.
                 for _ni, _nn in enumerate(_env_r_unique_names):
                     _env_vals_buf[_ni] = ctx_j[_nn]
-                _dydt_stoich_buf[:] = 0.0
-                _stoich_eval_numba(
-                    _k_buf, y, _env_vals_buf,
-                    _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
-                    _env_r_rxn, _env_r_name_idx, _env_r_coeff,
-                    _stoich_rxn, _stoich_sp, _stoich_sc,
-                    _v_buf, _dydt_stoich_buf,
-                )
+                if _par_vel is not None:
+                    _par_vel[0](_k_buf, np.ascontiguousarray(y, dtype=np.float64), _env_vals_buf, *_par_vel[1], _v_buf)
+                else:
+                    _dydt_stoich_buf[:] = 0.0
+                    _stoich_eval_numba(
+                        _k_buf, y, _env_vals_buf,
+                        _ode_r_rxn, _ode_r_sp, _ode_r_coeff,
+                        _env_r_rxn, _env_r_name_idx, _env_r_coeff,
+                        _stoich_rxn, _stoich_sp, _stoich_sc,
+                        _v_buf, _dydt_stoich_buf,
+                    )
             else:
                 np.copyto(_v_buf, _k_buf)
                 for i, rxn in enumerate(self.mechanism.reactions):
@@ -2138,6 +2791,8 @@ class ScenarioRunner:
             if self.cfg.get('analytical_dilution', True) and not self._has_explicit_dil:
                 _flow    = self.ctx_data['FLOW'](t_abs) if 'FLOW' in self.ctx_data else 0.0
                 diag_rate -= (_flow + 0.6) / (self.cfg['chamber_vol'] * 3600)
+            if _M_live and _perstep_snap:
+                diag_rate += _dlnm_last[0]          # density term c*(dM/dt)/M (value of the last RHS call)
             if diag_rate != 0.0:
                 dil_idx  = _dil_idx_all
                 dil_data = np.full(len(dil_idx), diag_rate)
@@ -2293,16 +2948,63 @@ class ScenarioRunner:
                     L += _ts_kd[0]
                 if _held_idx.size:
                     L[_held_idx] = 0.0
+                if _M_live:
+                    # density term c*(dM/dt)/M: a loss when M falls, a production when it rises
+                    _dl = _density_dlnm(_ts_ctx, t_abs, y, _ts_pl.P - L * y)
+                    if _dl < 0.0:
+                        L -= _dl
+                    else:
+                        _ts_pl.P += y * _dl
+
+            def _ts_pre(t_abs, y):
+                # current state -> live settings -> the rate constants / env reactants that depend on them.
+                # Only the species some expression reads are written into the row context.
+                # (_ctx_sp_pairs: with live settings; _ctx_sp_frozen: without them - the species that O1D,
+                #  species-dependent k, the sources and env reactants read, so that these see the current state
+                #  as they do in system_ode.)
+                _kc = _k_row_cacheable and _k_row_valid[0]
+                if _kc and _live_on:
+                    for _n, _i in _ctx_sp_pairs:
+                        _ts_ctx[_n] = float(y[_i])
+                elif _ctx_sp_frozen is not None:
+                    for _n, _i in _ctx_sp_frozen:
+                        _ts_ctx[_n] = float(y[_i])
+                else:
+                    _ts_ctx.update(zip(_species_names, y.tolist()))
+                if _live_on:
+                    _live_settings(_ts_ctx, t_abs, y)
+                if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
+                    _ts_ctx['H2O'] = float(_ts_ctx['H2O']) * float(_s_snap.get('M', self.get_M(t_abs)))
+                if 'O1D' in _pss_species_set:
+                    _ts_ctx['O1D'] = float(_pss_o1d(_ts_ctx))
+                    if _live_on and _live_uses_pss:          # a live setting uses O1D: second pass, as in system_ode
+                        _live_settings(_ts_ctx, t_abs, y)
+                        _ts_ctx['O1D'] = float(_pss_o1d(_ts_ctx))
+                if _kc:
+                    if _live_k_n:
+                        _live_rates(_ts_ctx, _k_buf)
+                else:
+                    try:
+                        _compute_rates(_ts_ctx, _k_buf)
+                    except Exception:
+                        for i, rxn in enumerate(self.mechanism.reactions):
+                            try: _k_buf[i] = eval(rxn.safe_expr, globals(), _ts_ctx)
+                            except Exception: _k_buf[i] = 0.0
+                    np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                for _ni, _nn in enumerate(_env_r_unique_names):
+                    _env_vals_buf[_ni] = float(_ts_ctx.get(_nn, 0.0))
 
             _ts_pl = _PLSystem(self.solver.num_species, _k_buf, _env_vals_buf,
                                (_ode_r_rxn, _ode_r_sp, _ode_r_coeff,
                                 _env_r_rxn, _env_r_name_idx, _env_r_coeff,
                                 _stoich_rxn, _stoich_sp, _stoich_sc),
-                               extra_P=_ts_extra_P, extra_L=_ts_extra_L)
+                               extra_P=_ts_extra_P, extra_L=_ts_extra_L,
+                               pre=_ts_pre if (_live_on or _k_row_dep or 'O1D' in _pss_species_set
+                                               or bool(cont_sources)) else None, par=_par_pl)
             n_out_steps = len(self.t_span) - 1
             _ts_stats = dict(nfcn=0, naccpt=0, nrejec=0, nstart=0)
             _ts_warned = False
-            _ts_check = _tobool(self.cfg.get('twostep_check', os.environ.get('JUICE_TS_CHECK', '')))
+            _ts_check = _as_bool(self.cfg.get('twostep_check', os.environ.get('JUICE_TS_CHECK', '')))
             _ts_check_rows = {int(r) for r in str(os.environ.get('JUICE_TS_ROWS', '')).split(',') if r.strip().isdigit()}
             if _ts_check:
                 print("  [SOLVER] TWOSTEP: P/L vs system_ode consistency check ON (every row start)"
@@ -2313,7 +3015,13 @@ class ScenarioRunner:
                 _make_snap(y_seg, t0)
                 _ts_ctx.clear()
                 _ts_ctx.update(_s_snap)
-                _ts_ctx.update(zip(_species_names, y_seg.tolist()))
+                if _snap_fast and _snap_keys['pairs'] is not None:
+                    # the snapshot was built from y_seg: a plain species has its state value already; only the
+                    # species that a setting / ENZ column / constraint may have overwritten are reset to the state
+                    for _n, _i in _snap_keys['pairs']:
+                        _ts_ctx[_n] = float(y_seg[_i])
+                else:
+                    _ts_ctx.update(zip(_species_names, y_seg.tolist()))
                 if 'H2O' in _snap_active and 'H2O' in _species_set_upper:
                     _ts_ctx['H2O'] = float(_ts_ctx['H2O']) * float(_s_snap.get('M', self.get_M(t0)))
                 if 'O1D' in _pss_species_set:
@@ -2321,16 +3029,11 @@ class ScenarioRunner:
                 if _k_row_cacheable and _k_row_valid[0]:
                     np.copyto(_k_buf, _k_row_buf)
                 else:
-                    if not _ts_warned:
-                        print("\n  [SOLVER] TWOSTEP: rate expressions reference species -> k frozen at the row-start state")
+                    if not _ts_warned and not _live_on:
+                        print("\n  [SOLVER] TWOSTEP: " + ("all rate constants are re-evaluated in every P/L call (live settings off)"
+                                                         if _ts_pl.pre is not None else "k fixed at the row-start state"))
                         _ts_warned = True
-                    try:
-                        _compute_rates(_ts_ctx, _k_buf)
-                    except Exception:
-                        for i, rxn in enumerate(self.mechanism.reactions):
-                            try: _k_buf[i] = eval(rxn.safe_expr, globals(), _ts_ctx)
-                            except: _k_buf[i] = 0.0
-                    np.nan_to_num(_k_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+                    _eval_rates_full(_compute_rates, self.mechanism.reactions, _ts_ctx, _k_buf)
                 for _ni, _nn in enumerate(_env_r_unique_names):
                     _env_vals_buf[_ni] = float(_ts_ctx.get(_nn, 0.0))
                 _ts_kd[0] = _dilution_rate(t0, _ts_ctx)
@@ -2374,7 +3077,7 @@ class ScenarioRunner:
                 seg_t_list.append(np.array([t1]))
                 seg_y_list.append(y_seg[:, np.newaxis])
                 M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
-                M_end = self.get_M(t1)
+                M_end, M_snap_step = _M_row_end(y_seg, t0, t1, M_snap_step)
                 if M_snap_step > 0 and abs(M_end / M_snap_step - 1.0) > 1e-10:
                     y_seg = y_seg * (M_end / M_snap_step)
                 if step_idx % 200 == 0 or step_idx == n_out_steps - 1:
@@ -2478,7 +3181,7 @@ class ScenarioRunner:
                 seg_t_list.append(np.array([t1]))
                 seg_y_list.append(y_seg[:, np.newaxis])
                 M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
-                M_end = self.get_M(t1)
+                M_end, M_snap_step = _M_row_end(y_seg, t0, t1, M_snap_step)
                 if M_snap_step > 0 and abs(M_end / M_snap_step - 1.0) > 1e-10:
                     _xf = M_end / M_snap_step
                     y_seg = y_seg * _xf
@@ -2523,7 +3226,7 @@ class ScenarioRunner:
                 seg_t_list.append(np.array([t1]))
                 seg_y_list.append(y_seg[:, np.newaxis])
                 M_snap_step = float(_s_snap.get('M', self.get_M(t0)))
-                M_end = self.get_M(t1)
+                M_end, M_snap_step = _M_row_end(y_seg, t0, t1, M_snap_step)
                 if M_snap_step > 0 and abs(M_end / M_snap_step - 1.0) > 1e-10:
                     y_seg = y_seg * (M_end / M_snap_step)
                 if step_idx % 200 == 0 or step_idx == n_out_steps - 1:
@@ -2670,7 +3373,7 @@ class ScenarioRunner:
         # Evaluated at _s_eval_t (shifted) so reported values match the step-start snap.
         for k, v_func in self.ctx_data.items():
             k_up = k.upper()
-            if k_up == 'TIME':
+            if k_up in ('TIME', _MODEL_TIME):
                 continue
             if callable(v_func):
                 try:
@@ -2720,28 +3423,34 @@ class ScenarioRunner:
             # from the raw ENZ column, never from _eval_ctx (which can be
             # overwritten by a CONST() definition for the same name).
             _enz_export_map = {_e.name.upper(): _e.value for _e in self._enz_vec}
+            if getattr(self, '_live_on', False):
+                # live settings: the model time of the output row itself (the ENZ inputs
+                # keep the convention above: those of the interval that ends at the row)
+                _eval_ctx[_MODEL_TIME] = self.sol.t - float(getattr(self, '_t_first', self.sol.t[0]))
 
-            for _entry in self._s_vec_ordered:
-                _input_col = getattr(_entry, '_input_col', None)
-                _code      = getattr(_entry, '_code', None)
-                try:
-                    if _input_col is not None:
-                        # Always resolve INPUT from ENZ vec (consistent with ODE)
-                        _raw = _enz_export_map.get(_input_col)
-                        _result = (_raw if isinstance(_raw, np.ndarray) and _raw.shape == (len(df),)
-                                   else np.zeros(len(df)))
-                    elif _code is not None:
-                        _result = eval(_code, {"__builtins__": {}}, _eval_ctx)
-                    else:
-                        continue
-                    if isinstance(_result, (int, float)):
-                        _result = np.full(len(df), float(_result))
-                    if isinstance(_result, np.ndarray) and _result.shape == (len(df),):
-                        _eval_ctx[_entry.name] = _result
-                        if not getattr(_entry, 'is_synthetic', False):
-                            df[_entry.name] = _result   # synthetic entries: ODE only, not in cs
-                except Exception:
-                    pass
+            def _eval_svec_export():
+                for _entry in self._s_vec_ordered:
+                    _input_col = getattr(_entry, '_input_col', None)
+                    _code      = getattr(_entry, '_code', None)
+                    try:
+                        if _input_col is not None:
+                            # Always resolve INPUT from ENZ vec (consistent with ODE)
+                            _raw = _enz_export_map.get(_input_col)
+                            _result = (_raw if isinstance(_raw, np.ndarray) and _raw.shape == (len(df),)
+                                       else np.zeros(len(df)))
+                        elif _code is not None:
+                            _result = eval(_code, {"__builtins__": {}}, _eval_ctx)
+                        else:
+                            continue
+                        if isinstance(_result, (int, float)):
+                            _result = np.full(len(df), float(_result))
+                        if isinstance(_result, np.ndarray) and _result.shape == (len(df),):
+                            _eval_ctx[_entry.name] = _result
+                            if not getattr(_entry, 'is_synthetic', False):
+                                df[_entry.name] = _result   # synthetic entries: ODE only, not in cs
+                    except Exception:
+                        pass
+            _eval_svec_export()
         else:
             # Non-ELOG mode: old 3-pass var_assignments loop.
             for _pass in range(3):
@@ -2785,6 +3494,16 @@ class ScenarioRunner:
                 _o1d_pss = np.full(len(df), float(_o1d_pss))
             df['O1D'] = _o1d_pss
             _eval_ctx['O1D'] = _o1d_pss
+            if self._s_vec and any('O1D' in getattr(_e, '_code', None).co_names
+                                   for _e in self._s_vec_ordered if getattr(_e, '_code', None) is not None):
+                # settings that use the PSS value (e.g. DO3 = CONST(2.2e-10*O1D*H2O + ...)): second
+                # settings pass, as in the row snapshot (FR 2026-11-14; before: NaN in the .cs)
+                _eval_svec_export()
+                _o1d_pss = self._pss_o1d(_eval_ctx)
+                if not (isinstance(_o1d_pss, np.ndarray) and _o1d_pss.shape == (len(df),)):
+                    _o1d_pss = np.full(len(df), float(_o1d_pss))
+                df['O1D'] = _o1d_pss
+                _eval_ctx['O1D'] = _o1d_pss
             print("  [O1D] PSS concentration written to output (dynamic from mechanism reactions)")
 
         # --- O atom export: disabled (was post-process PSS overwrite) ---------------
@@ -2913,11 +3632,10 @@ class ScenarioRunner:
         _eff_env_arrs = {name: np.zeros(n_t) for name in _all_env_reactant_names}
 
         # H2O array — no automatic unit conversion; EASY script defines units.
-        if 'H2O' in df.columns:
-            h2o_arr = df['H2O'].values.astype(np.float64)
-        else:
-            raise KeyError(
-                "H2O is not defined in the EASY script and not available from ENZ.")
+        # A scenario without H2O (neither species nor setting) is allowed (FR 2026-11-14).
+        h2o_arr = df['H2O'].values.astype(np.float64) if 'H2O' in df.columns else None
+        if getattr(self, '_live_on', False) and _MODEL_TIME in env_arrs:
+            env_arrs[_MODEL_TIME] = self.sol.t - float(getattr(self, '_t_first', self.sol.t[0]))
 
         # ── RATE-CONSTANT LOOP (per-timestep, scalar ctx) ─────────────────────────
         # This cannot be fully vectorized because the compiled rate expressions
@@ -2937,7 +3655,8 @@ class ScenarioRunner:
             for k_up, arr in env_arrs.items():
                 ctx[k_up] = float(arr[t_i])
             # H2O already converted
-            ctx['H2O'] = float(h2o_arr[t_i])
+            if h2o_arr is not None:
+                ctx['H2O'] = float(h2o_arr[t_i])
             ctx.update({"T": T_now, "TEMP": T_now, "M": M_now,
                         "np": np, "exp": np.exp, "EXP": np.exp,
                         "LOG10": np.log10, "log10": np.log10,
@@ -2979,16 +3698,17 @@ class ScenarioRunner:
             # O1D PSS — dynamic from mechanism reactions
             if 'O1D' in getattr(self, '_pss_species', set()):
                 ctx['O1D'] = float(self._pss_o1d(ctx))
+                if self._s_vec and getattr(self, '_svec_uses_pss', False):
+                    # a setting uses O1D: second settings pass with the PSS value (as _make_snap and the .cs export)
+                    _c_kv.append(CEntry(name='O1D', value=ctx['O1D']))
+                    _us(self._s_vec, self._function_entries, _c_kv, _uenz_kv,
+                        _ordered=self._s_vec_ordered)
+                    ctx.update(_bctx(self._s_vec, _c_kv, _uenz_kv))
+                    ctx['O1D'] = float(self._pss_o1d(ctx))
                 if _o1d_pss_arr is not None:
                     _o1d_pss_arr[t_i] = ctx['O1D']
 
-            try:
-                _compute_rates(ctx, _k_loc)
-            except Exception:
-                for i, rxn in enumerate(self.mechanism.reactions):
-                    try: _k_loc[i] = eval(rxn.safe_expr, globals(), ctx)
-                    except: _k_loc[i] = 0.0
-            np.nan_to_num(_k_loc, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            _eval_rates_full(_compute_rates, self.mechanism.reactions, ctx, _k_loc)
             k_arr[t_i] = _k_loc
 
             # Collect effective env-reactant values from the fully-evaluated ctx.
@@ -3166,7 +3886,29 @@ if __name__ == "__main__":
                               "warm continuation (~2x faster); precise = rtol 1e-6 with a cold restart per ENZ row "
                               "(tightest agreement with FACSIMILE); twostep = Verwer's TWOSTEP without a Jacobian "
                               "(large mechanisms). See settings.toml [solver]")
+    # Run options on the command line: they override the scenario JSON and settings.toml for this run
+    _parser.add_argument("--rtol", default=None, help="relative tolerance")
+    _parser.add_argument("--threads", default=None, help="ode_threads: cores for the reaction kernels")
+    _parser.add_argument("--hmax", default=None, help="largest step [s]")
+    _parser.add_argument("--first-step", dest="first_step", default=None, help="first step after a restart [s]")
+    _parser.add_argument("--kvpd", dest="kvpd", action="store_true", default=None, help="write .kv/.pd")
+    _parser.add_argument("--no-kvpd", dest="kvpd", action="store_false", help="do not write .kv/.pd")
+    _parser.add_argument("--set", dest="sets", action="append", default=[], metavar="KEY=VALUE",
+                         help="any [solver] option, e.g. --set live_settings=false (repeatable)")
     _args = _parser.parse_args()
+
+    # Run options on the command line (--set key=value): written into the scenario's options for this run only
+    _cli = {}
+    for _p in _args.sets:
+        if "=" not in _p:
+            _parser.error(f"--set expects key=value, got '{_p}'")
+        _k, _v = _p.split("=", 1)
+        _cli[_k.strip()] = _v.strip()
+    for _a, _k in (("rtol", "rtol"), ("threads", "ode_threads"), ("hmax", "hmax"), ("first_step", "first_step")):
+        if getattr(_args, _a) is not None:
+            _cli[_k] = getattr(_args, _a)
+    if _args.kvpd is not None:
+        _cli["export_kv_pd"] = _args.kvpd
 
     runner = ScenarioRunner(_args.config)
     if _args.solver:
@@ -3184,4 +3926,5 @@ if __name__ == "__main__":
         runner.cfg.update(_prof)
     runner._show_viewer = _args.gui
     runner._toml_path   = _args.toml
+    runner.cfg.update(_cli)
     runner.run()

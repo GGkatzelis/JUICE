@@ -101,9 +101,35 @@ MCM converter, lamp photolysis), `juice/importers/` (F0AM, GECKO-A, FACSIMILE, S
 
 `settings.toml` holds the **validated solver settings**; changing them changes results:
 BDF with analytic Jacobian, Numba-compiled stoichiometry kernel, `atol_floor` 100 molec/cm³,
-`piecewise` interpolation, settings frozen per output step (`perstep_snap`), Newton tolerance 1e-6 /
-10 iterations. The step window never sets numerics; `scenario_prep.solver_from_toml` copies them into
+`piecewise` interpolation, a settings snapshot per output step (`perstep_snap`) with live settings on
+top (below), Newton tolerance 1e-6 / 10 iterations. The step window never sets numerics; `scenario_prep.solver_from_toml` copies them into
 every scenario JSON.
+
+**Live settings** (`live_settings`, default on since 15 November 2026; F. Rohrer, MCM_SAPHIR_Tool branch
+`easy-start-gui`, commits 2d19712 and 7f6c89e). A setting that depends on a species or on the model time,
+directly or through other settings (the RO2 sum, COA, PERO*), and every rate constant that uses one, is
+re-evaluated in every right-hand-side call (BDF) and every production/loss call (TWOSTEP). Everything else
+stays in the per-row snapshot and the per-row rate-constant cache. This is what EASY 7.01 to 7.05 do. EASY up
+to 7.00, and JUICE before this change, held these values for one ENZ row, so results depended on the row
+length. `live_settings = "false"` restores that, bit-identical to the runner of 12 November in the BDF
+profiles (all nine scenes, checked 15 November). Effect on scenes 04–09 at 60-s rows: O3, NOx, OH within
+0.15 %, HO2 within 0.75 %, the RO2 sum within 1.2 %, single peroxy radicals up to 7 % for a few rows. The
+FACSIMILE references of `validation/IDL Input` come from EASY 5.96b / 6.00 decks, so `run_benchmark` runs
+with `live_settings = false` (like with like) unless `--live` is given; references for the live mode need
+decks from EASY 7.05. If M itself is live, every species gets the density term c·(dM/dt)/M. The model time
+is available to EASY expressions as `time` (seconds since the first ENZ line). A new way for a rate constant
+to depend on the state must enter `_kdep_names` in `_solve`, or it is silently held per row. The analytic
+Jacobian has no terms for the derivative of a live rate constant; Newton iterates on the true right-hand side.
+
+**Speed for large mechanisms** (same commits): reaction kernels on `ode_threads` cores (default 4) from
+`ode_threads_min_reactions` reactions on (20 000; `parallel_kernels.py`, bit-identical to one core); rate
+constants of the form (row factor) × (live setting)^n updated as one array statement (`live_forms.py`); each
+distinct rate text evaluated once per row; the parse of an elog of 5 MB or more kept in
+`~/.juice/parse_cache` (`parse_cache.py`; the key includes the elog text and the parser sources).
+
+**Not taken over from that branch:** its run-option table (`solver_options.py`: TOML above the scenario JSON,
+rtol default by solver). JUICE keeps its profiles, where the JSON written at prepare time carries the
+validated pair. `scenario_runner` accepts `--set key=value`, `--rtol`, `--threads`, `--hmax` for one run.
 
 **Solver profiles.** `rtol` and the restart mode come as a validated pair, the profile
 (`[solver] profile`, numbers in `[solver.profiles.*]`, reference values and descriptions in
@@ -175,8 +201,11 @@ any key.
   5.96b, scene_03–09 are 6.00; JUICE's own experiments (no `.fac`) use the 6.00 rule.
 - **`#include` names may contain spaces**; the name runs to the end of the line or a `;` comment.
 - **TWOSTEP restarts at every ENZ row** with an implicit Euler step and integrates the row relative to
-  its start; rate constants and held species are frozen at the row start exactly as in the BDF per-row
-  mode (`JUICE_TS_CHECK=1` verifies at every row that P − L·y equals the BDF right-hand side,
+  its start; held species are frozen at the row start, and rate constants follow the same rules as in
+  the BDF per-row mode (live settings; with `live_settings = false`, O1D, rate constants that name a
+  species and the sources are still refreshed per call since 15 November, which moved the frozen TWOSTEP
+  results closer to FACSIMILE: scene_09 3227 of 3228 species within 0.1 %).
+  Debug switches (`JUICE_TS_CHECK=1` verifies at every row that P − L·y equals the BDF right-hand side,
   `JUICE_TS_ROWS=a,b` integrates those rows with BDF at rtol 1e-8 for comparison). The error test is
   Verwer's max-norm at rtol 1e-3 with the same `atol_floor`; the fixed-point iteration runs at least
   `twostep_numit` sweeps and up to `twostep_numit_max` until the change is below `twostep_conv` ×

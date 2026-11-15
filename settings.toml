@@ -40,6 +40,15 @@ perstep_snap = "true"
 # Newton control for sub-step modes (scipy default tol ~1e-3 / 4 iters under-converges trace species)
 newton_tol = "1e-6"
 newton_maxiter = "10"
+# live_settings (F. Rohrer, 15 Nov 2026; the behaviour of EASY 7.01 - 7.05): settings and rate constants that depend
+#   on species or on the model time (the RO2 sum and every k that uses it, COA, PERO*) are re-evaluated in every call
+#   of the right-hand side. "false" holds them for one ENZ row, as EASY 5.96b / 6.00 and JUICE before 15 Nov did;
+#   run_benchmark uses that, because its FACSIMILE references were made that way.
+live_settings = "true"
+# ode_threads: cores for the reaction kernels of mechanisms with at least ode_threads_min_reactions reactions
+#   (results are bit-identical to one core; smaller mechanisms gain nothing)
+ode_threads = "4"
+ode_threads_min_reactions = "20000"
 
 # The numbers behind each profile. rtol 1e-6 needs the cold restart: with warm continuation it
 # diverges in trace species (HCOCO3 x1400 in scene_06), so never combine the two.
