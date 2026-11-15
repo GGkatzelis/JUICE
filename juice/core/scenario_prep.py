@@ -14,6 +14,7 @@ from __future__ import annotations
 from juice._root import ROOT as _JUICE_ROOT
 
 import json
+import re
 import os
 import tomllib
 from typing import Dict, Iterable
@@ -208,6 +209,13 @@ def prepare_scenario(res: dict, include_dir: str, export_kv_pd: bool = True, tom
     print(f"[scenario_prep] EASY version {easy_version or '(none: JUICE rules = 6.00)'}: "
           f"FUNCTION scope '{scope}'")
     raw, canon = generate_both(res["easy"], search_dirs=dirs, output_dir=out, function_scope=scope)
+    # A missing include is an error in EASY/FACSIMILE: without it the run would integrate a fragment of the mechanism
+    # and report success (a study run on 7 Nov 2026 ran 3 reactions and gave NaN metrics).
+    missing = sorted({m.group(1).strip() for m in re.finditer(r"^;#include\s+(.+?)\s*!\s*NOT FOUND\s*$",
+                                                                 open(raw, encoding="latin-1").read(), re.M)})
+    if missing:
+        raise FileNotFoundError(f"include file(s) not found: {', '.join(missing)} (searched {', '.join(d for d in dirs if d)}); "
+                                f"the experiment's chemistry folder may be missing or incomplete - write the experiment again")
     from juice.core.elog_generator import case_variants
     for name, spellings in case_variants(raw).items():
         print(f"[scenario_prep] WARNING: {' and '.join(spellings)} — FACSIMILE keeps these as different species, "

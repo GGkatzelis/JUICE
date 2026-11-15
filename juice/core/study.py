@@ -563,7 +563,15 @@ def _chemistry_for(st: Study, exp_path: str, spec_base: ExperimentSpec) -> Tuple
     out = os.path.join(st.folder, "chemistry", spec_base.name)
     marker = os.path.join(out, "chemistry.json")
     if os.path.isfile(marker):
-        return os.path.join(out, "chemistry"), json.load(open(marker, encoding="utf-8"))
+        fields = json.load(open(marker, encoding="utf-8"))
+        chem = os.path.join(out, "chemistry")
+        stem = fields.get("mechanism_stem", "")
+        complete = (os.path.isfile(os.path.join(chem, stem + ".mech")) if stem else
+                    os.path.isdir(chem) and any(f.lower().endswith((".incl", ".mech")) for f in os.listdir(chem)))
+        if complete:
+            return chem, fields
+        print(f"[study] the chemistry of {spec_base.name} in {out} is incomplete (a failed rebuild?): building it again")
+        os.remove(marker)
     spec = copy.deepcopy(spec_base)
     for m in chem_mods:
         apply_modification(spec, m)
