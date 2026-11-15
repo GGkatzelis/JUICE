@@ -57,6 +57,8 @@ HONO_RATE  = "CONST( 4.7e13 * (1. + (RH/11.6)@2) * exp(-3950./T) * jno2 )"
 HCHO_RATE  = "CONST(2.8e6)"
 Y_RATE     = "CONST(2.4e-13)"
 DILUTE_DEF = "CONST((FLOW+0.010*60)/(276.*3600.))"
+DILUTE_OFF = "CONST(0.)"                    # dilution switched off: DILUTE still defined, for the tracer and partitioning lines
+DILUTE_OFF_COMMENT = "no dilution in this experiment"
 
 # measured photolysis inputs: (variable, default ENZ column, reaction whose k is overridden)
 J_INPUTS = [
@@ -290,6 +292,8 @@ def spec_from_form(f: EasyForm) -> SceneSpec:
         if f.dil_flow_const:
             s.dil_flow = Setting("FLOW", f"CONST({f.dil_flow_const})", "Experimetal flow in m^3/h")
         s.dil = Setting("DIL", f.dil_value, "Switch for dilution")
+    else:                                   # tracer dilution (XNOy, NA) and the partitioning's SOA + DIL lines name DILUTE
+        s.dilute = Setting("DILUTE", DILUTE_OFF, DILUTE_OFF_COMMENT)
 
     if f.jmeasured_include:
         s.jmeasured_include = Stmt(f"#include {f.jmeasured_include}",
@@ -427,8 +431,9 @@ def form_from_spec(s: SceneSpec) -> EasyForm:
             f.y_ppb, f.y_const_expr = m.group(1), ""
         else:
             f.y_const_expr = inner
-    f.dilution = s.dilute is not None or bool(s.dil_includes) or s.dil is not None
-    if s.dilute:
+    _off = s.dilute is not None and s.dilute.comment.strip() == DILUTE_OFF_COMMENT and not s.dil_includes and s.dil is None
+    f.dilution = not _off and (s.dilute is not None or bool(s.dil_includes) or s.dil is not None)
+    if s.dilute and not _off:
         f.dilute_expr = s.dilute.rhs
     _dstems = {re.sub(r"\.dil\.(mech|rate)$", "", st.code.split(None, 1)[1], flags=re.I) for st in s.dil_includes}
     if len(_dstems) == 1:
