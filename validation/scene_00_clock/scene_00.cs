@@ -1,0 +1,17 @@
+ * Facsimile-Output / EASY Ver. 7.05  2026-11-14
+ header created at Sat Nov 14 14:15:12 2026
+  
+ cs: concentrations and settings
+ COLUMN 1=time
+ COLUMN 2=X<0>
+ COLUMN 3=XX<0>
+ COLUMN 4=zeit<0>
+ COLUMN 5=D_in<0>
+ COLUMN 6=T<0>
+ COLUMN 7=P<0>
+ COLUMN 8=M<0>
+ COLUMN 9=H2O<0>
+ COLUMN 10=TICK<0>
+ NUMBER OF COLUMNS=10
+ &&&&&&&&
+ 777340800.0      3.046674E-01  2.276657E-01  7.639601E+04  1.000000E+00  3.684213E+02  1.013000E+03  1.993887E+19  0.000000E+00  1.000000E+00

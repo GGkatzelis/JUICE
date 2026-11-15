@@ -61,6 +61,7 @@ TOML = os.path.join(HERE, "settings.toml")
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,61}$")
 _RESERVED = {"ONE", "RO2"}
 COMPARE_FLOOR = 2.5e4          # molec/cm3, the floor used by the FACSIMILE benchmark
+LIVE = True                    # JUICE's own run: live settings (its default) or, with --frozen, settings held per ENZ row
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,7 +263,7 @@ def record(json_path: str, stem: str) -> Recording:
     if ro2_rxn:
         for i in ro2_rxn:
             rxn_reac[i] = rxn_reac[i] + ["RO2"]
-        notes.append(f"{len(ro2_rxn)} reactions use RO2 ({len(ro2)} members); JUICE freezes RO2 per step, "
+        notes.append(f"{len(ro2_rxn)} reactions use RO2 ({len(ro2)} members); JUICE {'sums RO2 at every RHS call (live settings)' if LIVE else 'freezes RO2 per step (--frozen)'}, "
                      "F0AM sums it at every RHS call")
 
     # rescaling at step boundaries (M changes) + analytical dilution (only without explicit DIL reactions)
@@ -668,9 +669,9 @@ def prepare(scene: str, work: str, profile: str = "precise") -> str:
         with contextlib.redirect_stdout(io.StringIO()):
             res = es.write_experiment(spec, os.path.join(work, scene))
             return sp.prepare_scenario(res, sp.load_paths(TOML)["include_dir"], toml_path=TOML,
-                                       solver=sp.solver_from_toml(TOML, profile))
+                                       solver={**sp.solver_from_toml(TOML, profile), "live_settings": LIVE})
     from juice.tools import run_benchmark as rb
-    rb.PROFILE = profile
+    rb.PROFILE, rb.LIVE = profile, LIVE
     with contextlib.redirect_stdout(io.StringIO()):
         return rb.prepare(scene, work, kv_pd=False)
 
@@ -685,7 +686,12 @@ def main(argv=None) -> int:
                     help="only compare existing F0AM results (<stem>_F0AM.csv) with JUICE and FACSIMILE")
     ap.add_argument("--scripts-only", action="store_true",
                     help="only rewrite run_<stem>.m and <stem>_JUICE_J.m of an existing export (no JUICE run)")
+    ap.add_argument("--frozen", action="store_true",
+                    help="run JUICE with the settings held per ENZ row (as FACSIMILE from EASY 5.96b / 6.00 and JUICE "
+                         "before 15 Nov 2026) instead of live settings")
     a = ap.parse_args(argv)
+    global LIVE
+    LIVE = not a.frozen
     if a.compare:
         for scene in a.scenes:
             print(compare_outputs(os.path.join(a.out, scene), scene))

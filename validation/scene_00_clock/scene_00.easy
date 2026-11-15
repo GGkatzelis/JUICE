@@ -1,0 +1,67 @@
+; scene_00 - clock scenario: tick --> zeit, X + X --> XX, T = function(zeit); one ENZ interval of 24 h
+; ---------------------------------------------------------------------------------------
+; zeit is a species (d(zeit)/dt = 1), T = 280 + 100*zeit/86400, P = 1013, M = P/(T*1.379E-19),
+; X + X --> XX with k = 1.E-5 (independent of T), X(0) = 1, XX(0) = 0, zeit(0) = 0.
+; Reference = closed form below; confirmed by the hands-on calculation (hands_on_model.py,
+; explicit loop in double precision, dt -> 0).
+;
+; EXPECTED VALUES AT THE END (t = 86400 s)
+;
+; (A) CORRECT: the density change is applied to all species (zeit, X, XX keep their mixing
+;     ratio when M changes), i.e. chemistry step, to mixing ratio, new T and M, back to
+;     concentration.  Closed form (T0 = 280, a = 100/86400, L = T0/a = 241920, u = T/T0):
+;       d(zeit)/dt = 1 + zeit*(dM/dt)/M   ->   2*zeit - L*ln(1 + zeit/L) = t
+;       u    = -W(-2*exp(-(2 + t/L)))/2          (W = Lambert W function, branch -1)
+;       zeit = L*(u - 1),   T = T0*u,   M = P/(T*1.379E-19)
+;       x    = 1/(1 + 2*k*L*(2*ln(u) + 1/u - 1))   (X as mixing ratio relative to the start)
+;       X    = x/u,         XX = (1 - x)/(2*u)
+;     At t = 86400 s: u = 1.31579008
+;       zeit = 76395.94
+;       T    = 368.4212 K
+;       M    = 1.993887E19
+;       X    = 0.3046754
+;       XX   = 0.2276622
+;
+; (B) WITHOUT the density scaling (T and M follow zeit, but the concentrations are not
+;     rescaled) = what a model gives that leaves this step out:
+;       zeit = 86400
+;       T    = 380.0000 K
+;       M    = 1.933132E19
+;       X    = 0.3665689      (= 1/(1 + 2*k*t))
+;       XX   = 0.3167155      (= (1 - X)/2)
+;
+; Reached (one output step of 86400 s, default tolerances unless stated):
+;   EASY 7.05 (2026-11-13, ERROR 1.E-7): zeit 76395.94, T 368.4212, X 0.3046754, XX 0.2276621 = (A)
+;   EASY 7.05 (default ERROR)          : zeit 76396.01,             X 0.3046674, XX 0.2276657 = (A)
+;   EASY 7.04                          : zeit 63663.16, T 353.6842, X 0.270104,  XX 0.233369
+;                                        (density change applied once, at the output)
+;   JUICE 33.503 (before 2026-11-14)   : zeit 86400,    T 380.0000, X 0.366671,  XX 0.316665  = (B)
+;   JUICE, live settings (2026-11-14), BDF rtol 1e-4: zeit 76393.85, T 368.4188, X 0.3047496, XX 0.2276356 = (A)
+;   JUICE, live settings, TWOSTEP                  : zeit 76395.93, T 368.4212, X 0.3046754, XX 0.2276621 = (A)
+;   JUICE with live_settings = false               : as before = (B)
+;
+GEOMETRY[NBOX]=1
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[%1/(%2*1.379E-19)]
+
+TICK = CONST(1.)
+TICK --> zeit
+k[TICK --> zeit] = CONST(1.)
+
+X + X --> XX
+k[X + X --> XX] = CONST(1.E-5)
+
+INITIAL[X]    = CONST(1.)
+INITIAL[XX]   = CONST(0.)
+INITIAL[zeit] = CONST(0.)
+
+D_in = INPUT(DUMMY)
+T = CONST(zeit/86400.*100.+280.)
+P = CONST(1013.)
+M = DENSITY(P,T)
+H2O = CONST(0.)
+
+FILES[ENZ]    = scene_00.enz
+FACS[HMAX]    = 300
+FACS[OUTSTEP] = 86400
+PLOT[SKIP] = CS,KV,PD
