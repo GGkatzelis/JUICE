@@ -292,6 +292,9 @@ def read_k(path: str) -> Dict[str, str]:
     return out
 
 
+RESERVED_J = {"JNO2", "JO1D", "JHONO", "JH2O2", "JHCHO_R", "JHCHO_M", "JCH3CHO_R"}    # JUICE's measured J inputs, upper case
+
+
 def read_j(path: str) -> Dict[str, str]:
     """J name -> EASY expression in J<n> / JN<k> of <mech>_J.m."""
     out: Dict[str, str] = {}
@@ -311,6 +314,16 @@ def read(folder: str, profile: dict) -> Mechanism:
         if name in jm:
             notes.append(f"{name} = {expr} instead of F0AM's {jm[name]}: {why}")
             jm[name] = expr
+    # A J name that equals one of JUICE's measured-input names when case is ignored (RACM2: JNO2, JO1D, JH2O2, JHONO)
+    # would BE that input in JUICE, which keeps one variable per name whatever its case: the reactions then read the
+    # measured column directly, past the J<n> definition and its light switch.  Such names get the suffix _MECH.
+    for name in [n for n in jm if n.upper() in RESERVED_J]:
+        new = f"{name}_MECH"
+        jm = OrderedDict((new if k == name else k, v) for k, v in jm.items())
+        pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])")
+        for r in reactions:
+            r.rate = pat.sub(new, r.rate)
+        notes.append(f"{name} renamed {new}: JUICE reads the measured input '{name.lower()}' under the same name")
     # merge duplicates (same reactants and products): summed rate
     merged: "OrderedDict[str, Reaction]" = OrderedDict()
     for r in reactions:
@@ -460,7 +473,8 @@ def write_base(base_id: str, folder: str, out_root: str = BASE_DIR, profile: Opt
     import shutil                                      # the F0AM originals, for provenance (GPL-3.0, as JUICE)
     os.makedirs(os.path.join(out, "f0am_source"), exist_ok=True)
     for fn in prof["files"]:
-        shutil.copy2(os.path.join(folder, fn), os.path.join(out, "f0am_source", fn))
+        if os.path.abspath(os.path.join(folder, fn)) != os.path.abspath(os.path.join(out, "f0am_source", fn)):
+            shutil.copy2(os.path.join(folder, fn), os.path.join(out, "f0am_source", fn))   # (not onto itself: a re-conversion)
     checks = {fn: hashlib.sha256(open(os.path.join(out, fn), "rb").read()).hexdigest() for fn in files.values()}
     manifest = {
         "kind": "lumped", "id": base_id, "name": prof["name"],

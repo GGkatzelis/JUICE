@@ -1281,6 +1281,12 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         seen_cols.add(col)
     if not spec.injections:
         msgs.append(("warning", "No injections defined."))
+    if not dark_run or c.j_source == "measured":       # photolysis reactions the light switch does not close
+        try:
+            from juice.chemistry import photolysis_check
+            msgs += [("warning", m) for m in photolysis_check.messages(spec)]
+        except Exception:
+            pass
     for note in spec.import_notes:
         if note.lstrip("⚠✖ ").startswith("no roof open/close"):   # older wiki imports: covered by the dark-experiment note above
             continue

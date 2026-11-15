@@ -2,7 +2,7 @@
  "kind": "lumped",
  "id": "RACM2",
  "name": "RACM2",
- "version": "F0AM Chem/RACM2, converted 2026-11-11",
+ "version": "F0AM Chem/RACM2, converted 2026-11-15",
  "files": {
   "physics": "racm2.physics.incl",
   "aliases": "racm2.aliases.incl",
@@ -13,10 +13,10 @@
   "species_tsv": "racm2.species.tsv"
  },
  "checksums": {
-  "racm2.physics.incl": "82e6779c531f967efa9d551f0d2f4a072c8f96248418965019aff78782e817a2",
-  "racm2.aliases.incl": "ee304b210aa0f1a0c9d8bed67571e75d9498a5679aaec9c53b8113d418e93c0d",
-  "racm2.chem.incl": "4d70ed724474f11116cc7c40564e531546b4d2ff0daa5a937f0428c8336464be",
-  "racm2.phot.incl": "45a8bcb5cb651b5758786715a40f26c59403ba9c170949d0ee69417fe29b3ae0",
+  "racm2.physics.incl": "5bf00cc79fd305d5a80ddf92ea095ad097863fb2948b2616ca0fe6c224ce0e0e",
+  "racm2.aliases.incl": "1cfebac594e28d19cc34fbe9f5d5a0800dbeac05124fe78f722bb8a7a5520757",
+  "racm2.chem.incl": "a971e7c7132a1e86f3650a1e1356eb573a6a9e7653404f8da63e19026bd70032",
+  "racm2.phot.incl": "3e6e71ccd8f35fbc293ac95c0c41fa9a564a2803946de788a4a619bef9b20d23",
   "RACM2.dil.mech": "b9fb624a3033d46f0c8f6c5184b374d44301d2281ddb495daf1ed9700d4d5e1f",
   "RACM2.dil.rate": "09a529c1dc1eb965223ef4f6eef17e3cb35d4ff645fae89d8f552fb211c365be",
   "racm2.species.tsv": "fe1c7a36e936961bcc2a7eedccbf53d645c765a9c78040d2afc92b7d4279b6d4"
@@ -30,13 +30,13 @@
    "RACM2_K.m": "6b2a19be13049eafc5c7515587d6c15ca98730fe1953b895224507e06254c39c",
    "RACM2_J.m": "5074e56adce9cfee341452993fbc3721bbde3f1ce07c603ef9f3e31d0110a9a0"
   },
-  "converted": "2026-11-11",
+  "converted": "2026-11-15",
   "converter": "f0am_import.py",
   "license": "GPL-3.0 (F0AM)"
  },
  "citation": "Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header)",
  "status": "reviewed",
- "notes": "JHO2NO2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHO2NO2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM",
+ "notes": "JHO2NO2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHO2NO2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM; JO1D renamed JO1D_MECH: JUICE reads the measured input 'jo1d' under the same name; JH2O2 renamed JH2O2_MECH: JUICE reads the measured input 'jh2o2' under the same name; JNO2 renamed JNO2_MECH: JUICE reads the measured input 'jno2' under the same name; JHONO renamed JHONO_MECH: JUICE reads the measured input 'jhono' under the same name",
  "lumped": {
   "family": "lumped",
   "n_species": 116,

@@ -1,17 +1,21 @@
-; racm2.phot.incl -- RACM2 from the F0AM chemistry library (Chem/RACM2), converted by f0am_import.py 2026-11-11
+; racm2.phot.incl -- RACM2 from the F0AM chemistry library (Chem/RACM2), converted by f0am_import.py 2026-11-15
 ; Goliff et al. (2013), Atmos. Environ.; F0AM version (S. R., M. M., G. M. Wolfe, 2015-2016, with the corrections listed in its header).  F0AM: Wolfe et al. (2016), github.com/AirChem/F0AM, GPL-3.0.
 ; source files sha256[:16]: RACM2_AllRxns.m 74850b8b2da16cc1, RACM2_K.m 6b2a19be13049eaf, RACM2_J.m 5074e56adce9cfee
 ; the mechanism's photolysis frequencies as F0AM maps them: J<n> = MCM v3.3.1 J number n, JN<k> = F0AM's channel
 ;   Jn<k> (no MCM number). The experiment defines J<n> and JN<k> for its light (sun, measured J, lamps).
 ; JHO2NO2 = JN21+JN22 instead of F0AM's J3: F0AM maps JHO2NO2 to J3 (H2O2); HO2NO2 photolysis is Jn21 + Jn22, as for CRACMM
-JO1D = CONST(J1)
+; JO1D renamed JO1D_MECH: JUICE reads the measured input 'jo1d' under the same name
+; JH2O2 renamed JH2O2_MECH: JUICE reads the measured input 'jh2o2' under the same name
+; JNO2 renamed JNO2_MECH: JUICE reads the measured input 'jno2' under the same name
+; JHONO renamed JHONO_MECH: JUICE reads the measured input 'jhono' under the same name
+JO1D_MECH = CONST(J1)
 JO3P = CONST(J2)
-JH2O2 = CONST(J3)
+JH2O2_MECH = CONST(J3)
 JHO2NO2 = CONST(JN21+JN22)
-JNO2 = CONST(J4)
+JNO2_MECH = CONST(J4)
 JNO3_NO = CONST(J5)
 JNO3_NO2 = CONST(J6)
-JHONO = CONST(J7)
+JHONO_MECH = CONST(J7)
 JHNO3 = CONST(J8)
 JHCHO_HO2 = CONST(J11)
 JHCHO_H2 = CONST(J12)
