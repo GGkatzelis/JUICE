@@ -54,6 +54,28 @@ def test_shipped_chemistry_is_clean():
             assert not pc.ungated(_exp(addons=["NOAA_BB"], j=j)), j
 
 
+def test_every_installed_addon_and_lumped_base_is_clean():
+    """Plan C for chemistry that arrives later: whatever is in chemistry/mechanisms is checked, not a fixed list."""
+    assert pc.check_installed() == []
+
+
+def test_a_new_addon_without_the_switch_is_caught(tmp_path, monkeypatch):
+    import json
+    import shutil
+    addons = tmp_path / "addons"
+    shutil.copytree(mreg.ADDON_DIR, addons)
+    new = addons / "NEW_TEST"
+    new.mkdir()
+    (new / "new_test.incl").write_text("JNEW = CONST(J41*0.5)\nk[NEWX --> NEWY] = CONST(JNEW)\n"
+                                       "k[NEWZ + hv --> NEWY] = CONST(J41)\n", encoding="utf-8")
+    (new / "manifest.json").write_text(json.dumps({"kind": "addon", "id": "NEW_TEST", "name": "test", "version": "0",
+                                                   "files": ["new_test.incl"], "adds_species": {"NEWX": "C2H4O"}}),
+                                       encoding="utf-8")
+    monkeypatch.setattr(mreg, "ADDON_DIR", str(addons))
+    hits = [h for h in pc.check_installed(lights=(("measured", "SAPHIR"),)) if "NEW_TEST" in h]
+    assert len(hits) == 1 and "NEWX --> NEWY" in hits[0] and "new_test.incl" in hits[0]
+
+
 def test_hand_written_reaction_is_reported():
     exp = _exp()
     assert not [m for _l, m in juice.check(exp) if "light switch" in m]

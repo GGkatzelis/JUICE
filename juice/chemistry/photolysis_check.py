@@ -178,6 +178,54 @@ def ungated(spec) -> List[Tuple[str, str, str]]:
     return _RESULTS[key]
 
 
+LIGHTS = (("measured", "SAPHIR"), ("clear_sky", "SAPHIR"), ("clear_sky", "generic_lamps"))
+
+
+def _test_experiment(base_id: str, addons: List[str], j: str, chamber: str):
+    import juice
+    exp = juice.new_experiment("photolysis_check", chamber=chamber)
+    c = exp.conditions
+    c.source, c.date, c.start, c.end = "manual", "2024-07-09", "08:00", "10:00"
+    c.temperature_mode, c.j_source, c.roof_open = "const", j, [("09:00", "10:00")]
+    if mreg.is_complete(base_id):
+        exp.base_mechanism, exp.precursors = base_id, []
+    else:
+        exp.base_mechanism, exp.precursors = base_id, ["TOLUENE"]
+    exp.addons = list(addons)
+    exp.injections = [juice.Injection(name="NO", products="NO", total_ppb="5", start="08:05")]
+    return exp
+
+
+def check_installed(lights=LIGHTS) -> List[str]:
+    """Every lumped base and every add-on installed under chemistry/mechanisms, under sunlight with measured and
+    clear-sky J and under lamps: the photolysis reactions the light switch does not close, as one line each.
+    [] when all are clean.  An add-on is checked on each installed base it is compatible with.  Unlike `ungated`,
+    an experiment that cannot be written is a problem here, not a pass.  tests/test_photolysis_check.py runs this,
+    so a new add-on or converted mechanism is checked by the test suite as soon as its folder is in place."""
+    from juice.core import experiment_spec as es
+    bases = mreg.load_bases()
+    cases = [(b, []) for b, m in bases.items() if m.is_lumped]
+    for a in mreg.load_addons().values():
+        on = [b for b in bases if a.compatible(b) and not bases[b].is_gecko] or ([mreg.DEFAULT_BASE] if not a.compatible_with else [])
+        if not on:
+            continue
+        cases.append((mreg.DEFAULT_BASE if mreg.DEFAULT_BASE in on else on[0], [a.id]))
+    out = []
+    for base_id, addons in cases:
+        label = " + ".join([base_id] + addons)
+        for j, chamber in lights:
+            spec = _test_experiment(base_id, addons, j, chamber)
+            try:
+                text = es.render_easy(spec)
+                lamps = es._profile(spec.conditions).light_type != "sun"
+            except Exception as e:
+                out.append(f"{label} ({j}, {chamber}): the experiment cannot be written: {e}")
+                continue
+            for rx, ex, where in find(text, _files(spec), inputs_follow_switch=lamps):
+                out.append(f"{label} ({j}, {chamber}): {rx}  rate {ex}  in {where}")
+    return out
+
+
 def messages(spec, limit: int = 4) -> List[str]:
     hits = ungated(spec)
     if not hits:

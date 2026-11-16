@@ -100,6 +100,13 @@ JUICE ships chemistry that others developed. Please cite it when you use it.
 Each converted mechanism keeps a manifest with its source, version, citation and the conversion notes
 (`chemistry/mechanisms/*/*/manifest.json`).
 
+New chemistry must stop photolysing when the light goes off: a photolysis reaction is written with `+ hv`,
+as the MCM does, or its rate carries `HV`. Three checks back this up:
+- the F0AM importer writes `+ hv` itself;
+- the experiment check warns about any photolysis without the switch, including lines written by hand;
+- `pytest tests/test_photolysis_check.py` checks every add-on and converted mechanism in
+  `chemistry/mechanisms/`, under sunlight and lamps, as soon as its folder is there.
+
 ## Citation and collaboration
 
 If you use JUICE in a publication, please cite it. GitHub's "Cite this repository" button gives the
