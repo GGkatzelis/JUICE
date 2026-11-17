@@ -52,7 +52,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from juice.core.experiment_spec import load_spec, save_spec, validate, mechanism_species, enz_columns, ExperimentSpec, ACTIONS, known_species_for, input_sources, level_icon, injection_label
-from juice.gui.experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, _info
+from juice.gui.experiment_wizard import ExperimentHost, ReviewPage, CHAMBER_ITEMS, ScriptBox, _info
 from juice.core.elog_generator import generate_both
 from juice.core.idl_parser import parse_idl_easy
 from juice.core import injection_calc as ic
@@ -598,6 +598,7 @@ class RunPage(QWidget):
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
         lay.addWidget(self.log, stretch=1)
         lay.addWidget(self._earlier_group())
+        self.script_box = ScriptBox("experiment"); lay.addWidget(self.script_box)      # below: the script Prepare wrote
 
     def refresh(self):
         self.folder.setText(self.win.out_dir())
@@ -635,6 +636,7 @@ class RunPage(QWidget):
             if "[scenario_prep]" in line:
                 self.log.append(line)
         script = self._write_script(spec, out)
+        self.script_box.show_script(script)
         missing = []
         try:
             with open(os.path.join(out, spec.name + "_juice.elog"), encoding="utf-8", errors="replace") as fh:

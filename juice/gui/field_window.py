@@ -40,7 +40,7 @@ from juice.core import field_scenario as fsc
 from juice.core import field_spec as fs
 from juice.gui import juice_theme as theme
 from juice.core.experiment_spec import ExperimentSpec
-from juice.gui.experiment_wizard import ChemistryPage, _add_row, _del_row, _info, _rows, _set_rows, _table
+from juice.gui.experiment_wizard import ChemistryPage, ScriptBox, _add_row, _del_row, _info, _rows, _set_rows, _table
 from juice.gui.juice_gui import _boxed, _open_path, _scroll
 from juice.core.scenario_prep import default_profile, load_paths, pick_toml, solver_from_toml, solver_profiles
 
@@ -382,6 +382,7 @@ class FieldRunPage(QWidget):
         self.files = QLabel(""); self.files.setWordWrap(True); self.files.setStyleSheet("color: #555555;"); lay.addWidget(self.files)
         self.log = QTextEdit(); self.log.setReadOnly(True); self.log.setMinimumHeight(260)
         self.log.setStyleSheet("font-family: Consolas, monospace; font-size: 10px;"); lay.addWidget(self.log, stretch=1)
+        self.script_box = ScriptBox("case"); lay.addWidget(self.script_box)            # the script Prepare wrote
 
     def cs_path(self) -> str:
         return os.path.join(self.win.out_dir(), self.win.name.text().strip() + ".cs")
@@ -424,6 +425,7 @@ class FieldRunPage(QWidget):
                                         toml=self.win.toml, kv_pd=self.kvpd.isChecked(), origin="the JUICE field window")
         except Exception as e:
             self.log.append(f"note: the case script was not written ({e})")
+        self.script_box.show_script(script)
         missing = []
         try:
             with open(os.path.join(out, spec.name + "_juice.elog"), encoding="utf-8", errors="replace") as fh:

@@ -168,6 +168,12 @@ def test_chamber_window_prepare_writes_the_script(app, tmp_path):
     text = script.read_text(encoding="utf-8")
     assert f"solver = {w.page_run.solver.currentData()!r}" in text and "kv_pd = False" in text
     assert "# STEP 1 — EXPERIMENT" in text and "# STEP 5 — RUN" in text
+    box = w.page_run.script_box                                  # the Run step shows that file, and it can be hidden
+    assert box.path == str(script) and box.text.toPlainText() == text
+    box._toggled(False, remember=False)
+    assert box.text.isHidden() and "tick to show" in box.title()
+    box._toggled(True, remember=False)
+    assert not box.text.isHidden()
     w.close()
 
 
@@ -184,6 +190,7 @@ def test_field_window_prepare_writes_the_script(app, tmp_path):
     script = os.path.join(os.path.dirname(w.page_run.json_path), spec.name + "_run.py")
     assert os.path.isfile(script)
     assert asdict(juice.build_from_script(script)) == asdict(spec)
+    assert w.page_run.script_box.text.toPlainText() == open(script, encoding="utf-8").read()
     w.dirty = False
     w.close()
 

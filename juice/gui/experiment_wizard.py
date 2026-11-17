@@ -66,6 +66,72 @@ def _more_info(summary: str, bullets: List[str], button: str = "ⓘ How it works
     return w
 
 
+class ScriptBox(QGroupBox):
+    """Run step: the <name>_run.py that 'Prepare input files' wrote, shown as it is on disk.
+
+    Untick the box to hide it; the choice is remembered (QSettings run/show_script).  The text is read
+    from the file each time, so what is shown is what `python <name>_run.py` runs."""
+    TITLE = "This experiment as code"
+
+    def __init__(self, what: str = "experiment"):
+        super().__init__(f"{self.TITLE} (untick to hide)")
+        from PyQt6.QtCore import QSettings
+        self._settings, self.path, self._what = QSettings("FZJ", "JUICE"), "", what
+        self.setCheckable(True)
+        v = QVBoxLayout(self)
+        hb = QHBoxLayout()
+        self.note = _info(""); hb.addWidget(self.note, stretch=1)
+        self.open_btn = QPushButton("Show in folder"); self.open_btn.clicked.connect(self._open); hb.addWidget(self.open_btn)
+        self.copy_btn = QPushButton("Copy"); self.copy_btn.clicked.connect(self._copy); hb.addWidget(self.copy_btn)
+        v.addLayout(hb)
+        self.text = QPlainTextEdit(); self.text.setReadOnly(True); self.text.setMinimumHeight(170)
+        self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.text.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; background: #fbfbfb; color: #222222;")
+        v.addWidget(self.text)
+        self._body = [self.note, self.open_btn, self.copy_btn, self.text]
+        self.setChecked(str(self._settings.value("run/show_script", "true")).lower() != "false")
+        self.toggled.connect(self._toggled)
+        self.show_script("")
+        self._toggled(self.isChecked(), remember=False)
+
+    def show_script(self, path: str):
+        """Show the script file at `path` ('' or a missing file: say that Prepare writes it)."""
+        self.path, text = "", ""
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                self.path = path
+            except OSError:
+                pass
+        self.text.setPlainText(text)
+        self.note.setText(f"{os.path.basename(self.path)}, written with the input files: build() rebuilds this {self._what} "
+                          f"exactly; run it with python, or change it for loops and your own analysis." if self.path else
+                          f"'Prepare input files' writes this {self._what} as a Python script and shows it here.")
+        for b in (self.open_btn, self.copy_btn):
+            b.setEnabled(bool(self.path))
+
+    def _toggled(self, on: bool, remember: bool = True):
+        for w in self._body:
+            w.setVisible(on)
+        self.setTitle(f"{self.TITLE} (untick to hide)" if on else f"{self.TITLE} (tick to show)")
+        if remember:
+            self._settings.setValue("run/show_script", "true" if on else "false")
+
+    def _open(self):
+        """The run folder, not the file: opening a .py may run it, depending on how Windows is set up."""
+        if self.path:
+            try:
+                os.startfile(os.path.dirname(self.path))
+            except AttributeError:                           # pragma: no cover
+                import subprocess
+                subprocess.Popen(["xdg-open", os.path.dirname(self.path)])
+
+    def _copy(self):
+        from PyQt6.QtWidgets import QApplication
+        QApplication.clipboard().setText(self.text.toPlainText())
+
+
 WIKI_LINE_HELP = [
     "<b>Time</b> at the start of the line: <code>HH:MM</code> or <code>HH:MM:SS</code>.",
     "<b>Code</b>: one letter on its own after the time. Upper case starts, lower case stops: "
