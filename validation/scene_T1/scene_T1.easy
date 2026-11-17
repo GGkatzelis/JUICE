@@ -1,0 +1,47 @@
+; scene_T1 - analytical test: rate constant that depends on a species, with a temperature step
+; ---------------------------------------------------------------------------------------
+; X + X --> XX with k = X*19375./(421.*14400.*1.E18), X(0) = 1.E9, XX(0) = 0, P = 1013 hPa.
+; T from the ENZ file: 280 K at t = 0, 300 K at t = 3600 s and 7200 s (three lines = two rows
+; of one hour).  T is constant within a row (280 K in row 1, 300 K in row 2); at t = 3600 s
+; the density M = P/(T*1.379E-19) falls by the factor r = 280/300 and all concentrations
+; are scaled by r (the mixing ratios stay).  k does not depend on T.
+; k is chosen so that X is one tenth of its start value at the end.
+;
+; Equations within a row:  dX/dt = -2*k*X*X = -2*c*X**3,  dXX/dt = c*X**3,
+;                          c = 19375./(421.*14400.*1.E18)
+; Analytical solution (k follows X at every instant), a = 4*c*X0**2*3600 = 19375/421:
+;   end of row 1:     X = X0/SQRT(1 + a)                 XX = (X0 - X)/2
+;   after the step:   X and XX times r = 280/300
+;   end of row 2:     X = r*X0/SQRT(1 + a + a*r*r)       XX = XX(after the step) + (X(after the step) - X)/2
+;   t = 3600 s, before the density step: X = 1.458318E+08, XX = 4.270841E+08
+;   t = 3600 s, after the density step : X = 1.361097E+08, XX = 3.986118E+08
+;   t = 7200 s                         : X = 1.000000E+08, XX = 4.166667E+08
+; THE FOUR POSSIBLE RESULTS (k follows X or is held per row; the density step at 3600 s is
+; applied to the concentrations or not).  X and XX at t = 3600 s are the values before the step.
+;                                       t = 3600 s                    t = 7200 s
+;                                       X             XX              X             XX
+;   k follows X, density step applied : 1.458318E+08  4.270841E+08    1.000000E+08  4.166667E+08   (correct)
+;   k follows X, no density step      : 1.458318E+08  4.270841E+08    1.036713E+08  4.481643E+08
+;   k held per row, density step      : 4.164812E+07  4.791759E+08    3.756546E+07  4.478839E+08
+;   k held per row, no density step   : 4.164812E+07  4.791759E+08    4.004960E+07  4.799752E+08
+;   (k held per row: X(end) = X(start)/(1 + 2*c*X(start)**2*3600), k from X after the step)
+;
+GEOMETRY[NBOX]=1
+CONST=FUNCTION[%1]
+DENSITY=FUNCTION[%1/(%2*1.379E-19)]
+
+X + X --> XX
+k[X + X --> XX] = CONST(X*19375./(421.*14400.*1.E18))
+
+INITIAL[X]    = CONST(1.E9)
+INITIAL[XX]   = CONST(0.)
+
+T = INPUT(T)
+P = CONST(1013.)
+M = DENSITY(P,T)
+H2O = CONST(0.)
+
+FILES[ENZ]    = scene_T1.enz
+FACS[HMAX]    = 300
+FACS[OUTSTEP] = 3600
+PLOT[SKIP] = CS,KV,PD

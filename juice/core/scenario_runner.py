@@ -2843,11 +2843,11 @@ class ScenarioRunner:
             or (k.upper() in {'P', 'PRESS'} and not _p_no_restart)
             or any(_fnm.fnmatch(k.upper(), p.upper()) for p in _step_pats)
         }
-        # ENZ breakpoints are shifted +1e-9 s in load_saphir_environment so that
-        # exactly at the boundary time t, the interpolator returns the OLD value.
-        # IMPORTANT: ENZ timestamps are absolute (seconds since 1.1.2000, ~7.74e8).
-        # At that scale, float64 ULP ≈ 119 ns.  1 ns offsets round to zero and both
-        # queries land on the same float64 value → filter incorrectly sees no change.
+        # ENZ breakpoints are not shifted (load_saphir_environment, since 2026-11-17): at
+        # the boundary time t the interpolator returns the NEW line.
+        # ENZ timestamps are usually absolute (seconds since 1.1.2000, ~7.74e8).
+        # At that scale, float64 ULP ≈ 119 ns, so a query offset of 1 ns rounds to zero and
+        # both queries land on the same float64 value → the filter would see no change.
         # Use 1e-4 (100 µs) >> 119 ns ULP, and << 60 s ENZ row spacing.
         _eff_eps   = 1e-4   # left-hand query offset (must exceed float64 ULP at ENZ scale)
         _rh_offset = 1e-4   # right-hand query offset (same reasoning)

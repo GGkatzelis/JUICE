@@ -56,14 +56,15 @@ def load_saphir_environment(file_path, interpolation='linear', step_col_patterns
 
     _q_cols = {c for c in df.columns if _is_step_col(c)}
 
-    # For step-function (piecewise) columns, shift all internal breakpoints by +1 ns.
-    # scipy's kind='previous' at an exact breakpoint t returns the NEW value (right-hand
-    # limit).  By shifting breakpoints right by 1 ns, a query at exactly t returns the
-    # OLD value (left-hand limit), so the BDF integrating segment [t0, t_boundary] never
-    # "sees" the next ENZ row's value at the boundary instant — preventing the polynomial
-    # leak that causes a spurious pre-boundary rise in the ODE output.
+    # Step-function (piecewise) columns: an ENZ line holds from its own time to the next
+    # line; a query at exactly the time of a line returns THAT line (scipy kind='previous').
+    # Until 2026-11-17 all breakpoints except the first were shifted by +1 ns.  With times
+    # in seconds since 2000 (about 7.7E8, float64 spacing 119 ns) that shift rounds away,
+    # so every such scenario already ran with the unshifted times.  With small times
+    # (an ENZ file starting at 0) the shift was real: the row starting at a line still read
+    # the line before, e.g. a T step at 3600 s was never applied (F. Rohrer's scene_T1;
+    # his fix 9e4fc04 in MCM_SAPHIR_Tool).  No shift now: the same for every time base.
     _t_piecewise = df['time'].values.copy().astype(float)
-    _t_piecewise[1:] = _t_piecewise[1:] + 1e-9   # shift all boundaries except the first
 
     providers = {}
     for col in df.columns:

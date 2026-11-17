@@ -281,18 +281,18 @@ Result of 3 November 2026 (tolerance ±2 %, 4 solver processes in parallel):
 | scene_07 | 92/92 | 1162/1165 | C924O2 2.6 % ¹ | 1098/1165 | 61 s |
 | scene_08 | 95/95 | 612/612 | SA 0.31 % | 603/612 | 53 s |
 | scene_09 | 110/110 | 3225/3228 | NC4PDCO2H 6.7 % ¹ | 1750/3228 | 3.8 min |
-| scene_01 | 5/8 | 0/2 | Y 8.4 % ² | 0/2 | 10 s |
-| scene_02 | 3/8 | 0/2 | Y 8.4 % ² | 0/2 | 10 s |
-| scene_03 | 30/56 | 11/22 | O 91 % ² | 6/22 | 26 s |
+| scene_01 | 8/8 | 2/2 | Y 0.034 % ² | 2/2 | 10 s |
+| scene_02 | 8/8 | 2/2 | Y 0.034 % ² | 2/2 | 10 s |
+| scene_03 | 56/56 | 22/22 | N2O5 0.91 % ² | 16/22 | 19 s |
 
 Scenes 04–09 are SAPHIR experiments (one ENZ row per minute, as the archive and the step window write
 them): every setting (J values, rate constants, T, M, dilution) agrees, and so does essentially every
 species.
 ¹ The three species outside ±2 % in scene_07 and in scene_09 peak at a few molecules per cm³.
-² scene_01–03 are small hand-written tests whose ENZ has only a few rows (lights on at 3600 s, the
-next row an hour later) while results are written every 10 s. JUICE applies each new row one output
-step (10 s) later than FACSIMILE does; that shift alone produces these deviations. It is the first
-known limitation in [architecture.md](architecture.md), section A6.
+² scene_01–03 are small hand-written tests whose ENZ starts at t = 0 and has only a few rows (lights
+on at 3600 s, the next row an hour later). Until 17 November 2026 JUICE applied each new row one output
+step late when the ENZ times start near 0 (scene_01–02 Y 8.4 %, scene_03 O 91 %); fixed by F. Rohrer,
+with his test scene `validation/scene_T1` (scenes 04–09 unchanged, bit for bit).
 
 The table is the **fast** solver profile, the default.
 

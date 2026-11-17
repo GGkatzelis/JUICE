@@ -181,10 +181,9 @@ any key.
 - **ENZ values are step functions** (`interpolation = "piecewise"`, as in FACSIMILE). Every ENZ row
   boundary and every output step starts a new segment; all settings (J values, rate constants, T, M,
   switches) are evaluated once at the segment start and held (`perstep_snap`).
-- **Boundary convention.** `load_saphir_environment.py` shifts each ENZ row time by +1 ns, so a value
-  looked up *at* a row time is still the previous row's value (left-hand limit). With an ENZ grid equal
-  to the output grid, as in every SAPHIR archive experiment and every experiment JUICE writes, this
-  reproduces FACSIMILE (scene_04 … scene_09). See A6 for the case where it does not.
+- **Boundary convention.** An ENZ line holds from its own time to the next line; a value looked up
+  *at* a row time is that row's value. (Until 17 Nov 2026 the rows were shifted by +1 ns, which only
+  mattered for ENZ times near 0; A6 item 1.) This reproduces FACSIMILE in scene_01 … scene_09.
 - **Thermal expansion.** At a row boundary where M changes, concentrations (and the BDF history) are
   rescaled by M_new/M_old, as FACSIMILE does.
 - **O1D** is not integrated; it is written as its pseudo-steady state J1·[O3]/k_quench.
@@ -264,15 +263,12 @@ counters, which FACSIMILE has to accept.
 
 ## A6. Known limitations (November 2026)
 
-1. **One-output-step lag with sparse ENZ files.** In scene_01, scene_02 and scene_03 the ENZ has
-   few rows (e.g. roof open at 3600 s, next row at 7200 s) while results are written every 10 s.
-   FACSIMILE applies a new row from its own time (lights on at 3600 s); JUICE applies it one output
-   step later (3610 s), because of the left-hand convention in A4. Concentrations are then off by
-   up to 8 % (injection ramps) or more at light and temperature steps. An experiment in which the
-   settings snapshot took the right-hand value made scene_01 match to 0.03 % and left scene_04/06
-   unchanged, but scene_03's temperature step and the printed switch columns still differed. The
-   convention has to be settled against FACSIMILE before changing it; until then build ENZ files
-   with one row per output step (what the step window does).
+1. *(Fixed 17 Nov 2026.)* **One-output-step lag with ENZ files that start near 0.** scene_01–03
+   (ENZ times from 0, few rows) were off by up to 8 % at injection ramps and more at light and
+   temperature steps: the +1 ns shift of the ENZ breakpoints (A4) is real at small times and rounds
+   away at SAPHIR's absolute times (~7.7·10⁸ s), so JUICE read each row from the next line on.
+   F. Rohrer removed the shift (MCM_SAPHIR_Tool 9e4fc04, test scene `validation/scene_T1`); scene_01–03
+   now pass (worst 0.91 %) and scene_04–09 are unchanged bit for bit.
 2. **Trace species below ~10 molec/cm³.** In scene_07 and scene_09, three of ~1 200 and ~3 200
    species differ by 2.6–6.7 %; all peak at a few molecules per cm³, near the solver tolerance.
 3. **mcm_full** (5 842 species) is not in the benchmark: its files are named `full_MCM.*`, not after
