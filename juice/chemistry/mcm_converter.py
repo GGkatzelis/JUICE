@@ -385,6 +385,26 @@ def _convert_reaction(rate_raw: str, mech_raw: str) -> list[tuple[str, str]]:
     return [_finalise(mech, rate_def)]
 
 
+def _reaction_sides(mech: str, without: tuple = ()) -> tuple:
+    """(sorted reactants, sorted products) of a mechanism line, leaving out the species in `without`."""
+    lhs, rhs = mech.split('-->', 1)
+    side = lambda t: tuple(sorted(x.strip().upper() for x in t.split('+') if x.strip() and x.strip().upper() not in without))
+    return side(lhs), side(rhs)
+
+
+def _drop_inorganic_twins(voc_reactions: list) -> list:
+    """Leave out reactions of the MCM file that the inorganic block has under another name.
+
+    A complete MCM export contains the inorganic reactions, and the hardcoded inorganic block adds them again.
+    Reactions with the same name are one reaction (last definition wins), so those overlap harmlessly.  The
+    block's 'OH + CO --> HO2 + CO2' and the MCM's 'CO + OH = HO2' differ by the product CO2, which is not a
+    model species: under two names CO + OH ran twice.  Such a twin (same reaction but for CO2) is dropped here;
+    the block's version stays, as in the IDL workflow, whose MCM files hold no inorganic reactions."""
+    block = {_reaction_sides(m): _reaction_sides(m, ('CO2',)) for m, _ in INORGANIC_DARK + INORGANIC_PHOT}
+    twins = set(block.values()) - set(block)            # block reactions that carry CO2, seen without it
+    return [(m, r) for m, r in voc_reactions if _reaction_sides(m) not in twins]
+
+
 def _finalise(mech: str, rate_def: str) -> tuple[str, str]:
     """Final whitespace normalisation: collapse all whitespace inside the
     rate-def k[...] block but produce a readable mech line."""
@@ -910,6 +930,7 @@ def convert_mcm_file(
     voc_reactions = []
     for rate_raw, mech_raw in raw_rxns:
         voc_reactions.extend(_convert_reaction(rate_raw, mech_raw))
+    voc_reactions = _drop_inorganic_twins(voc_reactions)
 
     # ── Precursor mode: graph-walk filter ───────────────────────────────────
     if init_mode:
