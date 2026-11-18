@@ -213,7 +213,7 @@ def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None,
             line = raw.split("%", 1)[0].strip()
             if not line or line.startswith(("Rnames", "Gstr")) or re.match(r"f[A-Za-z0-9_]+\(i\)", line):
                 continue
-            mk = re.match(r"k\(:,i\)\s*=\s*(.+?);?\s*$", line)
+            mk = re.match(r"k\(\s*:\s*,\s*i\s*\)\s*=\s*(.+?);?\s*$", line)      # k(:,i) or k(:, i)
             if mk:
                 rate = mk.group(1); continue
             ma = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?);\s*$", line)
@@ -228,6 +228,8 @@ def read_allrxns(path: str, fixed: Optional[Dict[str, float]] = None,
             if re.match(r"[A-Za-z_][A-Za-z0-9_]*\(.*\)\s*=", line):           # masked assignment a(a>b) = b
                 unsupported.append(line); continue
         if rate is None:
+            if label_m:                                # a reaction without a readable rate is never skipped silently
+                dropped.append(f"{name}: no rate line k(:,i) = ... found in its block")
             continue
         # constants of the profile (CMAQ ocean switches) first, then helpers
         consts = {k: repr(float(v)) for k, v in fixed.items()}

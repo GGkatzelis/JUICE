@@ -294,3 +294,16 @@ def test_arithmetic_stoichiometry():
     assert fi._arith("-1+0.9") == pytest.approx(-0.1) and fi._arith("+0.5*2") == 1.0
     with pytest.raises(ValueError):
         fi._arith("+x")
+
+
+def test_a_rate_line_with_a_space_is_read_and_a_reaction_without_a_rate_is_reported(tmp_path):
+    """RACM2BVCP_20231031.m (Stockwell et al., 2024) writes one rate as `k(:, i) = ...`; until 19 Nov 2026 that
+    reaction (MPN = MO2 + NO2) was skipped without a word."""
+    src = ("SpeciesToAdd = {'A'; 'B'; 'C'};\nAddSpecies\n\ni=i+1;\nRnames{i} = 'A=B';\nk(:, i) = 2.0e-3;\n"
+           "Gstr{i,1} = 'A';\nfA(i)=fA(i)-1; fB(i)=fB(i)+1;\n\ni=i+1;\nRnames{i} = 'B=C';\nrate(:,i) = 1.0;\n"
+           "Gstr{i,1} = 'B';\nfB(i)=fB(i)-1; fC(i)=fC(i)+1;\n")
+    p = tmp_path / "x_AllRxns.m"
+    p.write_text(src)
+    species, reactions, dropped = fi.read_allrxns(str(p))
+    assert [fi.easy_reaction(r) for r in reactions] == ["A --> B"] and reactions[0].rate == "2.0e-3"
+    assert len(dropped) == 1 and dropped[0].startswith("B=C: no rate line")
