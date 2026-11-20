@@ -32,5 +32,14 @@
   "deposition_velocity_cm_s": {},
   "deposition_lifetime_h": {},
   "emission_scale": {},
+  "sources": {
+    "conditions": "invented for this example",
+    "photolysis": "invented for this example",
+    "emissions": "invented for this example",
+    "mixing": "invented for this example",
+    "constraints": "invented for this example",
+    "deposition": "invented for this example",
+    "observations": "invented for this example"
+  },
   "version": 1
 }

@@ -34,6 +34,8 @@ from juice.core.enz_builder import compute_solar_zenith             # noqa: E402
 
 DAY = "2021-08-15"
 ENZ_EPOCH_UNIX = 946684800.0
+# where the inputs come from, shown in the schematic of the case: here nothing was measured
+SYNTHETIC = {k: "invented for this example" for k in fs.SOURCE_KEYS if k != "trajectory"}
 
 
 def utc_seconds(hhmm: str, day_offset: int = 0) -> float:
@@ -134,6 +136,7 @@ def site_day(folder: str) -> str:
                         chemistry={"base_mechanism": "MCM_v3.3.1", "addons": [], "precursors": ["C5H8", "TOLUENE"], "mechanism_stem": "",
                                    "inorganic_only": False, "include_dirs": [], "reaction_adjustments": []},
                         step_s=60, dilution="none", spin_up_days=1.0, generic_lifetime_h=6.0)
+    spec.sources = dict(SYNTHETIC)
     return fs.save_spec(spec, os.path.join(folder, "site_day"))
 
 
@@ -164,6 +167,7 @@ def plume_ageing(folder: str) -> str:
                         step_s=60, dilution="tracer", tracer="CO",
                         initials={"NO": 20.0, "NO2": 30.0, "O3": 20.0, "CO": 600.0, "HCHO": 5.0, "C2H4": 10.0, "C3H6": 5.0, "TOLUENE": 5.0,
                                   "HONO": 0.5})
+    spec.sources = dict(SYNTHETIC)
     return fs.save_spec(spec, os.path.join(folder, "plume_ageing"))
 
 
@@ -199,6 +203,7 @@ def la_parcel(folder: str) -> str:
                         initials={"O3": 25.0, "NO": 0.5, "NO2": 2.0, "CO": 160.0, "HONO": 0.015, "HCHO": 1.0, "C5H8": 0.1, "TOLUENE": 0.2,
                                   "C2H5OH": 2.0},
                         deposition_velocity_cm_s={"O3": 0.4, "HNO3": 2.0})
+    spec.sources = dict(SYNTHETIC)
     return fs.save_spec(spec, os.path.join(folder, "la_parcel"))
 
 

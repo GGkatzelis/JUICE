@@ -68,6 +68,12 @@ DILUTION_SOURCES = {
 # The steps of the field window; every check says which step fixes it.
 STEP_CASE, STEP_CHEMISTRY, STEP_SOURCES, STEP_MIXING, STEP_RUN = range(5)
 DEFAULT_DILUTION = {"constrained": "none", "plume": "table", "lagrangian": "pbl"}
+# the inputs of a case whose origin can be stated in `FieldSpec.sources` (e.g. "emissions": "FIVE-VCP inventory, 4 km")
+SOURCE_KEYS = ("conditions", "photolysis", "emissions", "mixing", "constraints", "deposition", "observations", "trajectory")
+# inputs of the table a case can switch off (`FieldSpec.off`): their columns are then ignored, as if they were not there
+SWITCHES = {"photolysis": "measured photolysis (j columns)", "emissions": "emissions (E_ columns)",
+            "background": "background air (B_ columns)", "constraints": "species held to measurements (C_ columns)",
+            "observations": "observations for comparison (O_ columns)"}
 
 NA = 6.02214076e23
 # Air density in the same form as the DENSITY function of the scenario files: M = p[hPa] / (T * 1.379e-19).
@@ -129,6 +135,9 @@ class FieldSpec:
     deposition_velocity_cm_s: Dict[str, float] = field(default_factory=dict)   # loss = v / h
     deposition_lifetime_h: Dict[str, float] = field(default_factory=dict)      # loss = 1 / lifetime
     emission_scale: Dict[str, float] = field(default_factory=dict)  # species, NOX, VOC or ALL → factor on the E_ columns
+    sources: Dict[str, str] = field(default_factory=dict)    # where each input comes from, in words (SOURCE_KEYS): shown in the
+                                                             # schematic of the case (field_schematic), not used by the run
+    off: List[str] = field(default_factory=list)             # keys of SWITCHES: inputs of the table this case does not use
     version: int = SPEC_VERSION
 
 
@@ -144,6 +153,7 @@ class FieldTable:
     constraints: Dict[str, np.ndarray] = field(default_factory=dict)  # species → ppb
     observations: Dict[str, np.ndarray] = field(default_factory=dict) # species → ppb, measured but not held
     ignored: List[str] = field(default_factory=list)
+    switched_off: Dict[str, List[str]] = field(default_factory=dict)  # SWITCHES key → names of the columns the case leaves out
     notes: List[str] = field(default_factory=list)
     problems: List[Tuple[int, str]] = field(default_factory=list)     # (step, reading error found column by column)
     unreadable: Dict[str, int] = field(default_factory=dict)          # column → cells that were not numbers
@@ -226,6 +236,10 @@ def load_spec(path: str) -> FieldSpec:
                 clean[k] = {str(a).upper(): float(b) for a, b in dict(clean[k]).items()}
         if "chemistry" in clean:
             clean["chemistry"] = dict(clean["chemistry"])
+        if "off" in clean:
+            clean["off"] = [k for k in SWITCHES if k in {str(x).lower() for x in clean["off"]}]
+        if "sources" in clean:
+            clean["sources"] = {str(a).lower(): str(b) for a, b in dict(clean["sources"]).items() if str(b).strip()}
     except (TypeError, ValueError) as e:
         raise ValueError(f"{os.path.basename(path)} has a value of the wrong kind: {e}") from None
     spec = FieldSpec(**clean)
@@ -749,8 +763,24 @@ def check(spec: FieldSpec) -> Tuple[Optional[FieldTable], Report]:
     except ValueError as e:
         r.err(str(e), STEP_CASE)
         return None, r
+    apply_switches(t, spec)
     _check_table(t, spec, r)
+    for key, names in t.switched_off.items():
+        r.info.append(f"switched off in this case: {SWITCHES[key]}, {len(names)} column(s) ignored")
     return t, r
+
+
+def apply_switches(table: FieldTable, spec: FieldSpec) -> None:
+    """Drop the inputs the case has switched off (`spec.off`) from the table, remembering their names."""
+    groups = {"photolysis": table.photolysis, "emissions": table.emissions, "background": table.background,
+              "constraints": table.constraints, "observations": table.observations}
+    for key in spec.off or []:
+        d = groups.get(key)
+        if d:
+            table.switched_off[key] = sorted(d)
+            d.clear()
+            if key == "emissions":
+                table.emission_units.clear()
 
 
 # ── template ─────────────────────────────────────────────────────────────────────────────────────

@@ -30,13 +30,14 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PyQt6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
-from PyQt6.QtGui import QKeySequence, QPixmap
-from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
+from PyQt6.QtGui import QImage, QKeySequence, QPixmap
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QSizePolicy, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout,
                              QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                              QMainWindow, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QSplitter,
                              QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit, QVBoxLayout, QWidget)
 
 from juice.core import field_scenario as fsc
+from juice.core import field_schematic as fsch
 from juice.core import field_spec as fs
 from juice.gui import juice_theme as theme
 from juice.core.experiment_spec import ExperimentSpec
@@ -186,6 +187,60 @@ class FieldPlot(QWidget):
         if series:
             self._series(self.fig.add_subplot(111), hours, series, "loss [1/h]")
         return bool(series)
+
+
+class FieldSchematicView(QLabel):
+    """The case as one picture (field_schematic), redrawn as the entries change.  A click on a card opens the
+    step where that input is defined; a click on the box opens the chemistry."""
+
+    STEP = {"conditions": fs.STEP_CASE, "photolysis": fs.STEP_CASE, "centre": fs.STEP_CHEMISTRY, "emissions": fs.STEP_SOURCES,
+            "constraints": fs.STEP_SOURCES, "observations": fs.STEP_SOURCES, "mixing": fs.STEP_MIXING, "deposition": fs.STEP_MIXING}
+
+    def __init__(self, win: "FieldWindow"):
+        super().__init__()
+        self.win, self._case, self._drawn = win, None, None
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setCursor(Qt.CursorShape.PointingHandCursor); self.setMinimumWidth(520)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)     # the picture follows the page width, never widens it
+        self.setToolTip("click a card: the step where that input is defined opens; the box in the middle opens the chemistry")
+        self._timer = QTimer(self); self._timer.setSingleShot(True); self._timer.setInterval(120); self._timer.timeout.connect(self._render)
+
+    def show_case(self, spec: fs.FieldSpec, table: Optional[fs.FieldTable]) -> None:
+        self._case = (spec, table); self._timer.start()
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.setFixedHeight(max(200, int(self.width() * fsch.FIGSIZE[1] / fsch.FIGSIZE[0])))
+        self._timer.start()
+
+    def _render(self) -> None:
+        if self._case is None or not self.isVisible() or self.width() < 50:
+            return
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        ratio = self.devicePixelRatioF()
+        key = (id(self._case[0]), id(self._case[1]), self.width(), ratio)
+        if key == self._drawn:
+            return
+        fig = Figure(figsize=fsch.FIGSIZE, dpi=self.width() * ratio / fsch.FIGSIZE[0]); canvas = FigureCanvasAgg(fig)
+        try:
+            fsch.draw(self._case[0], self._case[1], fig=fig)
+            canvas.draw()
+            w, h = canvas.get_width_height()
+            img = QImage(bytes(canvas.buffer_rgba()), w, h, 4 * w, QImage.Format.Format_RGBA8888).copy()
+        except Exception as e:
+            self.setText(f"The schematic could not be drawn: {e}"); return
+        pm = QPixmap.fromImage(img); pm.setDevicePixelRatio(ratio)
+        self.setPixmap(pm); self._drawn = key
+
+    def showEvent(self, ev):
+        super().showEvent(ev); self._timer.start()
+
+    def mousePressEvent(self, ev):
+        if self.width() > 0 and self.height() > 0:
+            key = fsch.hit(*fsch.to_data(ev.position().x() / self.width(), ev.position().y() / self.height()))
+            if key in self.STEP:
+                self.win.steps.setCurrentRow(self.STEP[key])
+        super().mousePressEvent(ev)
 
 
 class FieldReview(QWidget):
@@ -608,10 +663,29 @@ class FieldWindow(QMainWindow):
         gv.addLayout(h)
         self.kind_box = QGroupBox(""); self.kind_form = QFormLayout(self.kind_box)
         self.kind_needs = QLabel(""); self.kind_needs.setWordWrap(True); self.kind_form.addRow(self.kind_needs)
+        g4 = QGroupBox("The model at a glance"); gv = QVBoxLayout(g4)
+        gv.addWidget(_info("What goes into the box and how each input is defined, drawn from your entries. Grey, dashed cards are "
+                           "not used. Click a card to open the step where it is defined."))
+        sw = QGridLayout(); sw.addWidget(QLabel("Use from the table:"), 0, 0); self.switches = {}
+        for i, (key, label) in enumerate((("photolysis", "measured photolysis"), ("emissions", "emissions"), ("background", "background air"),
+                                          ("constraints", "held species"), ("observations", "observations"))):
+            c = QCheckBox(label); c.setChecked(True); c.setToolTip(f"Unticked: {fs.SWITCHES[key]} are ignored, as if the table did not have them.")
+            self.switches[key] = c; sw.addWidget(c, i // 3, 1 + i % 3)
+        sw.setColumnStretch(4, 1); gv.addLayout(sw)
+        self.schematic = FieldSchematicView(self); gv.addWidget(self.schematic)
+        gv.addWidget(_info("Where each input comes from (an inventory, an instrument, a model): shown in the picture, not used by the run."))
+        grid = QGridLayout(); self.source_edits = {}
+        for i, (key, label) in enumerate((("conditions", "Meteorology"), ("photolysis", "Sunlight"), ("emissions", "Emissions"),
+                                          ("mixing", "Background air"), ("constraints", "Held species"), ("deposition", "Deposition"),
+                                          ("observations", "Observations"), ("trajectory", "Path or trajectory"))):
+            e = self._line("source, e.g. an inventory or an instrument"); self.source_edits[key] = e
+            grid.addWidget(QLabel(label), i // 2, 2 * (i % 2)); grid.addWidget(e, i // 2, 2 * (i % 2) + 1)
+        gv.addLayout(grid)
+        self.glance_box = g4
         self.spin_up = self._spin(0.0, 60.0, 1, " days")
         self.spin_up.setToolTip("Repeat the first day before the output, so that unmeasured products reach a steady cycle.")
         self.kind_form.addRow("Spin-up", self.spin_up)
-        return [g1, g2, g3, self.kind_box]
+        return [g1, g4, g2, g3, self.kind_box]
 
     def _chemistry_page(self) -> ChemistryPage:
         page = ChemistryPage(self)
@@ -687,6 +761,10 @@ class FieldWindow(QMainWindow):
             w.valueChanged.connect(self._changed)
         for w in (self.unit, self.dilution):
             w.currentIndexChanged.connect(self._changed)
+        for w in self.switches.values():
+            w.toggled.connect(self._changed)
+        for w in self.source_edits.values():
+            w.textChanged.connect(self._changed)
         for t in (self.deposition, self.initials):
             t.itemChanged.connect(self._changed); t.model().rowsRemoved.connect(self._changed)
         c = self.page_chem
@@ -754,7 +832,9 @@ class FieldWindow(QMainWindow):
                             step_s=self.step_s.value(), default_emission_unit=self.unit.currentText(), area_km2=self.area.value(),
                             dilution=self.dilution.currentData(), k_dil_per_h=self.k_dil.value(), k_collapse_per_h=self.k_collapse.value(),
                             tracer=self.tracer.text().strip(), spin_up_days=self.spin_up.value(), generic_lifetime_h=self.lifetime.value(),
-                            initials=initials, deposition_velocity_cm_s=velocity, deposition_lifetime_h=lifetime)
+                            initials=initials, deposition_velocity_cm_s=velocity, deposition_lifetime_h=lifetime,
+                            sources={k: e.text().strip() for k, e in self.source_edits.items() if e.text().strip()},
+                            off=[k for k, c in self.switches.items() if not c.isChecked()])
         return spec, problems
 
     def _apply(self, spec: fs.FieldSpec):
@@ -766,6 +846,10 @@ class FieldWindow(QMainWindow):
                          (self.lon, "" if spec.lon is None else f"{spec.lon:g}")):
                 w.setText(v)
             self.unit.setCurrentText(spec.default_emission_unit)
+            for k, c in self.switches.items():
+                c.setChecked(k not in (spec.off or []))
+            for k, e in self.source_edits.items():
+                e.setText((spec.sources or {}).get(k, ""))
             self.dilution.setCurrentIndex(max(0, self.dilution.findData(spec.dilution)))
             for w, v in ((self.area, spec.area_km2), (self.k_dil, spec.k_dil_per_h), (self.k_collapse, spec.k_collapse_per_h),
                          (self.spin_up, spec.spin_up_days), (self.lifetime, spec.generic_lifetime_h)):
@@ -830,6 +914,7 @@ class FieldWindow(QMainWindow):
         theme.mark_missing(self.table, not spec.table)
         if hasattr(self, "page_run"):
             self.page_run.refresh()
+        self.schematic.show_case(spec, table)
         plot = {0: self.plot_conditions, 2: self.plot_sources, 3: self.plot_mixing}.get(self.steps.currentRow())
         if plot is not None:
             plot.plot()

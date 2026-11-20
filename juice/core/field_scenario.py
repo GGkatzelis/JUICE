@@ -361,6 +361,15 @@ def write_case(spec: fs.FieldSpec, table: fs.FieldTable, out_dir: str) -> dict:
     res.update({"enz": enz, "easy": easy, "notes": notes, "grid": grid, "cols": cols,
                 "spec_path": fs.save_spec(spec, os.path.join(out_dir, spec.name + fs.SPEC_SUFFIX)),
                 "observations": write_observations(out_dir, spec, table, grid)})
+    try:                                             # the case as one picture, next to the run
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+        from juice.core import field_schematic as _sc
+        fig = Figure(figsize=_sc.FIGSIZE); FigureCanvasAgg(fig)
+        res["schematic"] = os.path.join(out_dir, f"{spec.name}.schematic.png")
+        _sc.draw(spec, table, res["schematic"], fig=fig)
+    except Exception as e:
+        res["schematic"] = ""; notes.append(f"the schematic was not drawn ({e})")
     return res
 
 
