@@ -32,9 +32,10 @@ from juice.core import field_spec as fs
 
 INK, MUTED, FAINT, SURFACE = "#0b0b0b", "#6b6a64", "#c3c2b7", "#ffffff"
 COLOUR = {"conditions": "#52514e", "photolysis": "#b98300", "emissions": "#eb6834", "mixing": "#2a78d6",
-          "constraints": "#6250d6", "deposition": "#8a5a2b", "observations": "#1baf7a"}
+          "constraints": "#6250d6", "deposition": "#8a5a2b", "observations": "#1baf7a", "aerosol": "#c2488f"}
 TITLE = {"conditions": "Meteorology", "photolysis": "Sunlight", "emissions": "Emissions", "mixing": "Mixing with background air",
-         "constraints": "Held to measurements", "deposition": "Deposition", "observations": "Compared with observations"}
+         "constraints": "Held to measurements", "deposition": "Deposition", "observations": "Compared with observations",
+         "aerosol": "Aerosol: gas–particle partitioning"}
 BOX = {"constrained": "Stationary box at one site", "plume": "Moving box: follows the plume",
        "lagrangian": "Moving box: follows the air parcel"}
 SCENE_NOTE = {"constrained": "the same place at every time step; the air passes through",
@@ -103,8 +104,11 @@ def needs(spec: fs.FieldSpec) -> List[Card]:
                     if "background" not in off else "Background switched off: diluted towards clean air",
                     f"Species that are not held are lost with a lifetime of {spec.generic_lifetime_h:g} h" if rt == "constrained" else ""]),
         "constraints": (rt == "constrained" and "constraints" not in off, ["One C_<species> column per measured species the model is held to"]),
-        "deposition": (bool(spec.deposition_velocity_cm_s or spec.deposition_lifetime_h), ["Velocity or lifetime per species, set on the Mixing and deposition step"]),
+        "deposition": (any(fs.deposition_of(spec)), ["Velocity or lifetime per species, set on the Mixing and deposition step"]),
         "observations": ("observations" not in off, ["One O_<species> column per measured species to compare the model with"]),
+        "aerosol": (fs.partitioning_on(spec), ["Column CS: condensation sink of the ambient aerosol, 1/s", "Column OA: organic aerosol mass, µg/m³",
+                                               "No chamber walls in a field case"] if fs.partitioning_on(spec) else
+                    ["No partitioning: every species stays in the gas phase", "Switched on at the Chemistry step"]),
     }
     out = []
     for key in TITLE:
@@ -192,20 +196,39 @@ def cards(spec: fs.FieldSpec, table: Optional[fs.FieldTable]) -> List[Card]:
     # held species
     held = sorted(table.constraints)
     add("constraints", bool(held), switched("constraints") if "constraints" in gone else [f"{len(held)} species set to the measured value at every step: {_names(held)}" if held else
-                                    "Nothing is held: every species is calculated", "Radicals and all products are calculated" if held else ""])
+                                    "Nothing is held: every species is calculated", "Radicals and all products are calculated" if held else "",
+                                    f"Held by your choice, from O_ columns: {_names(table.held_by_choice)}" if table.held_by_choice else ""])
 
     # deposition
-    dep = [f"{s} {v:g} cm/s" for s, v in spec.deposition_velocity_cm_s.items()]
-    life = [f"{s} lifetime {t:g} h" for s, t in spec.deposition_lifetime_h.items()]
-    add("deposition", bool(dep or life), ["Loss v / h over the boundary layer: " + ", ".join(dep) if dep else "",
+    velocity, lifetime = fs.deposition_of(spec)
+    dep = [f"{s} {v:g} cm/s" for s, v in velocity.items()]
+    life = [f"{s} lifetime {t:g} h" for s, t in lifetime.items()]
+    n_set = len(spec.deposition_velocity_cm_s) + len(spec.deposition_lifetime_h)
+    add("deposition", bool(dep or life), [f"Switched off in this case: {n_set} species are set on the Mixing and deposition step"]
+        if "deposition" in (spec.off or []) and n_set else ["Loss v / h over the boundary layer: " + ", ".join(dep) if dep else "",
                                           "First-order loss: " + ", ".join(life) if life else "",
                                           "" if dep or life else "No deposition in this case"])
+
+    # aerosol
+    if fs.partitioning_on(spec):
+        cs, oa = fs.condensation_sink(table, spec), fs.organic_aerosol(table, spec)
+        method = (spec.chemistry or {}).get("volatility_method", "") if (spec.chemistry or {}).get("partitioning") else ""
+        L = [f"Condensation sink {_rng(cs, '{:.1f}', 1e3)} ×10⁻³ s⁻¹ ({'column CS' if 'cs' in c else 'value of the case'})"
+             if (cs > 0).any() else "No condensation sink given: nothing condenses",
+             f"Organic aerosol {_rng(oa, '{:.1f}')} µg/m³ ({'column OA' if 'oa' in c else 'value of the case'}) + what forms",
+             " · ".join(x for x in (f"Volatility: {method}" if method else "",
+                                    f"particle lifetime {spec.particle_lifetime_h:g} h" if spec.particle_lifetime_h > 0 else "") if x),
+             "No chamber walls: the wall terms are zero"]
+    else:
+        L = ["No partitioning: every species stays in the gas phase"]
+    add("aerosol", fs.partitioning_on(spec), L)
 
     # observations
     obs = sorted(table.observations)
     add("observations", bool(obs or held), switched("observations") if "observations" in gone and not held else [f"Measured, not used by the model (O_ columns): {_names(obs)}" if obs else "No O_ columns in the table",
                                             "Bias, NMB and R² are written after the run" if obs else "",
-                                            "The held species are shown with the run as well" if held else ""])
+                                            "The held species are shown with the run as well" if held else "",
+                                            f"Not held by your choice, compared only: {_names(table.released)}" if table.released else ""])
     return out
 
 
@@ -239,8 +262,10 @@ def equation(spec: fs.FieldSpec, table: fs.FieldTable) -> List[Tuple[str, str]]:
         parts.append((r"$\;-\;k_{dil}\,(C - C_{background})$", COLOUR["mixing"]))
     if spec.run_type == "constrained":
         parts.append((r"$\;-\;\dfrac{C}{\tau}$", COLOUR["mixing"]))
-    if spec.deposition_velocity_cm_s or spec.deposition_lifetime_h:
-        parts.append((r"$\;-\;\dfrac{v_{d}}{h}\,C$" if spec.deposition_velocity_cm_s else r"$\;-\;\dfrac{C}{\tau_{dep}}$", COLOUR["deposition"]))
+    if any(fs.deposition_of(spec)):
+        parts.append((r"$\;-\;\dfrac{v_{d}}{h}\,C$" if fs.deposition_of(spec)[0] else r"$\;-\;\dfrac{C}{\tau_{dep}}$", COLOUR["deposition"]))
+    if fs.partitioning_on(spec):
+        parts.append((r"$\;-\;k_{CS}\,(C - C_{eq})$", COLOUR["aerosol"]))
     if table.constraints:
         parts.append((r"$\qquad C = C_{measured}$ for the held species", COLOUR["constraints"]))
     return parts
@@ -249,11 +274,12 @@ def equation(spec: fs.FieldSpec, table: fs.FieldTable) -> List[Tuple[str, str]]:
 # ── drawing ──────────────────────────────────────────────────────────────────────────────────────
 # card: (x0, y0, width, height); arrow: (from, to) in the same coordinates (x 0..100, y -9..67)
 _SLOT = {"photolysis": (31, 47.5, 38, 12.5), "conditions": (0.5, 31.5, 29, 15), "constraints": (0.5, 14.5, 29, 15),
-         "mixing": (70.5, 31.5, 29, 15), "observations": (70.5, 14.5, 29, 15), "emissions": (19.5, 0, 29.5, 13), "deposition": (51, 0, 29.5, 13)}
+         "mixing": (70.5, 31.5, 29, 15), "observations": (70.5, 14.5, 29, 15), "emissions": (4.5, 0, 29, 13), "aerosol": (35.5, 0, 29, 13),
+         "deposition": (66.5, 0, 29, 13)}
 _CENTRE = (34.5, 18.5, 31, 25)
 _ARROW = {"photolysis": ((50, 47.5), (50, 43.5), "->"), "conditions": ((29.5, 39), (34.5, 37), "->"), "constraints": ((29.5, 24), (34.5, 27), "->"),
-          "mixing": ((70.5, 39), (65.5, 37), "<->"), "observations": ((65.5, 27), (70.5, 24), "->"), "emissions": ((43, 13), (43, 18.5), "->"),
-          "deposition": ((57, 18.5), (57, 13), "->")}
+          "mixing": ((70.5, 39), (65.5, 37), "<->"), "observations": ((65.5, 27), (70.5, 24), "->"), "emissions": ((30, 13), (39.5, 18.5), "->"),
+          "aerosol": ((50, 13), (50, 18.5), "<->"), "deposition": ((60.5, 18.5), (70, 13), "->")}
 _ASPECT = 1.16                               # y units per x unit of the same length on paper
 
 

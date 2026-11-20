@@ -122,6 +122,7 @@ class PartitioningBox(QGroupBox):
         super().__init__("Gas–particle–wall partitioning", parent)
         self._b = None
         self.context = lambda: ("", 298.15, "")
+        self.field_mode = False                           # a field case: no chamber walls, the aerosol is an input of the case
         lay = QVBoxLayout(self)
         top = QHBoxLayout()
         self.enable = QCheckBox("Partition the condensable species between gas, particles and the chamber wall")
@@ -438,6 +439,17 @@ class PartitioningBox(QGroupBox):
             for c, txt in enumerate(row):
                 self.params.setItem(r, c, QTableWidgetItem(txt))
         self.params.setFixedHeight(self.params.horizontalHeader().height() + sum(self.params.rowHeight(i) for i in range(len(rows))) + 4)
+        if self.field_mode:
+            self.setTitle("Gas–particle partitioning" + ("" if live else " (pending)"))
+            self.enable.setText("Partition the condensable species between gas and the ambient aerosol")
+            for w in (self.pbox, self.diagram, self.params):
+                w.setVisible(False)
+            self.status.setText(
+                (f"Active for {name}: {len(v['species'])} condensable species. " if gecko else
+                 f"Available for {name} with chosen compounds, with C* from the method under 'Scheme and values'. Off unless ticked. " if live else
+                 f"Pending for {name}: a lumped mechanism has no structure per species, so no C* can be computed for it yet. ")
+                + ("A field case has no chamber walls: the wall terms are zero. The condensation sink and the organic aerosol come from "
+                   "the input table (columns CS, OA) or from the Mixing and deposition step." if live else ""))
         sp = sorted(v["species"], key=lambda s: s[1])
         self.species_label.setText(f"Condensable species of {name}, lowest C* first ({len(sp)})" if gecko else
                                    f"Partitioning species for the chosen compounds, lowest C* first ({len(sp)})" if pv.get("values") else

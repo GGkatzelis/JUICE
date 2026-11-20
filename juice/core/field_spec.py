@@ -13,6 +13,8 @@ The table
     time         as in measured_inputs: 'YYYY-MM-DD HH:MM' (UTC), 'HH:MM' or hours of day (these two
                  need the case's date), unix seconds, seconds since 2000-01-01
     conditions   T  p  H2O or RH  sz  lat  lon  h  kdil
+    aerosol      CS  condensation sink of the ambient aerosol, 1/s;  OA  organic aerosol mass, ug/m3
+                 (used when the chemistry partitions between gas and particles; there are no walls)
     photolysis   any jNO2-style column: j<name> or J_<name>, 1/s.  The names belong to the mechanism
     E_<species>  emission     unit in brackets, e.g. "E_NO [mol/s]"; else the case's default unit
     B_<species>  background   mixing ratio the air is diluted towards ("B_O3 [ppb]"; ppb by default)
@@ -69,11 +71,14 @@ DILUTION_SOURCES = {
 STEP_CASE, STEP_CHEMISTRY, STEP_SOURCES, STEP_MIXING, STEP_RUN = range(5)
 DEFAULT_DILUTION = {"constrained": "none", "plume": "table", "lagrangian": "pbl"}
 # the inputs of a case whose origin can be stated in `FieldSpec.sources` (e.g. "emissions": "FIVE-VCP inventory, 4 km")
-SOURCE_KEYS = ("conditions", "photolysis", "emissions", "mixing", "constraints", "deposition", "observations", "trajectory")
-# inputs of the table a case can switch off (`FieldSpec.off`): their columns are then ignored, as if they were not there
+SOURCE_KEYS = ("conditions", "photolysis", "emissions", "mixing", "constraints", "deposition", "aerosol", "observations", "trajectory")
+OA_DEFAULT = 0.5       # ug/m3: organic aerosol the vapours partition into when the case gives none (the scheme's own floor)
+# inputs a case can switch off (`FieldSpec.off`): table columns are then ignored as if they were not there, and
+# "deposition" leaves out the velocities and lifetimes of the case without deleting them
 SWITCHES = {"photolysis": "measured photolysis (j columns)", "emissions": "emissions (E_ columns)",
             "background": "background air (B_ columns)", "constraints": "species held to measurements (C_ columns)",
-            "observations": "observations for comparison (O_ columns)"}
+            "observations": "observations for comparison (O_ columns)",
+            "deposition": "deposition (the velocities and lifetimes of the case)"}
 
 NA = 6.02214076e23
 # Air density in the same form as the DENSITY function of the scenario files: M = p[hPa] / (T * 1.379e-19).
@@ -100,6 +105,8 @@ _CONDITIONS = {
     "kdil": (["kdil", "k_dil", "dilution_rate", "kdil_s-1"], "1/s"),
     "lat":  (["lat", "latitude"], "deg"),
     "lon":  (["lon", "long", "longitude"], "deg"),
+    "cs":   (["cs", "condensation_sink", "cs_s-1", "kcond"], "1/s"),
+    "oa":   (["oa", "coa", "org", "organic_aerosol", "oa_ug_m3"], "ug/m3"),
 }
 _FROM_MEASURED = ("t", "p", "H2O", "RH", "sz")
 _J_STANDARD = {a: k[1:] for k, (al, _u, kind) in mi.COLUMNS.items() if kind == "photolysis" for a in al}
@@ -134,10 +141,16 @@ class FieldSpec:
     initials: Dict[str, float] = field(default_factory=dict)    # ppb
     deposition_velocity_cm_s: Dict[str, float] = field(default_factory=dict)   # loss = v / h
     deposition_lifetime_h: Dict[str, float] = field(default_factory=dict)      # loss = 1 / lifetime
+    # ambient aerosol, used when the chemistry partitions between gas and particles (no walls in the field)
+    condensation_sink_s1: float = 0.0        # when the table has no CS column
+    organic_aerosol_ug_m3: float = 0.0       # when the table has no OA column; 0 = OA_DEFAULT
+    particle_lifetime_h: float = 0.0         # deposition of the condensed species; 0 = none
     emission_scale: Dict[str, float] = field(default_factory=dict)  # species, NOX, VOC or ALL → factor on the E_ columns
     sources: Dict[str, str] = field(default_factory=dict)    # where each input comes from, in words (SOURCE_KEYS): shown in the
                                                              # schematic of the case (field_schematic), not used by the run
-    off: List[str] = field(default_factory=list)             # keys of SWITCHES: inputs of the table this case does not use
+    off: List[str] = field(default_factory=list)             # keys of SWITCHES: inputs this case does not use
+    held: Dict[str, bool] = field(default_factory=dict)      # per measured species, against its column: False = a C_ column is
+                                                             # only compared (not held); True = an O_ column is held
     version: int = SPEC_VERSION
 
 
@@ -154,6 +167,8 @@ class FieldTable:
     observations: Dict[str, np.ndarray] = field(default_factory=dict) # species → ppb, measured but not held
     ignored: List[str] = field(default_factory=list)
     switched_off: Dict[str, List[str]] = field(default_factory=dict)  # SWITCHES key → names of the columns the case leaves out
+    released: List[str] = field(default_factory=list)                 # C_ columns the case only compares (FieldSpec.held False)
+    held_by_choice: List[str] = field(default_factory=list)           # O_ columns the case holds (FieldSpec.held True)
     notes: List[str] = field(default_factory=list)
     problems: List[Tuple[int, str]] = field(default_factory=list)     # (step, reading error found column by column)
     unreadable: Dict[str, int] = field(default_factory=dict)          # column → cells that were not numbers
@@ -223,7 +238,8 @@ def load_spec(path: str) -> FieldSpec:
     known = {f.name for f in fields(FieldSpec)}
     clean = {k: v for k, v in data.items() if k in known}
     try:
-        for k in ("area_km2", "k_dil_per_h", "k_collapse_per_h", "spin_up_days", "generic_lifetime_h"):
+        for k in ("area_km2", "k_dil_per_h", "k_collapse_per_h", "spin_up_days", "generic_lifetime_h", "condensation_sink_s1",
+                  "organic_aerosol_ug_m3", "particle_lifetime_h"):
             if k in clean:
                 clean[k] = float(clean[k])
         for k in ("lat", "lon"):
@@ -236,6 +252,8 @@ def load_spec(path: str) -> FieldSpec:
                 clean[k] = {str(a).upper(): float(b) for a, b in dict(clean[k]).items()}
         if "chemistry" in clean:
             clean["chemistry"] = dict(clean["chemistry"])
+        if "held" in clean:
+            clean["held"] = {str(a).upper(): bool(b) for a, b in dict(clean["held"]).items()}
         if "off" in clean:
             clean["off"] = [k for k in SWITCHES if k in {str(x).lower() for x in clean["off"]}]
         if "sources" in clean:
@@ -334,6 +352,38 @@ def chemistry_chosen(spec: FieldSpec) -> bool:
         return bool(c.get("base_mechanism")) and _mreg.is_complete(c["base_mechanism"])
     except Exception:
         return False
+
+
+def partitioning_on(spec: FieldSpec) -> bool:
+    """Does the chemistry of the case partition species between gas and particles?  A GECKO-A base brings its
+    scheme (on unless switched off); for the MCM with chosen compounds it is on when asked for; a lumped
+    mechanism has none."""
+    c = spec.chemistry or {}
+    base = c.get("base_mechanism", "")
+    try:
+        from juice.chemistry import mechanism_registry as _mreg
+        if base and _mreg.is_gecko(base):
+            return bool(c.get("gecko_partitioning", True)) and "soa" in _mreg.base(base).files
+        if base and _mreg.is_lumped(base):
+            return False
+    except Exception:
+        return False
+    return bool(c.get("partitioning")) and bool(c.get("precursors") or c.get("inorganic_only"))
+
+
+def condensation_sink(table: "FieldTable", spec: FieldSpec) -> np.ndarray:
+    """Condensation sink of the ambient aerosol in s-1 per row: the CS column, else the value of the case."""
+    if "cs" in table.conditions:
+        return table.conditions["cs"].copy()
+    return np.full(table.n, float(spec.condensation_sink_s1))
+
+
+def organic_aerosol(table: "FieldTable", spec: FieldSpec) -> np.ndarray:
+    """Organic aerosol mass the vapours partition into, ug m-3 per row (the model adds what it forms): the OA
+    column, else the value of the case, else OA_DEFAULT."""
+    if "oa" in table.conditions:
+        return table.conditions["oa"].copy()
+    return np.full(table.n, float(spec.organic_aerosol_ug_m3) or OA_DEFAULT)
 
 
 def chemistry_label(spec: FieldSpec) -> str:
@@ -553,8 +603,9 @@ def dilution_rate(table: FieldTable, spec: FieldSpec) -> np.ndarray:
 
 def deposition_rates(table: FieldTable, spec: FieldSpec) -> Dict[str, np.ndarray]:
     """First-order deposition in s-1 per row and species.  Assumes a table `check` has accepted."""
-    out = {sp: np.full(table.n, 1.0 / (tau * 3600.0)) for sp, tau in spec.deposition_lifetime_h.items()}
-    for sp, v in spec.deposition_velocity_cm_s.items():
+    velocity, lifetime = deposition_of(spec)
+    out = {sp: np.full(table.n, 1.0 / (tau * 3600.0)) for sp, tau in lifetime.items()}
+    for sp, v in velocity.items():
         out[sp] = v / (table.conditions["h"] * 100.0)
     return out
 
@@ -708,7 +759,7 @@ def _check_table(t: FieldTable, spec: FieldSpec, r: Report) -> None:
                       else "emission scale: no emitted species matches " + ", ".join(spec.emission_scale))
 
     r.at(STEP_MIXING)
-    if spec.deposition_velocity_cm_s and "h" not in c:
+    if deposition_of(spec)[0] and "h" not in c:
         r.err("deposition velocities need the boundary-layer height column h; give lifetimes instead if there is none")
     d = spec.dilution
     if d == "pbl" and "h" not in c:
@@ -767,11 +818,40 @@ def check(spec: FieldSpec) -> Tuple[Optional[FieldTable], Report]:
     _check_table(t, spec, r)
     for key, names in t.switched_off.items():
         r.info.append(f"switched off in this case: {SWITCHES[key]}, {len(names)} column(s) ignored")
+    if "deposition" in (spec.off or []) and (spec.deposition_velocity_cm_s or spec.deposition_lifetime_h):
+        r.info.append("switched off in this case: deposition")
+    if t.released:
+        r.info.append("measured but not held by choice (compared only): " + ", ".join(t.released))
+    if partitioning_on(spec):
+        cs, oa = condensation_sink(t, spec), organic_aerosol(t, spec)
+        for v, label in ((cs, "condensation sink CS"), (oa, "organic aerosol OA")):
+            if not np.isfinite(v).all() or (v < 0).any():
+                r.err(f"the {label} has empty or negative values", STEP_MIXING)
+        if spec.particle_lifetime_h < 0:
+            r.err("the particle lifetime cannot be negative", STEP_MIXING)
+        if np.isfinite(cs).all() and not (cs > 0).any():
+            r.warn("gas–particle partitioning is on but there is no condensation sink (a CS column, or the value on this step): "
+                   "nothing will condense", STEP_MIXING)
+        r.info.append("gas–particle partitioning on ambient aerosol, no walls: condensation sink from "
+                      + ("the CS column" if "cs" in t.conditions else "the case") + ", organic aerosol from "
+                      + ("the OA column" if "oa" in t.conditions else "the case" if spec.organic_aerosol_ug_m3 else f"the default {OA_DEFAULT:g} ug/m3"))
+    if t.held_by_choice:
+        r.info.append("held by choice (O_ columns): " + ", ".join(t.held_by_choice))
     return t, r
 
 
 def apply_switches(table: FieldTable, spec: FieldSpec) -> None:
-    """Drop the inputs the case has switched off (`spec.off`) from the table, remembering their names."""
+    """Apply the choices of the case to the table: measured species held or only compared against their column
+    (`spec.held`), then the inputs switched off (`spec.off`) dropped, remembering their names."""
+    by_upper = lambda d: {k.upper(): k for k in d}
+    for sp, hold in (spec.held or {}).items():
+        c, o = by_upper(table.constraints), by_upper(table.observations)
+        if not hold and sp in c:
+            table.observations.setdefault(c[sp], table.constraints[c[sp]]); del table.constraints[c[sp]]
+            table.released.append(c[sp])
+        elif hold and sp in o and sp not in c:
+            table.constraints[o[sp]] = table.observations.pop(o[sp])
+            table.held_by_choice.append(o[sp])
     groups = {"photolysis": table.photolysis, "emissions": table.emissions, "background": table.background,
               "constraints": table.constraints, "observations": table.observations}
     for key in spec.off or []:
@@ -781,6 +861,13 @@ def apply_switches(table: FieldTable, spec: FieldSpec) -> None:
             d.clear()
             if key == "emissions":
                 table.emission_units.clear()
+
+
+def deposition_of(spec: FieldSpec) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """(velocities cm/s, lifetimes h) the run uses: empty when deposition is switched off in the case."""
+    if "deposition" in (spec.off or []):
+        return {}, {}
+    return dict(spec.deposition_velocity_cm_s), dict(spec.deposition_lifetime_h)
 
 
 # ── template ─────────────────────────────────────────────────────────────────────────────────────

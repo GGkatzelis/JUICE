@@ -45,6 +45,9 @@
     "HNO3": 2.0
   },
   "deposition_lifetime_h": {},
+  "condensation_sink_s1": 0.0,
+  "organic_aerosol_ug_m3": 0.0,
+  "particle_lifetime_h": 0.0,
   "emission_scale": {},
   "sources": {
     "conditions": "invented for this example",
@@ -53,7 +56,10 @@
     "mixing": "invented for this example",
     "constraints": "invented for this example",
     "deposition": "invented for this example",
+    "aerosol": "invented for this example",
     "observations": "invented for this example"
   },
+  "off": [],
+  "held": {},
   "version": 1
 }

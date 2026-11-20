@@ -96,8 +96,12 @@ def build(name="site_day", lifetime_h=6.0):
     # STEP 3 — EMISSIONS AND CONSTRAINTS
     # ════════════════════════════════════════════════════════════════════════════════════════════════
     # Both come from the table: E_ columns are emissions, C_ columns are held. Here: C_NO, C_NO2, C_O3, C_CO,
-    # C_C5H8, C_TOLUENE (held) and O_HCHO (compared only). To stop holding a species, rename its column
-    # C_ -> O_; it is then computed and compared.
+    # C_C5H8, C_TOLUENE (held) and O_HCHO (compared only). To stop holding a species without touching the
+    # table: case.held = {"NO": False} (computed and compared); to hold an O_ column: case.held = {"HCHO": True}.
+    case.held = {}
+    # Inputs of the table this case leaves out: any of "photolysis", "emissions", "background", "constraints",
+    # "observations", and "deposition" (the entries of step 4 stay, the run has none).
+    case.off = []
     case.default_emission_unit = "molec/cm2/s"   # for E_ columns without [unit]: ppb/s, molec/cm3/s, molec/cm2/s,
                                                  # mol/km2/s, mol/km2/h, mol/s, molec/s
     case.area_km2 = 0.0                # footprint A for the mol/s and molec/s units (emission / (h * A))
@@ -119,8 +123,21 @@ def build(name="site_day", lifetime_h=6.0):
     # Deposition: a velocity (loss v/h, needs column h) or a lifetime per species.
     case.deposition_velocity_cm_s = {}           # e.g. {"HNO3": 2.0, "H2O2": 1.0}
     case.deposition_lifetime_h = {}              # e.g. {"PAN": 24.0}
+    # Ambient aerosol, used only when the chemistry partitions between gas and particles (there are no chamber
+    # walls in a field case). Table columns CS [1/s] and OA [ug/m3] take precedence over these values.
+    case.condensation_sink_s1 = 0.0              # e.g. 5e-3
+    case.organic_aerosol_ug_m3 = 0.0             # the organic aerosol the vapours partition into; 0: 0.5 ug/m3
+    case.particle_lifetime_h = 0.0               # deposition of the condensed species; 0: none
     # Start values of species that are not held, ppb (everything else starts at 0).
     case.initials = {}                           # e.g. {"PAN": 0.5}
+
+    # ══════════════════════════════════════════════════════════════════════════════════════════════════════
+    # WHERE THE INPUTS COME FROM
+    # ══════════════════════════════════════════════════════════════════════════════════════════════════════
+    # Free text per input (an inventory, an instrument, a model). It is shown in the schematic of the case
+    # (<name>.schematic.png next to the run, and the first step of the field window); the run does not use it.
+    case.sources = {k: "invented for this example" for k in ("conditions", "photolysis", "emissions", "mixing", "constraints",
+                                                             "deposition", "aerosol", "observations")}
     return case
 
 

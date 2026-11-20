@@ -493,7 +493,9 @@ _FIELD_LAYOUT = {
         ("chemistry", None),
     ],
     "sources": [
-        ("# Held species are the C_ columns, observed-only species the O_ columns: nothing to set here.", None),
+        ("# Held species are the C_ columns, observed-only species the O_ columns.", None),
+        ("held", "against the column, per species: {species: False} compares a C_ column only, {species: True} holds an O_ column"),
+        ("off", "inputs this case leaves out: " + ", ".join(fs.SWITCHES)),
         ("default_emission_unit", "unit of E_ columns without [unit]: ppb/s, molec/cm3/s, molec/cm2/s, mol/km2/s, mol/km2/h, mol/s, molec/s"),
         ("area_km2", "footprint A of E/(h*A); needed by mol/s and molec/s"),
         ("emission_scale", "factor on the E_ columns: {species | 'NOX' | 'VOC' | 'ALL': factor}"),
@@ -506,6 +508,10 @@ _FIELD_LAYOUT = {
         ("tracer", "dilution 'tracer': a species with a C_ column"),
         ("deposition_velocity_cm_s", "{species: cm/s}; loss = v/h"),
         ("deposition_lifetime_h", "{species: h}; loss = 1/lifetime"),
+        ("# Ambient aerosol, used when the chemistry partitions between gas and particles (no walls in the field).", None),
+        ("condensation_sink_s1", "condensation sink, 1/s, when the table has no CS column"),
+        ("organic_aerosol_ug_m3", "organic aerosol the vapours partition into, ug/m3, when the table has no OA column (0: 0.5)"),
+        ("particle_lifetime_h", "deposition lifetime of the condensed species, h (0: none)"),
         ("initials", "ppb at the start: {species: ppb}"),
     ],
 }

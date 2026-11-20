@@ -16,6 +16,8 @@ EASY statements, so FACSIMILE can run the same files:
     held species   C_X = INPUT(C_X)     X = CONST(C_X*1e-9*M)                     column in ppb
                    (idl_parser / scenario_runner hold such a species per ENZ row, as FACSIMILE does)
     deposition     X -->   k = CONST(v/(HPBL*100.))  or  CONST(1/tau)
+    partitioning   gas <-> particles only: the scheme's wall terms are set to zero (no chamber), the condensation
+                   sink and the organic aerosol the vapours partition into come from the table (CS, OA) or the case
     spin-up        constrained site: the table is repeated before the start, period = whole days
     observations   O_ and C_ columns go to <day>.observations.csv next to the run (the results viewer
                    shows them with the model); skill_table() gives bias, NMB, RMSE and R² per species
@@ -41,7 +43,8 @@ from juice.chemistry import mechanism_registry as mreg
 from juice.gui import experiment_plots as _ep
 from juice.core.easy_builder import J_INPUTS, MeasuredRow, default_form, render_form
 from juice.core.enz_builder import compute_solar_zenith, write_enz
-from juice.core.experiment_spec import CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME, is_gecko_base, gecko_form, lumped_form
+from juice.core.experiment_spec import (CLEAR_SKY_JNO2, ExperimentSpec, ensure_mechanism, J_ENZ_NAME, is_gecko_base, gecko_form, lumped_form,
+                                        partitioning_kind, partitioning_lines, soa_include_name)
 from juice.chemistry.lamp_photolysis import MEASURED_J
 
 HERE = _JUICE_ROOT
@@ -49,6 +52,7 @@ HERE = _JUICE_ROOT
 J_TABLE_TO_EASY = {"NO2": "jno2", "O1D": "jo1d", "HONO": "jhono", "H2O2": "jh2o2", "HCHO_r": "jhcho_r", "HCHO_m": "jhcho_m",
                    "HCHO_R": "jhcho_r", "HCHO_M": "jhcho_m"}
 COL_KDIL, COL_HPBL = "KDIL", "HPBL"
+COL_CS, COL_OA = "CS", "OA_BG"
 
 
 # ── time grid and interpolation ──────────────────────────────────────────────────────────────────
@@ -139,6 +143,11 @@ def enz_columns(spec: fs.FieldSpec, table: fs.FieldTable) -> Tuple[np.ndarray, D
     cols[COL_KDIL] = _step_hold(tt, kd, src) if spec.dilution in ("pbl", "tracer") else lin("kdil", kd)
     if "h" in c:
         cols[COL_HPBL] = lin("h", c["h"])
+    if fs.partitioning_on(spec):                      # ambient aerosol, only when the table carries it (else constants in the EASY)
+        if "cs" in c:
+            cols[COL_CS] = np.maximum(lin("CS", c["cs"]), 0.0)
+        if "oa" in c:
+            cols[COL_OA] = np.maximum(lin("OA", c["oa"]), 0.01)
     for sp, rate in fs.emission_rates(table, spec).items():
         cols[f"QE_{sp}"] = _step_hold(tt, rate, src)
     for sp, v in table.background.items():
@@ -276,16 +285,60 @@ def field_statements(spec: fs.FieldSpec, table: fs.FieldTable, cols: Dict[str, n
     if spec.emission_scale:
         out.append("; emission scale factors of this run: " + ", ".join(f"{k} × {v:g}" for k, v in spec.emission_scale.items())
                    + " (applied to the QE_ columns)")
-    if spec.deposition_velocity_cm_s or spec.deposition_lifetime_h:
+    velocity, lifetime = fs.deposition_of(spec)
+    if velocity or lifetime:
         out.append("; deposition as a first-order loss")
-        for sp, v in spec.deposition_velocity_cm_s.items():
+        for sp, v in velocity.items():
             out += [f"{sp} -->", f"k[{sp} -->] = CONST({v:g}/({COL_HPBL}*100.))   ; {v:g} cm/s over the boundary layer"]
-        for sp, tau in spec.deposition_lifetime_h.items():
+        for sp, tau in lifetime.items():
             out += [f"{sp} -->", f"k[{sp} -->] = CONST(1./{tau * 3600.0:g})   ; lifetime {tau:g} h"]
     return out
 
 
-def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, cols: Dict[str, np.ndarray]) -> str:
+def soa_include_path(chem: ExperimentSpec, out_dir: str) -> str:
+    """The partitioning include of the run ('' without partitioning): GECKO-A's own, or the one written for the MCM subset."""
+    kind = partitioning_kind(chem)
+    if kind == "gecko":
+        return mreg.base(chem.base_mechanism).path("soa")
+    return os.path.join(out_dir, "chemistry", soa_include_name(chem)) if kind == "computed" else ""
+
+
+def aerosol_statements(spec: fs.FieldSpec, cols: Dict[str, np.ndarray], soa_path: str) -> List[str]:
+    """Partitioning in the field, written after the scheme's include so that it replaces the chamber values: no wall,
+    condensation on the ambient aerosol, the organic aerosol of the air as the mass the vapours partition into."""
+    import re
+    k_dep = 1.0 / (spec.particle_lifetime_h * 3600.0) if spec.particle_lifetime_h > 0 else 0.0
+    out = ["; AEROSOL (field case): vapours condense on the ambient aerosol; there are no chamber walls",
+           "KFWALL = CONST(0.)   ; no gas-to-wall deposition, so the WALL_ species stay empty",
+           f"KPWALL = CONST({k_dep:.4E})   ; deposition of the condensed species"
+           + (f", lifetime {spec.particle_lifetime_h:g} h (they collect in WALL_PL_)" if k_dep else ": none")]
+    if COL_CS in cols:
+        out += [f"CS_in = INPUT({COL_CS})", "KCOND = CONST(CS_in)   ; condensation sink of the ambient aerosol, 1/s (table column CS)"]
+    else:
+        out.append(f"KCOND = CONST({spec.condensation_sink_s1:.4E})   ; condensation sink of the ambient aerosol, 1/s (value of the case)")
+    oa = "OA_in" if COL_OA in cols else f"{(spec.organic_aerosol_ug_m3 or fs.OA_DEFAULT):g}"
+    if COL_OA in cols:
+        out.append(f"OA_in = INPUT({COL_OA})   ; organic aerosol of the air, ug/m3 (table column OA)")
+    coa: List[str] = []                              # the include's COA statement (it may continue over lines ending in $)
+    try:
+        with open(soa_path, encoding="latin-1") as fh:
+            for line in fh.read().splitlines():
+                if coa or line.startswith("COA = CONST("):
+                    coa.append(line.rstrip())
+                    if not line.rstrip().endswith("$"):
+                        break
+    except OSError:
+        pass
+    first, n = re.subn(r"^COA = CONST\(\s*[-+0-9.eE]+\s*\+", f"COA = CONST( {oa} +", coa[0]) if coa else ("", 0)
+    if n:
+        out += ["; absorbing mass: the organic aerosol of the air + what the model forms (the include's COA with its start value replaced)",
+                first] + coa[1:]
+    else:
+        out.append("; the organic aerosol of the air could not be set (COA line of the partitioning include not found): its own start value is used")
+    return out
+
+
+def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, cols: Dict[str, np.ndarray], soa_path: str = "") -> str:
     f = default_form()
     f.title = f"{spec.name}: {fs.RUN_TYPES[spec.run_type]}" + (f", {spec.site}" if spec.site else "")
     f.header_comments = [f"JUICE field case {spec.name} ({fs.RUN_TYPES[spec.run_type]}), written by field_scenario.py",
@@ -332,6 +385,13 @@ def easy_text(spec: fs.FieldSpec, table: fs.FieldTable, chem: ExperimentSpec, co
         gecko_form(f, chem)
     elif mreg.is_lumped(chem.base_mechanism):        # a lumped mechanism (F0AM library): its includes and J<n>/JN<k>
         lumped_form(f, chem)
+    kind = partitioning_kind(chem)
+    if kind:                                         # the chamber's particle and wall lines do not apply to the open air
+        chamber_lines = set(partitioning_lines(chem))
+        f.extra_statements = [l for l in f.extra_statements if l not in chamber_lines]
+        if kind == "computed" and soa_include_name(chem) not in f.includes_other:
+            f.includes_other.append(soa_include_name(chem))
+        f.extra_statements += aerosol_statements(spec, cols, soa_path)
     try:
         f.extra_statements += mreg.provenance_lines(chem.base_mechanism, list(chem.addons))
     except Exception as e:
@@ -357,7 +417,7 @@ def write_case(spec: fs.FieldSpec, table: fs.FieldTable, out_dir: str) -> dict:
     write_enz(enz, grid, cols)
     easy = os.path.join(out_dir, f"{spec.name}.easy")
     with open(easy, "w", encoding="latin-1", errors="replace", newline="\n") as fh:
-        fh.write(easy_text(spec, table, chem, cols))
+        fh.write(easy_text(spec, table, chem, cols, soa_include_path(chem, out_dir)))
     res.update({"enz": enz, "easy": easy, "notes": notes, "grid": grid, "cols": cols,
                 "spec_path": fs.save_spec(spec, os.path.join(out_dir, spec.name + fs.SPEC_SUFFIX)),
                 "observations": write_observations(out_dir, spec, table, grid)})

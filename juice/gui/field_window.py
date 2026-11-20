@@ -50,7 +50,7 @@ RUN_STEP = fs.STEP_RUN
 CASE_FILTER = "Field case (*.field.json)"
 TABLE_FILTER = "Input table (*.csv *.txt *.tsv *.xlsx *.xls);;All files (*)"
 CHEM_KEYS = ("base_mechanism", "addons", "precursors", "mechanism_stem", "inorganic_only", "include_dirs", "reaction_adjustments",
-             "gecko_core", "gecko_partitioning")
+             "gecko_core", "gecko_partitioning", "partitioning", "volatility_method", "partition_cstar_max")
 RUN_TEXT = {
     "constrained": "A measurement site. Measured species are held to the data; radicals and products run free. "
                    "No emissions or transport are needed.",
@@ -65,7 +65,7 @@ NEEDS = {
     "lagrangian": ["T, p and H2O or RH, and lat and lon per row", "the boundary-layer height column h",
                    "one E_<species> column per emitted species", "B_<species> columns for the air it mixes with"],
 }
-CONDITION_UNITS = {"t": "K", "p": "hPa", "H2O": "vol-%", "RH": "%", "sz": "deg", "lat": "deg", "lon": "deg", "h": "m", "kdil": "1/s"}
+CONDITION_UNITS = {"t": "K", "p": "hPa", "H2O": "vol-%", "RH": "%", "sz": "deg", "lat": "deg", "lon": "deg", "h": "m", "kdil": "1/s", "cs": "1/s", "oa": "µg/m³"}
 COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000", "#F0E442"]   # fixed order, colour-blind safe
 
 
@@ -194,7 +194,8 @@ class FieldSchematicView(QLabel):
     step where that input is defined; a click on the box opens the chemistry."""
 
     STEP = {"conditions": fs.STEP_CASE, "photolysis": fs.STEP_CASE, "centre": fs.STEP_CHEMISTRY, "emissions": fs.STEP_SOURCES,
-            "constraints": fs.STEP_SOURCES, "observations": fs.STEP_SOURCES, "mixing": fs.STEP_MIXING, "deposition": fs.STEP_MIXING}
+            "constraints": fs.STEP_SOURCES, "observations": fs.STEP_SOURCES, "mixing": fs.STEP_MIXING, "deposition": fs.STEP_MIXING,
+            "aerosol": fs.STEP_MIXING}
 
     def __init__(self, win: "FieldWindow"):
         super().__init__()
@@ -288,7 +289,7 @@ class FieldReview(QWidget):
         out = [f"Chemistry: {fs.chemistry_label(spec)}"]
         out += [f"Input table: {i}" for i in rep.info]
         out.append(f"Dilution: {fs.DILUTION_SOURCES.get(spec.dilution, spec.dilution)}")
-        n_dep = len(spec.deposition_velocity_cm_s) + len(spec.deposition_lifetime_h)
+        n_dep = sum(len(d) for d in fs.deposition_of(spec))
         out.append(f"Deposition: {n_dep} species" if n_dep else "Deposition: none")
         if spec.run_type == "constrained":
             out.append(f"Species not held: lifetime {spec.generic_lifetime_h:g} h; spin-up {spec.spin_up_days:g} days")
@@ -666,17 +667,19 @@ class FieldWindow(QMainWindow):
         g4 = QGroupBox("The model at a glance"); gv = QVBoxLayout(g4)
         gv.addWidget(_info("What goes into the box and how each input is defined, drawn from your entries. Grey, dashed cards are "
                            "not used. Click a card to open the step where it is defined."))
-        sw = QGridLayout(); sw.addWidget(QLabel("Use from the table:"), 0, 0); self.switches = {}
+        sw = QGridLayout(); sw.addWidget(QLabel("Use in this case:"), 0, 0); self.switches = {}
         for i, (key, label) in enumerate((("photolysis", "measured photolysis"), ("emissions", "emissions"), ("background", "background air"),
-                                          ("constraints", "held species"), ("observations", "observations"))):
-            c = QCheckBox(label); c.setChecked(True); c.setToolTip(f"Unticked: {fs.SWITCHES[key]} are ignored, as if the table did not have them.")
+                                          ("constraints", "held species"), ("observations", "observations"), ("deposition", "deposition"))):
+            c = QCheckBox(label); c.setChecked(True)
+            c.setToolTip("Unticked: the deposition set on the Mixing and deposition step is left out of the run (the entries stay)." if key == "deposition"
+                         else f"Unticked: {fs.SWITCHES[key]} are ignored, as if the table did not have them.")
             self.switches[key] = c; sw.addWidget(c, i // 3, 1 + i % 3)
         sw.setColumnStretch(4, 1); gv.addLayout(sw)
         self.schematic = FieldSchematicView(self); gv.addWidget(self.schematic)
         gv.addWidget(_info("Where each input comes from (an inventory, an instrument, a model): shown in the picture, not used by the run."))
         grid = QGridLayout(); self.source_edits = {}
         for i, (key, label) in enumerate((("conditions", "Meteorology"), ("photolysis", "Sunlight"), ("emissions", "Emissions"),
-                                          ("mixing", "Background air"), ("constraints", "Held species"), ("deposition", "Deposition"),
+                                          ("mixing", "Background air"), ("constraints", "Held species"), ("deposition", "Deposition"), ("aerosol", "Aerosol"),
                                           ("observations", "Observations"), ("trajectory", "Path or trajectory"))):
             e = self._line("source, e.g. an inventory or an instrument"); self.source_edits[key] = e
             grid.addWidget(QLabel(label), i // 2, 2 * (i % 2)); grid.addWidget(e, i // 2, 2 * (i % 2) + 1)
@@ -692,6 +695,9 @@ class FieldWindow(QMainWindow):
         page.setSubTitle("Which chemistry does this case use? The matching part of the MCM is extracted in the background, "
                          "or pick an existing mechanism include set, which may be any mechanism written as include files.")
         page.mode_inorganic.setToolTip("NOx, O3, HOx, CO, SO2 chemistry and photolysis only.")
+        page.partition.field_mode = True               # no chamber walls, the aerosol comes from the case
+        page.partition.spec_provider = lambda: fsc.chemistry_spec(self.spec_from_form()[0])
+        page.partition.refresh()
         return page
 
     def _sources_page(self) -> List[QWidget]:
@@ -704,13 +710,32 @@ class FieldWindow(QMainWindow):
         v.addWidget(_info("Emissions come from the E_<species> columns of the input table."))
         self.held_box = QGroupBox("Held to measurements"); v = QVBoxLayout(self.held_box)
         self.held_table = _readonly_table(["Species", "Min [ppb]", "Max [ppb]", "Empty rows"]); v.addWidget(self.held_table)
-        v.addWidget(_info("Species held come from the C_<species> columns of the input table. "
-                          "Leave out a measured product to compare the model with it afterwards."))
+        v.addWidget(_info("Ticked species are held to the measurement at every step. They come from the C_<species> columns of the "
+                          "input table. Untick one to let the model calculate it and compare it with the measurement instead."))
         self.obs_box = QGroupBox("Observed for comparison"); v = QVBoxLayout(self.obs_box)
         self.obs_table = _readonly_table(["Species", "Min [ppb]", "Max [ppb]", "Values"]); v.addWidget(self.obs_table)
-        v.addWidget(_info("O_<species> columns are not used by the model. They are written next to the run for the results viewer, "
-                          "and the Run step reports bias, NMB, RMSE and R² against them."))
+        v.addWidget(_info("Measured species the model does not use (O_<species> columns, and species you unticked above). They are "
+                          "written next to the run for the results viewer, and the Run step reports bias, NMB, RMSE and R² against "
+                          "them. Tick one to hold the model to it."))
+        self._held: Dict[str, bool] = {}
+        self._filling = False
+        for t in (self.held_table, self.obs_table):
+            t.itemChanged.connect(self._hold_toggled)
         return [self.emit_box, self.held_box, self.obs_box]
+
+    def _hold_toggled(self, item: QTableWidgetItem):
+        """A tick in the first column of the held or observed table: hold that species, or only compare it."""
+        if self._filling or item.column() != 0 or self.case[1] is None:
+            return
+        sp, hold, t = item.text().upper(), item.checkState() == Qt.CheckState.Checked, self.case[1]
+        was_held = item.tableWidget() is self.held_table
+        if hold == was_held:
+            return
+        if (was_held and sp in {x.upper() for x in t.held_by_choice}) or (not was_held and sp in {x.upper() for x in t.released}):
+            self._held.pop(sp, None)                      # back to what the column says
+        else:
+            self._held[sp] = hold
+        self._changed()
 
     def _mixing_page(self) -> List[QWidget]:
         g = QGroupBox("Dilution and background"); v = QVBoxLayout(g); self.mix_form = f = QFormLayout()
@@ -729,6 +754,12 @@ class FieldWindow(QMainWindow):
         self.deposition = _table(["Species", "Velocity [cm/s]", "or lifetime [h]"]); self.deposition.setMinimumHeight(110); v.addWidget(self.deposition)
         v.addLayout(self._row_buttons(self.deposition))
         v.addWidget(_info("A velocity is divided by the boundary-layer height, so it needs the column h. A lifetime is a constant first-order loss."))
+        self.aero_box = QGroupBox("Aerosol (gas–particle partitioning)"); fa = QFormLayout(self.aero_box)
+        self.aero_info = _info(""); fa.addRow(self.aero_info)
+        self.cs_value = self._spin(0.0, 1.0, 5, " 1/s"); self.cs_value.setToolTip("Condensation sink of the ambient aerosol, used when the table has no CS column. Typical: 0.001 to 0.02 1/s.")
+        self.oa_value = self._spin(0.0, 1000.0, 2, " µg/m³"); self.oa_value.setToolTip("Organic aerosol the vapours partition into, used when the table has no OA column. 0: 0.5 µg/m³.")
+        self.particle_life = self._spin(0.0, 1e4, 1, " h"); self.particle_life.setToolTip("Deposition lifetime of the condensed species. 0: no deposition (they are still diluted).")
+        fa.addRow("Condensation sink", self.cs_value); fa.addRow("Organic aerosol", self.oa_value); fa.addRow("Particle lifetime", self.particle_life)
         self.life_box = QGroupBox("Species not held to the data"); f2 = QFormLayout(self.life_box)
         self.lifetime = self._spin(0.1, 1e4, 1, " h")
         self.lifetime.setToolTip("First-order loss of every species that is not held to the data, standing in for mixing and deposition.")
@@ -736,7 +767,7 @@ class FieldWindow(QMainWindow):
         self.init_box = QGroupBox("Initial values"); v = QVBoxLayout(self.init_box)
         self.initials = _table(["Species", "Initial [ppb]"]); self.initials.setMinimumHeight(110); v.addWidget(self.initials)
         v.addLayout(self._row_buttons(self.initials))
-        return [g, d, self.life_box, self.init_box]
+        return [g, d, self.aero_box, self.life_box, self.init_box]
 
     def _row_buttons(self, table: QTableWidget) -> QHBoxLayout:
         h = QHBoxLayout()
@@ -757,7 +788,7 @@ class FieldWindow(QMainWindow):
             b.toggled.connect(self._run_type_toggled)
         for w in (self.name, self.site, self.folder, self.date, self.lat, self.lon, self.description, self.table, self.tracer):
             w.textChanged.connect(self._changed)
-        for w in (self.step_s, self.spin_up, self.area, self.k_dil, self.k_collapse, self.lifetime):
+        for w in (self.step_s, self.spin_up, self.area, self.k_dil, self.k_collapse, self.lifetime, self.cs_value, self.oa_value, self.particle_life):
             w.valueChanged.connect(self._changed)
         for w in (self.unit, self.dilution):
             w.currentIndexChanged.connect(self._changed)
@@ -833,8 +864,10 @@ class FieldWindow(QMainWindow):
                             dilution=self.dilution.currentData(), k_dil_per_h=self.k_dil.value(), k_collapse_per_h=self.k_collapse.value(),
                             tracer=self.tracer.text().strip(), spin_up_days=self.spin_up.value(), generic_lifetime_h=self.lifetime.value(),
                             initials=initials, deposition_velocity_cm_s=velocity, deposition_lifetime_h=lifetime,
+                            condensation_sink_s1=self.cs_value.value(), organic_aerosol_ug_m3=self.oa_value.value(),
+                            particle_lifetime_h=self.particle_life.value(),
                             sources={k: e.text().strip() for k, e in self.source_edits.items() if e.text().strip()},
-                            off=[k for k, c in self.switches.items() if not c.isChecked()])
+                            off=[k for k, c in self.switches.items() if not c.isChecked()], held=dict(self._held))
         return spec, problems
 
     def _apply(self, spec: fs.FieldSpec):
@@ -848,10 +881,12 @@ class FieldWindow(QMainWindow):
             self.unit.setCurrentText(spec.default_emission_unit)
             for k, c in self.switches.items():
                 c.setChecked(k not in (spec.off or []))
+            self._held = dict(spec.held or {})
             for k, e in self.source_edits.items():
                 e.setText((spec.sources or {}).get(k, ""))
             self.dilution.setCurrentIndex(max(0, self.dilution.findData(spec.dilution)))
-            for w, v in ((self.area, spec.area_km2), (self.k_dil, spec.k_dil_per_h), (self.k_collapse, spec.k_collapse_per_h),
+            for w, v in ((self.cs_value, spec.condensation_sink_s1), (self.oa_value, spec.organic_aerosol_ug_m3), (self.particle_life, spec.particle_lifetime_h),
+                         (self.area, spec.area_km2), (self.k_dil, spec.k_dil_per_h), (self.k_collapse, spec.k_collapse_per_h),
                          (self.spin_up, spec.spin_up_days), (self.lifetime, spec.generic_lifetime_h)):
                 w.setValue(v)
             self.step_s.setValue(spec.step_s)
@@ -914,6 +949,12 @@ class FieldWindow(QMainWindow):
         theme.mark_missing(self.table, not spec.table)
         if hasattr(self, "page_run"):
             self.page_run.refresh()
+        on = fs.partitioning_on(spec)
+        has = table.conditions if table is not None else {}
+        self.aero_info.setText(("Partitioning is on (Chemistry step). There are no chamber walls in a field case: vapours condense on the "
+                                "ambient aerosol. " if on else "Not used: gas–particle partitioning is off (Chemistry step). ")
+                               + ("The table has a CS column. " if "cs" in has else "") + ("The table has an OA column." if "oa" in has else ""))
+        self.cs_value.setEnabled(on and "cs" not in has); self.oa_value.setEnabled(on and "oa" not in has); self.particle_life.setEnabled(on)
         self.schematic.show_case(spec, table)
         plot = {0: self.plot_conditions, 2: self.plot_sources, 3: self.plot_mixing}.get(self.steps.currentRow())
         if plot is not None:
@@ -921,6 +962,13 @@ class FieldWindow(QMainWindow):
         return rep
 
     def _fill_step_tables(self, spec: fs.FieldSpec, t: Optional[fs.FieldTable]):
+        self._filling = True
+        try:
+            self._fill_tables(spec, t)
+        finally:
+            self._filling = False
+
+    def _fill_tables(self, spec: fs.FieldSpec, t: Optional[fs.FieldTable]):
         if t is None:
             for w in (self.emit_table, self.held_table, self.back_table, self.obs_table):
                 w.setRowCount(0)
@@ -930,6 +978,9 @@ class FieldWindow(QMainWindow):
         _fill(self.held_table, [(k, *_span(v), str(int((~np.isfinite(v)).sum()))) for k, v in t.constraints.items()])
         _fill(self.back_table, [(k, *_span(v)) for k, v in t.background.items()])
         _fill(self.obs_table, [(k, *_span(v), str(int(np.isfinite(v).sum()))) for k, v in t.observations.items()])
+        for w, state in ((self.held_table, Qt.CheckState.Checked), (self.obs_table, Qt.CheckState.Unchecked)):
+            for i in range(w.rowCount()):
+                it = w.item(i, 0); it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable); it.setCheckState(state)
         self.held_box.setVisible(spec.run_type == "constrained" or bool(t.constraints)); self.obs_box.setVisible(bool(t.observations))
 
     def set_run_state(self, state: str):
