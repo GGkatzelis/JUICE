@@ -104,7 +104,7 @@ New chemistry must stop photolysing when the light goes off: a photolysis reacti
 as the MCM does, or its rate carries `HV`. Three checks back this up:
 - the F0AM importer writes `+ hv` itself;
 - the experiment check warns about any photolysis without the switch, including lines written by hand;
-- `pytest tests/test_photolysis_check.py` checks every add-on and converted mechanism in
+- `pytest tests/integration/test_photolysis_check.py` checks every add-on and converted mechanism in
   `chemistry/mechanisms/`, under sunlight and lamps, as soon as its folder is there.
 
 ## Citation and collaboration

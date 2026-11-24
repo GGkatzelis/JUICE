@@ -198,7 +198,9 @@ def _read_enz(path: str, index_col: int) -> pd.DataFrame:
                 # Fix missing-E: 1.23-04 → 1.23E-04
                 clean = re.sub(r'(\d)([-+])(\d)', r'\1E\2\3', clean)
                 try:
-                    data_lines.append([float(v) for v in clean.split()])
+                    # values separated by blanks (FACSIMILE cs) or by commas (ENZ files, also with a comma at the
+                    # end of the line): until 24 Nov 2026 only blanks were split and no ENZ file could be read
+                    data_lines.append([float(v) for v in re.split(r'[,\s]+', clean) if v])
                 except ValueError:
                     pass
     if not data_lines:

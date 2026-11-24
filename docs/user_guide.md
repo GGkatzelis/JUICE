@@ -98,7 +98,7 @@ FACSIMILE as well: `QE_X = INPUT(QE_X)` with `QE_X --> X`, dilution through the 
 The ENZ has one row per output step (60 s by default); emissions are held from one table row to the
 next, everything else is interpolated. A species held to a measurement takes the value read at the
 start of each row (FACSIMILE's convention); pressure may vary along the path (`P = INPUT(P)`).
-`tests/test_field_scenario.py` checks the generated files and, on a dark night, the solver against
+`tests/regression/test_field_scenario.py` checks the generated files and, on a dark night, the solver against
 the analytic solutions for emission, dilution towards a background, a held ramp and deposition.
 
 ### Experiments set up for FACSIMILE

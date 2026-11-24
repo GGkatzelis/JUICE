@@ -41,6 +41,10 @@ def expand_macros(expr: str, functions: dict, max_depth: int = 10) -> str:
             new_expr = ''
             pos = 0
             for m in pat.finditer(expr):
+                if m.start() < pos:
+                    # A call of the same function inside the arguments just substituted, DOUBLE(DOUBLE(x)):
+                    # it is expanded in the next pass.  Expanding it here wrote it twice (24 Nov 2026).
+                    continue
                 new_expr += expr[pos:m.start()]
                 arg_start = m.end()
                 depth = 1

@@ -10,7 +10,7 @@ from juice.core import experiment_spec as es
 from juice.importers import gecko_import as gi
 from juice.chemistry import mechanism_registry as mreg
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(HERE)
 ETHANOL = os.path.join(HERE, "fixtures", "gecko_ethanol")
 

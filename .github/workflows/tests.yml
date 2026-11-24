@@ -28,4 +28,4 @@ jobs:
       - name: Test
         env:
           PYTHONUTF8: "1"
-        run: python -m pytest -q
+        run: python -m pytest -q --cov --cov-report=term

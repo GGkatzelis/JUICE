@@ -1338,9 +1338,24 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         col = inj.enz_column()
         if inj.start:
             try:
-                _hhmm_s(inj.start)
+                t_inj = _hhmm_s(inj.start)
             except Exception:
+                t_inj = None
                 msgs.append(("error", f"Injection '{inj.name}': start time '{inj.start}' is not HH:MM."))
+            # Decision of 24 Nov 2026: the ENZ column is left as it always was (an injection timed before the run
+            # enters in the first step, one timed after the end does not enter), and the review says so.
+            try:
+                t_run0, t_run1 = _hhmm_s(c.start), _hhmm_s(c.end)
+            except Exception:
+                t_run0 = t_run1 = None
+            if t_inj is not None and t_run0 is not None and inj.products:
+                if t_inj < t_run0:
+                    msgs.append(("warning", f"Injection '{inj.name}' at {inj.start} is before the start of the run ({c.start}): "
+                                            "its whole amount enters in the first step. Start the run earlier, or give "
+                                            "what is left of it as an initial value."))
+                elif t_inj > t_run1:
+                    msgs.append(("warning", f"Injection '{inj.name}' at {inj.start} is after the end of the run ({c.end}): "
+                                            "it is not injected."))
         if inj.products:
             try:
                 float(eval(str(inj.total_ppb), {"__builtins__": {}}, {}))

@@ -200,7 +200,7 @@ def check_installed(lights=LIGHTS) -> List[str]:
     """Every lumped base and every add-on installed under chemistry/mechanisms, under sunlight with measured and
     clear-sky J and under lamps: the photolysis reactions the light switch does not close, as one line each.
     [] when all are clean.  An add-on is checked on each installed base it is compatible with.  Unlike `ungated`,
-    an experiment that cannot be written is a problem here, not a pass.  tests/test_photolysis_check.py runs this,
+    an experiment that cannot be written is a problem here, not a pass.  tests/integration/test_photolysis_check.py runs this,
     so a new add-on or converted mechanism is checked by the test suite as soon as its folder is in place."""
     from juice.core import experiment_spec as es
     bases = mreg.load_bases()

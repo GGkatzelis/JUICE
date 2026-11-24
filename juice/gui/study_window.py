@@ -173,7 +173,7 @@ class StudyWindow(QMainWindow):
         b = QPushButton("− row"); b.clicked.connect(lambda: (self.mods.removeRow(self.mods.currentRow()) if self.mods.currentRow() >= 0 else None, self._readiness())); hb.addWidget(b)
         hb.addStretch(); bl.addLayout(hb)
         bl.addWidget(_more_info("Targets are generic because every experiment has its own steps: a reaction, an add-on id, a chamber "
-                                "field, an injection class (voc, nox, no, o3, mixture, all) or an injection name present in all of them.",
+                                "field, an injection group (voc = compounds and solutions, compound, mixture, nox, no, o3, all) or an injection name present in all of them.",
                                 [f"<b>{v[0]}</b>: target = {v[1]}; value = {v[2]}" for v in S.MOD_KINDS.values()] +
                                 ["A rate change is written as k[reaction] = CONST(expression) after the mechanism — the EASY way (last definition wins).",
                                  "An add-on or another base mechanism rebuilds the MCM subset once per experiment in &lt;study&gt;/chemistry/."],
@@ -418,6 +418,10 @@ class StudyWindow(QMainWindow):
         if vocs:
             self._vary_add("All VOC injections together: " + ", ".join(e.name for e in vocs), "group of injections", "; ".join(amount(e) for e in vocs),
                            ("injection_scale", ",".join(e.name for e in vocs)), None, hows=("× factor",), label="VOC")
+        mixes = [e for e in inj if e.action_key() == "mixture"]
+        if len(mixes) > 1 and len(mixes) < len(vocs):      # the injected solutions alone, when that differs from the VOC group
+            self._vary_add("All injected solutions together: " + ", ".join(e.name for e in mixes), "group of injections", "; ".join(amount(e) for e in mixes),
+                           ("injection_scale", ",".join(e.name for e in mixes)), None, hows=("× factor",), label="solutions")
         nox = [e for e in inj if e.action_key() in ("no", "no2")]
         if nox:
             self._vary_add("All NOx injections together: " + ", ".join(e.name for e in nox), "group of injections", "; ".join(amount(e) for e in nox),

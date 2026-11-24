@@ -63,7 +63,7 @@ MOD_KINDS: Dict[str, Tuple[str, str, str]] = {   # kind → (label, what 'target
     "rate_factor":     ("Reaction rate × factor", "reaction as in the mechanism", "factor, e.g. 0.8"),
     "addon":           ("Extra add-on chemistry", "add-on id from chemistry/mechanisms/addons", "(none)"),
     "chamber":         ("Chamber parameter", "field of ChamberEffects, e.g. hono_const, walldep_value, hcho_const", "new value / expression"),
-    "injection_scale": ("Injected amount × factor", "injection name, action (voc, no, no2, o3, mixture, …) or 'all'", "factor"),
+    "injection_scale": ("Injected amount × factor", "injection name, group (voc = compounds and solutions, compound, mixture, nox, no, no2, o3, …) or 'all'", "factor"),
     "injection_set":   ("Injected amount = ppb", "injection name", "total ppb"),
     "chamber_scale":   ("Chamber parameter × factor", "field of ChamberEffects, e.g. hono_const (chamber HONO source), dark_hono_rate", "factor"),
     "initial":         ("Initial value at t0", "species", "ppb"),
@@ -279,12 +279,18 @@ def _events_matching(spec: ExperimentSpec, target: str) -> List[InjectionEvent]:
     by_name = [e for e in spec.injections if e.name.upper() == t.upper()]
     if by_name:
         return by_name
-    if t.lower() in ACTIONS:
-        return [e for e in spec.injections if e.action_key() == t.lower()]
+    # Groups (decision of 24 Nov 2026): 'voc' = every organic injection, single compounds and injected solutions,
+    # as the study window's "All VOC injections together"; 'mixture' = the injected solutions alone, each scaled
+    # as a whole with its composition unchanged; 'compound' = the single compounds alone; 'nox' = NO and NO2.
+    # Until then 'voc' left the solutions out, because the action of that name was matched first.
     if t.lower() == "voc":
         return [e for e in spec.injections if e.action_key() in ("voc", "mixture")]
+    if t.lower() == "compound":
+        return [e for e in spec.injections if e.action_key() == "voc"]
     if t.lower() == "nox":
         return [e for e in spec.injections if e.action_key() in ("no", "no2")]
+    if t.lower() in ACTIONS:
+        return [e for e in spec.injections if e.action_key() == t.lower()]
     return [e for e in spec.injections if e.products.strip().upper() == t.upper()]
 
 

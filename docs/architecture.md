@@ -67,7 +67,7 @@ every chemistry offered or planned; the Chemistry step shows the planned ones gr
 And every box of Fig. 1 is callable from Python (`import juice`, `juice/api.py`): `new_experiment` / `new_field_case`,
 `write`, `prepare`, `solve`, `results`, `run`, plus `write_script`, which writes an experiment as
 `<name>_run.py`. The chamber window's Run step, the wizard's Finish and the field window's Run step write
-that script next to every prepared run; `tests/test_juice_api.py` requires that the script's `build()`
+that script next to every prepared run; `tests/integration/test_juice_api.py` requires that the script's `build()`
 returns the window's spec field by field and that its ENZ/EASY are byte-identical.
 
 ## A2. Modules
@@ -154,7 +154,7 @@ the `twostep_*` keys). Choices:
 Rules learned on the way (benchmark of 4 November 2026, see the table in user_guide.md):
 
 - **Never combine rtol 1e-6 with warm continuation.** It diverges in trace species: HCOCO3 1.4e5 %
-  in scene_06, HO13C4O2 1.3e4 % in scene_09. `tests/test_profiles.py` guards this.
+  in scene_06, HO13C4O2 1.3e4 % in scene_09. `tests/unit/test_profiles.py` guards this.
 - **Precise is tighter but not cleaner.** Its cold restarts re-ramp the step size at every row, and
   species below 0.01 ppt then show large relative excursions (BUTAL2NO3 5×, MGLYOO 1.9×, HO5C6CO3
   1.5×, SA ~1×; absolute size at most ~5·10⁴ molec/cm³, CH3OCHO at 0.002 ppt). The benchmark's ±2 %
@@ -244,16 +244,16 @@ pinned run.
 
 TWOSTEP has the same gates: `run_benchmark.py --solver twostep` (scenes 04–09, 9 Nov 2026: every
 species above 1 ppt within 0.72 % of FACSIMILE, ISOPBO2 in scene_08 1.6 %; the 100-molecule floor FAILs
-on floor species, A6), `tests/test_twostep.py`, and the BDF path checked bit-identical. At GECKO-A
+on floor species, A6), `tests/regression/test_twostep.py`, and the BDF path checked bit-identical. At GECKO-A
 sizes the reference is the BDF solution of the same scenario: the 2-h toluene case without partitioning
 (57 814 species, 348 108 reactions, 10 Nov 2026) agrees within 0.57 % of each species' run maximum for
 all 291 species above 1 ppt (median 0.14 %) — 2 min 26 s against 9 h 1 min. The field mode is verified
-against analytic solutions (`tests/test_field_scenario.py`, slow) and against F0AM's Lagrangian core on
-a dark night; the GECKO-A path by `tests/test_gecko_import.py` and `tests/test_gecko_front_door.py` on
+against analytic solutions (`tests/regression/test_field_scenario.py`, slow) and against F0AM's Lagrangian core on
+a dark night; the GECKO-A path by `tests/integration/test_gecko_import.py` and `tests/integration/test_gecko_front_door.py` on
 the ethanol generator output in `tests/fixtures/gecko_ethanol`, including a run of the GECKO-A
 mechanism on the MCM core against the MCM subset of the same experiment (within 5–10 %).
 
-The converted F0AM mechanisms are checked by `tests/test_f0am_import.py` (converter constructs on a
+The converted F0AM mechanisms are checked by `tests/integration/test_f0am_import.py` (converter constructs on a
 synthetic file, installed counts, no undefined name in any rate, the corrections of the library files,
 one run each for CRACMM2 and NOAA_BB) and, outside the suite, against F0AM running its own files with
 identical constant J (dark / lit, every species above 1 ppt: CRACMM2 0.39 / 0.23 %, CRACMM1 0.30 / 0.26 %

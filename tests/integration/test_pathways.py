@@ -80,7 +80,7 @@ def test_structure_image():
     assert pw.structure_image("not a smiles") is None
 
 
-CS = os.path.join(os.path.dirname(__file__), "..", "runs", "benchmark", "fast", "scene_05", "scene_05.cs")
+CS = os.path.join(os.path.dirname(__file__), "..", "..", "runs", "benchmark", "fast", "scene_05", "scene_05.cs")
 
 
 @pytest.mark.skipif(not os.path.isfile(CS), reason="needs the ethanol benchmark run (runs/benchmark/fast/scene_05)")

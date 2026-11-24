@@ -11,7 +11,7 @@ from juice.importers import gecko_photolysis as gp
 from juice.importers import gecko_to_easy as g
 from juice.core.evaluator import fortran_d_to_e
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ETHANOL = os.path.join(HERE, "fixtures", "gecko_ethanol")
 
 

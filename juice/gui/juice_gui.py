@@ -59,7 +59,7 @@ from juice.core import injection_calc as ic
 from juice.gui import juice_theme as theme
 from juice.chemistry import mechanism_registry as mreg
 
-COMPARE_FLOOR = 2.5e4      # molec/cm³ ≈ 1e-3 ppt, as tests/test_solver.py: below this CPU rounding dominates
+COMPARE_FLOOR = 2.5e4      # molec/cm³ ≈ 1e-3 ppt, as tests/regression/test_solver.py: below this CPU rounding dominates
 COMPARE_TOL = 0.02         # the benchmark tolerance
 
 HERE = _JUICE_ROOT

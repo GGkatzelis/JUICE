@@ -430,7 +430,8 @@ def find_mixture(text: str, mixtures: Dict[str, Mixture]) -> Optional[Mixture]:
     return None
 
 
-_RECIPE_LINE = re.compile(r"^\s*[\*\-•]?\s*(.+?)[\s,;:\t]+(\d+(?:[.,]\d+)?)\s*(µl|μl|ul|ml|vol%|mg|g|wt%|mol%|%)?\s*$", re.IGNORECASE)
+# the unit may follow the number after a separator too ('ethanol, 59.19, ul' was dropped without a word until 24 Nov 2026)
+_RECIPE_LINE = re.compile(r"^\s*[\*\-•]?\s*(.+?)[\s,;:\t]+(\d+(?:[.,]\d+)?)[\s,;]*(µl|μl|ul|ml|vol%|mg|g|wt%|mol%|%)?[\s,;]*$", re.IGNORECASE)
 
 
 def parse_mixture_text(text: str, default_unit: str = "ul") -> List[MixtureComponent]:
