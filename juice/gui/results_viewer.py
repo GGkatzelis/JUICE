@@ -231,6 +231,11 @@ def _nitrogen_count(name: str) -> int:
     ]
     tmp, total = upper, 0
     for pattern, n_atoms in _N_GROUPS:
+        if pattern == 'NO':
+            # a bare NO counts only when no letter follows: ETHANOL and NOPINONE hold no nitrogen (they were
+            # counted as one N each until 24 Nov 2026)
+            total += len(re.findall(r'NO(?![A-Z])', tmp))
+            continue
         while pattern in tmp:
             total += n_atoms
             tmp = tmp.replace(pattern, '\x00' * len(pattern), 1)
@@ -241,12 +246,14 @@ def _nitrogen_class(name):
     n = name.upper()
     if n in ('NO', 'NO2', 'NO3'):
         return 'NOx'
-    if n in ('HNO3', 'HNO4'):
+    if n in ('HNO3', 'HNO4', 'HO2NO2'):     # HO2NO2 is the MCM's name of HNO4 (it was shown as an organic nitrate until 24 Nov 2026)
         return 'HNO3'
     if n == 'HONO':
         return 'HONO'
     if n == 'N2O5':
         return 'N2O5'
+    if n in ('CLNO2', 'CLONO2', 'BRNO2', 'BRONO2', 'NA'):      # inorganic: never an organic nitrate, whatever the name ends in
+        return 'Other N'
     if re.search(r'PAN\d*$', n) or n.endswith('CO3NO2') or n in ('PPN', 'PBZN', 'PHAN', 'APAN', 'GPAN'):   # MCM peroxyacyl nitrates (…PAN, …PAN5, PPN, PBZN, PHAN); A2PANO/…PANOO are radicals
         return 'PANs'
     if ('NO3' in n and n != 'NO3') or 'ONO2' in n or n.endswith('NO2'):
@@ -332,11 +339,14 @@ def _carbon_class(name, parent_voc=None):
     # Alkyl/other peroxy radicals (RO2)
     if (n.endswith('O2') and n != 'CO2') or n.endswith('OO'):
         return 'Peroxy Radicals'
-    # Hydroperoxides (ROOH)
+    # Formic acid, the one MCM acid whose name ends in OOH (it was shown as a hydroperoxide until 24 Nov 2026)
+    if n == 'HCOOH':
+        return 'Carboxylic Acids'
+    # Hydroperoxides (ROOH; also the MCM's …COOH names: APINCOOH is the hydroperoxide of APINCO2)
     if n.endswith('OOH'):
         return 'Hydroperoxides'
-    # Carboxylic acids (RCOOH)
-    if n.endswith('CO2H') or n.endswith('COOH') or n == 'HCOOH':
+    # Carboxylic acids (the MCM writes RCO2H)
+    if n.endswith('CO2H'):
         return 'Carboxylic Acids'
     # Aldehydes (RCHO)
     if n.endswith('CHO') or n == 'HCHO':

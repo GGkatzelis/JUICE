@@ -201,8 +201,12 @@ def infer_code(text: str) -> str:
         return "O"
     if re.search(r"\bno2\b", t):
         return "D"
-    if re.search(r"\b(no|nitric oxide|stickstoffmonoxid)\b", t):
+    # NO the gas is written in capitals; 'no injection today' is not an NO injection (until 24 Nov 2026 it was
+    # read as one and imported with the default amount)
+    if re.search(r"\bNO\b", body) or re.search(r"\b(nitric oxide|stickstoffmonoxid)\b", t):
         return "M"
+    if re.search(r"\bno\b", t):
+        return ""
     if re.search(r"\bco2\b", t):
         return "C"
     if re.search(r"\b(co|carbon monoxide|kohlenmonoxid)\b", t):

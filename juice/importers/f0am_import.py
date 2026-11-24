@@ -303,7 +303,7 @@ def read_j(path: str) -> Dict[str, str]:
     for name, val in re.findall(r"^\s*J\.([A-Za-z0-9_]+)\s*=\s*([^;%]+);", open(path, encoding="latin-1").read(), re.M):
         e = re.sub(r"Jmcm\.Jn(\d+)", r"JN\1", val)
         e = re.sub(r"Jmcm\.J(\d+)", r"J\1", e)
-        out[name] = re.sub(r"\s+", "", e)
+        out[name] = matlab_to_easy(e)       # also a scaled channel, 0.9.*Jmcm.J1 -> 0.9*J1 (left as '.*' until 24 Nov 2026)
     return out
 
 

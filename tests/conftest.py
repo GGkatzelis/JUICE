@@ -40,3 +40,12 @@ def pytest_collection_modifyitems(items):
 def _repo_cwd(monkeypatch):
     """Several tools resolve paths relative to the repository; run every test from there."""
     monkeypatch.chdir(REPO)
+
+
+@pytest.fixture(scope="session")
+def exact_small_run(tmp_path_factory):
+    """The exact-answer experiment (tests/exact_small.py) run once with the fast profile:
+    (scenario file, result table).  For tests of what is computed from a finished run."""
+    import exact_small
+    js = exact_small.prepare(tmp_path_factory.mktemp("exact_small"), "fast")
+    return js, exact_small.run(js)
