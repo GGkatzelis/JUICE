@@ -18,7 +18,7 @@ when k is held per row, the density step is missed, or both.
 Before 17 Nov 2026 JUICE read every ENZ line from the time of the next line on when the times
 start near 0 (a 1-ns shift of the breakpoints that rounds away at SAPHIR's absolute times), so the
 temperature step was never applied: the "k follows X, no density step" answer. Fixed by F. Rohrer
-in MCM_SAPHIR_Tool 9e4fc04 and ported. `tests/test_scene_T1.py` checks the three solver profiles
+in MCM_SAPHIR_Tool 9e4fc04 and ported. `tests/regression/test_scene_T1.py` checks the three solver profiles
 against the closed form.
 
 With live settings off JUICE gives the same answer: a species written directly into a rate

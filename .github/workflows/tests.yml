@@ -1,8 +1,10 @@
 name: tests
 
-# Runs the JUICE test suite (tests/, ~2 min) on every push and pull request to main:
-# MCM checksums, EASY round-trip and builder for scene_01..09, the experiment-description goldens,
-# chamber profiles, scene_04 against FACSIMILE, and the UV-lamp chamber check.
+# Runs the JUICE test suite (tests/, about 11 min) on every push and pull request to main, with the
+# coverage table at the end: unit tests of the single functions, the input side for scene_01..09
+# (MCM checksums, EASY round-trip and builder, experiment-description goldens), the importers, a small
+# experiment with closed-form answers in every solver profile, scene_04 against FACSIMILE, the UV-lamp
+# chamber check, and the windows opened without a screen.  Layers and rules: tests/README.md.
 on:
   push:
     branches: [main]

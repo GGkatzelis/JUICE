@@ -181,14 +181,19 @@ git); the last line compares one of them again and lists every column.
 ### Tests
 ```powershell
 pip install -e .[dev]             # adds pytest
-python -m pytest                  # about 200 tests, about 3 minutes
-python -m pytest -m "not slow"    # input-side tests only, without solver runs
+python -m pytest                  # about 800 tests, about 11 minutes
+python -m pytest -m unit          # one function at a time, under a minute
+python -m pytest -m "not slow"    # everything except the longest solver runs
 ```
-The tests check the MCM download against its checksums, the EASY round-trip and builder for every
-reference scene, the experiment-description goldens (scene_05 and scene_09 rebuilt from a
-description give the IDL-written files), the chamber profiles, the validation notes (dark
-experiments, plot labels), the EASY-version rule for redefined `FUNCTION` macros, scene_04 against
-FACSIMILE, and the UV-lamp chamber. They also run on GitHub for every push to `main`.
+The tests come in four layers (folders of `tests/`, see `tests/README.md`). *Unit* tests call one function
+with a small hand-made input: the expression evaluator, the injection and mixture calculations, the ENZ
+columns, the SAPHIR archive and wiki readers, lamp photolysis, the study grid and its results. *Integration*
+tests run several modules in a chain: the MCM download against its checksums, the EASY round-trip and
+builder for every reference scene, the experiment-description goldens (scene_05 and scene_09 rebuilt from
+a description give the IDL-written files), the importers, the Python interface. *Regression* tests compare
+with a reference: scene_04 against FACSIMILE, the analytic scenes, a small experiment whose every result
+has a closed form in each solver profile, and the UV-lamp chamber. *Window* tests open the windows without
+a screen. They also run on GitHub for every push to `main`, with a table of the lines no test reached.
 
 ## Chambers other than SAPHIR
 
@@ -527,7 +532,7 @@ with BDF at rtol 1e-8 and prints the largest deviations.
 Lamp chambers have no FACSIMILE reference; `python -m juice.tools.check_lamp_chamber` is their gate: a fixed
 experiment in the generic UV-lamp chamber (NO₂ + H₂O₂ in the dark → lights on → ethanol → lights off)
 is run headless and checked against physics that must hold (every J = 0 in the dark, dilution rate,
-extended photostationary state jNO₂[NO₂] = [NO](../k[O₃]+k[HO₂]+k[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
+extended photostationary state jNO₂·[NO₂] = [NO]·(k·[O₃] + k·[HO₂] + k·[RO₂]), H₂O₂ loss = J3 + k[OH], Ox
 production only while lit, N₂O₅ at night) and against the pinned result in
 `validation/UV lamps/` (every species within ±2 %; `--update` accepts a deliberate change).
 
@@ -573,7 +578,7 @@ examples/
   field/                     a field case as a script (field_site.py) and three synthetic field cases
                              (site, plume, Lagrangian parcel); make_examples.py writes them
 docs/                        tutorial, JUICE from code, the run path, architecture, chamber survey, lamp photolysis
-tests/                       the test suite (python -m pytest)
+tests/                       the test suite (python -m pytest; layers and rules in tests/README.md)
 chemistry/                   the chemistry JUICE can run
   mechanisms/                MCM v3.3.1 as downloaded (checksums), CRACMM, RACM2, a GECKO-A example (ethanol),
                              add-ons, catalog.json

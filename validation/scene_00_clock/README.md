@@ -17,5 +17,5 @@ JUICE, 15 November 2026: with live settings (the default) twostep gives X = 0.30
 0.3050353 (0.3046752 with `atol_floor = 1e-6`: the species are of order 1 here, far below the default
 absolute tolerance of 100 molecules cm-3); with `live_settings = false` every profile gives (B).
 An independent integration of the three equations with scipy (LSODA, rtol 1e-11) gives (A) to 8 digits.
-`tests/test_scene_00.py` checks all of this. The scene is kept out of `IDL Input`, because `run_benchmark`
+`tests/regression/test_scene_00.py` checks all of this. The scene is kept out of `IDL Input`, because `run_benchmark`
 runs with the settings held per step and would report (B).

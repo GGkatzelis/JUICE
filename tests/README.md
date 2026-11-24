@@ -4,8 +4,8 @@ Install once with `pip install -e .[dev]`, then run from the repository folder.
 
 | Command | What it runs | Time |
 |---|---|---|
-| `python -m pytest` | everything | about 8 min |
-| `python -m pytest -m unit` | the unit tests only | under a minute |
+| `python -m pytest` | everything (about 800 tests) | about 11 min |
+| `python -m pytest -m unit` | the unit tests only (about 550) | about a minute |
 | `python -m pytest -m "not slow"` | everything except the longest solver runs | |
 | `python -m pytest tests/unit/test_particles.py` | one file | |
 | `python -m pytest --cov --cov-report=html` | everything, and writes `htmlcov/index.html` showing every line no test reached | |
@@ -21,7 +21,10 @@ Each test file sits in the folder of its layer, and every test gets that folder'
 | `regression/` | Results against a stored reference: FACSIMILE, an analytic solution, a tight solver run. | The numbers moved. |
 | `gui/` | Windows opened without a screen. | A window no longer builds what it shows. |
 
-`fixtures/` holds input files for the tests; `conftest.py` holds the shared set-up.
+`fixtures/` holds input files for the tests; `conftest.py` holds the shared set-up. `exact_small.py` is a small
+experiment whose every result has a closed form (decay, equilibrium, second order, light switch, injection,
+dilution, temperature step); `regression/test_exact_scenarios.py` runs it in every solver profile, and the
+`exact_small_run` fixture gives its finished run to tests of what is computed from a run (the viewer's budgets).
 
 ## Rules
 

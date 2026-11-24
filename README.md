@@ -65,11 +65,11 @@ Every run the windows prepare also gets a `<name>_run.py` that rebuilds it in co
 |---|---|
 | [juice/](juice) | the code: `core/` (experiment → input files → solver), `chemistry/`, `importers/`, `gui/`, `tools/` |
 | [examples/](examples) | chamber and field examples as scripts, and three synthetic field cases |
-| [docs/](docs) | tutorial, user guide, JUICE from code, architecture, chamber survey, lamp photolysis |
+| [docs/](docs) | tutorial, user guide, JUICE from code, architecture, development history, chamber survey, lamp photolysis |
 | [chemistry/](chemistry) | `mechanisms/` (MCM v3.3.1 and the others, add-ons) and `photolysis/` (cross sections, J parametrisations) |
 | [setups/](setups) | what an experiment starts from: `chambers/` (one profile per chamber), `templates/`, `mixtures/` |
 | [validation/](validation) | the FACSIMILE reference scenes and the UV-lamp reference |
-| [tests/](tests) | the test suite: `pip install -e .[dev]`, then `python -m pytest` |
+| [tests/](tests) | the test suite in four layers (unit, integration, regression, windows): `pip install -e .[dev]`, then `python -m pytest`; see [tests/README.md](tests/README.md) |
 | `runs/` | your experiments and results (created on the first run, not in git) |
 
 `settings.toml` holds the validated solver settings; your own paths go in `settings.local.toml` (not in git).

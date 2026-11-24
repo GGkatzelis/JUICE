@@ -464,4 +464,5 @@ pick the species you need in the viewer rather than plotting all of them.
 
 The gates the developers run after any change are `python -m juice.core.experiment_spec --selftest`,
 `python -m juice.tools.check_easy_roundtrip`, `python -m juice.tools.check_lamp_chamber` and `python -m juice.tools.run_benchmark` (JUICE
-against FACSIMILE on nine reference experiments); `python -m pytest` runs the unit tests.
+against FACSIMILE on nine reference experiments); `python -m pytest` runs the test suite
+(`python -m pytest -m unit` for the quick part, see [tests/README.md](../tests/README.md)).

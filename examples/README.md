@@ -7,7 +7,7 @@ Every example comes twice:
 | `<name>.py` | the short version: only what the experiment sets, then run and a figure. Start here. |
 | `<name>_explained.py` | the same experiment step by step, in the order of the window, with what every setting means, what else can be chosen, and an "off-road" section (loops, your own chemistry, editing the input files, your own chamber). |
 
-Both write byte-identical input files (`tests/test_juice_api.py` checks it).
+Both write byte-identical input files (`tests/integration/test_juice_api.py` checks it).
 
 | folder | example | |
 |---|---|---|
