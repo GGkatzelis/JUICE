@@ -254,7 +254,9 @@ class ChamberDialog(QDialog):
     def profile(self) -> C.ChamberProfile:
         p = copy.deepcopy(self.p)
         p.id = C.safe_id(self.id.text()) if self.id.text().strip() else p.id
-        p.name = self.name.text().strip() or p.name
+        # a new chamber has no name until one is typed: until 25 Nov 2026 it took the name of the chamber it was
+        # copied from, so a nameless copy of SAPHIR was saved as a second "SAPHIR"
+        p.name = self.name.text().strip() or ("" if self.as_new else p.name)
         p.institution, p.location = self.inst.text().strip(), self.loc.text().strip()
         p.note = self.note.toPlainText().strip()
         p.references = [l.strip() for l in self.refs.toPlainText().splitlines() if l.strip()]
