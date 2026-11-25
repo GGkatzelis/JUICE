@@ -1304,6 +1304,9 @@ def validate(spec: ExperimentSpec, known_species: Optional[set] = None) -> List[
         if mreg.is_lumped(spec.base_mechanism) or not (spec.precursors or spec.inorganic_only):
             msgs.append(("warning", "Gas-particle-wall partitioning is switched on, but it is available only for GECKO-A "
                                     "mechanisms and for the MCM with chosen compounds: this run has none."))
+        elif spec.inorganic_only and not spec.precursors:
+            msgs.append(("warning", "Gas-particle-wall partitioning is switched on, but the experiment has inorganic "
+                                    "chemistry only: there is nothing to partition."))
         else:
             from juice.chemistry import volatility as vol
             if spec.volatility_method not in vol.METHODS:

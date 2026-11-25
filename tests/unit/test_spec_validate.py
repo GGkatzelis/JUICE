@@ -88,6 +88,8 @@ def test_injected_species_must_be_in_the_mechanism():
 def test_partitioning_needs_compounds_and_a_known_volatility_method():
     spec = experiment()
     spec.partitioning = True
+    # inorganic chemistry only: said since 25 Nov 2026 (before, the review was silent about it)
+    assert has(said(spec, "warning"), "partitioning is switched on", "nothing to partition")
     spec.inorganic_only, spec.mechanism_stem = False, "ethanol.fac"    # an existing include set: no compounds chosen
     assert has(said(spec, "warning"), "partitioning is switched on", "this run has none")
     spec.mechanism_stem, spec.precursors, spec.volatility_method = "", ["APINENE"], "guesswork"
