@@ -96,9 +96,11 @@ def exact(t):
             "J": 8e-9 * M * injected, "L": 1e9 * math.exp(-27.6 / (276.0 * 3600.0) * diluted), "N": n, "O": 1e9 - n}
 
 
-def prepare(folder, profile):
-    """Write the two input files into `folder` and prepare the scenario; returns the scenario file."""
+def prepare(folder, profile, options=None):
+    """Write the two input files into `folder` and prepare the scenario; returns the scenario file.
+    `options`: solver keys on top of the profile, e.g. {"jac_mode": "fd"} (what a settings file can set)."""
     folder = str(folder)
+    os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "exact_small.easy"), "w", encoding="latin-1") as fh:
         fh.write(EASY)
     with open(os.path.join(folder, "exact_small.enz"), "w", encoding="latin-1") as fh:
@@ -106,12 +108,32 @@ def prepare(folder, profile):
     with contextlib.redirect_stdout(io.StringIO()):
         return sp.prepare_scenario({"easy": os.path.join(folder, "exact_small.easy"), "enz": os.path.join(folder, "exact_small.enz")},
                                    sp.load_paths(TOML)["include_dir"], export_kv_pd=False, toml_path=TOML,
-                                   solver=sp.solver_from_toml(TOML, profile))
+                                   solver={**sp.solver_from_toml(TOML, profile), **(options or {})})
 
 
-def run(js):
-    """Run a prepared scenario; returns the result table with upper-case column names."""
-    subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js, "--toml", TOML], capture_output=True, check=True)
+def run(js, with_log=False):
+    """Run a prepared scenario; returns the result table with upper-case column names (and the solver's output
+    when `with_log`)."""
+    done = subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js, "--toml", TOML], capture_output=True,
+                          check=True, env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
     df = load_column_file(js[:-5] + ".cs")
     df.columns = [c.upper() for c in df.columns]
-    return df
+    return (df, done.stdout.decode("utf-8", errors="replace")) if with_log else df
+
+
+def worst_deviation(df, names=None, every=600):
+    """Largest deviation from the closed form at the output times that are multiples of `every` s, relative to
+    max(|exact|, 1e7) (1 % of the starting amounts: below that the solver's floor decides).  Returns
+    (deviation, species, time, model, exact)."""
+    worst = (0.0, "", 0.0, 0.0, 0.0)
+    for t in df.index:
+        if t % every:
+            continue
+        for name, value in exact(t).items():
+            if names and name not in names:
+                continue
+            got = float(df.loc[t, name])
+            dev = abs(got - value) / max(abs(value), 1e7)
+            if dev > worst[0]:
+                worst = (dev, name, float(t), got, value)
+    return worst
