@@ -50,7 +50,7 @@ examples/chamber/saphir_isoprene_explained.py   (or the short saphir_isoprene.py
     │       └─ ScenarioRunner.run
     │           ├─ _setup_environment               ENZ → time series (load_saphir_environment)
     │           ├─ _build_mechanism                 elog → reactions, rate expressions (easy_parser,
-    │           │                                   evaluator, mcm_kinetics, mechanism)
+    │           │                                   evaluator, mechanism)
     │           ├─ _solve                           scipy BDF (fast, precise) or twostep_solver (twostep)
     │           ├─ _export_results                  → OUT/<name>.cs
     │           └─ _export_kinetics                 (kv_pd) → <name>.kv, <name>.pd, _reactions.csv,
@@ -123,7 +123,7 @@ lists it.
 
 | | |
 |---|---|
-| **Files** | `scenario_runner.py` (`ScenarioRunner`), `twostep_solver.py`, `easy_parser.py`, `evaluator.py`, `mcm_kinetics.py`, `mechanism.py`, `load_saphir_environment.py` |
+| **Files** | `scenario_runner.py` (`ScenarioRunner`), `twostep_solver.py`, `easy_parser.py`, `evaluator.py`, `mechanism.py`, `mechanism_solver.py` (species index), `load_saphir_environment.py` |
 | **Reads** | `<name>.json` (it points to the elog and the ENZ) |
 | **Does** | builds the reactions and their rate expressions, integrates the equations row by row of the ENZ, and writes the results |
 | **Writes** | `<name>.cs` (concentrations), `<name>_run.log`; with `kv_pd`: `<name>.kv` (rate constants), `<name>.pd` (production and destruction), `<name>_reactions.csv`, `<name>_kinetics.npz` |

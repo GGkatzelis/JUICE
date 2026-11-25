@@ -842,14 +842,10 @@ class BudgetEngine:
             'AMAX': np.maximum, 'AMIN': np.minimum,
         })
 
-        for func_name in dir(mcm_kinetics):
-            if func_name.startswith('_'):
-                continue
-            func = getattr(mcm_kinetics, func_name)
-            if func_name.startswith('KMT'):
-                ctx[func_name.upper()] = lambda *args, f=func, T=T_arr, M=M_arr: f(*args, T, M)
-            else:
-                ctx[func_name.upper()] = func
+        # fallback for an expression that names them without defining them; KMT values come from the
+        # mechanism's own parameters (the approximate KMT functions were removed on 25 Nov 2026)
+        ctx['KRO2'] = mcm_kinetics.KRO2
+        ctx['COMPRC'] = mcm_kinetics.COMPRC
 
         def _phtfkt(a, b, c, _c=safe_cosx, _j=JNO2_arr, _hv=HV_arr):
             cs_j = a * _c ** b * np.exp(np.clip(c / _c, -700, 700))

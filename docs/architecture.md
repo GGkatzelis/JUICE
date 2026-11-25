@@ -83,14 +83,16 @@ MCM converter, lamp photolysis), `juice/importers/` (F0AM, GECKO-A, FACSIMILE, S
 | Chamber and light | `chambers.py` + `setups/chambers/<id>.chamber.json`, `lamp_photolysis.py` + `chemistry/photolysis/` (σ·φ at 298 K, lamp J ratios) |
 | Python interface | `juice/api.py` (experiments and field cases in code, the four steps, `<name>_run.py` scripts), `examples/` |
 | Chemistry | `mechanism_registry.py` + `chemistry/mechanisms/` (unmodified MCM download with checksums, add-ons, imported GECKO-A bases, converted F0AM mechanisms, `catalog.json`), `f0am_import.py` (F0AM `_AllRxns/_K/_J.m` → base of kind `lumped`; F0AM MCM variant → add-on), `mcm_converter.py` (MCM subset → EASY include files), `mcm_species_db.py`, `species_db.py`, `gecko_import.py` + Franz Rohrer's converter (`gecko_mechanism.py`, `gecko_photolysis.py`, `gecko_notation_to_smiles.py`, `gecko_to_easy.py`, `make_soa_condensation.py`, `chemistry/photolysis/`) for GECKO-A generator output |
-| Parsing and evaluation | `elog_generator.py`, `idl_parser.py`, `easy_parser.py`, `evaluator.py`, `mcm_kinetics.py`, `mechanism.py` |
+| Parsing and evaluation | `elog_generator.py`, `idl_parser.py`, `easy_parser.py`, `evaluator.py`, `mechanism.py` |
 | Solver | `scenario_prep.py`, `scenario_runner.py`, `twostep_solver.py` (Verwer's TWOSTEP, F. Rohrer) |
-| Results | `results_viewer.py`, `overview_tab.py`, `timeseries_tab.py`, `plot_interaction.py`, `report_basket.py`, `report_dock.py`, `column_file_reader.py` |
+| Results | `results_viewer.py` (with `mcm_kinetics.py`: KRO2 and COMPRC as a fallback for its budgets), `overview_tab.py`, `timeseries_tab.py`, `plot_interaction.py`, `report_basket.py`, `report_dock.py`, `column_file_reader.py` |
 | Studies | `study.py`, `study_runner.py` (command line), `study_window.py` |
 | Field observations | `field_window.py` (five steps + run page), `field_spec.py` (`.field.json`: one table of E_/B_/C_/O_ columns, deposition, dilution), `field_scenario.py` (case → ENZ + EASY → scenario, observations file, skill table), `examples/field/` |
 | Checks | `run_benchmark.py`, `compare_juice_facsimile.py`, `check_easy_roundtrip.py`, `check_lamp_chamber.py`, `tests/` (unit, integration, regression and window tests; [tests/README.md](../tests/README.md)) |
 
-`mechanism_solver.py` is a leftover stub; its logic lives in `scenario_runner.py`.
+`mechanism_solver.py` holds only the species list and index the runner reads; the right-hand side and the
+solver are in `scenario_runner.py`. The KMT rate functions once in `mcm_kinetics.py` were removed on 25 Nov 2026:
+the solver never used them, and the mechanisms define their own KMT values.
 
 ## A3. Settings
 
