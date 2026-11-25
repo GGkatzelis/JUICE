@@ -289,9 +289,11 @@ counters, which FACSIMILE has to accept.
    an amount the absolute tolerance permits (SA 3 → 2 458 molec/cm³ in scene_08, DHPMPAL in scene_07).
    `run_benchmark.py` at its 100-molecule floor therefore FAILs scenes 04–09 for twostep; at the 1-ppt
    floor all pass. Lower `atol_floor` if sub-ppt species matter.
-7. **An undefined name in a rate expression evaluates as 1, not 0.** Met as `jo1d = CONST(J1)` in a
-   run on the GECKO-A inorganic core (O3 stuck at 1 ppb); the writer now avoids it, the parser does not
-   yet warn. A warning for undefined J names in `idl_parser` is the fix.
+7. **Undefined names.** In a *parameter* (a setting such as `jo1d = CONST(J1)`), an undefined plain name is
+   kept as a species without chemistry holding `INITIAL[*]`, as FACSIMILE does, with a warning; with the SAPHIR
+   `INITIAL[*] = 1` it reads as 1 (met as O3 stuck at 1 ppb on the GECKO-A inorganic core; the writer now avoids
+   it). In a *reaction rate* it reads as 0 and the reaction does not run; since 25 Nov 2026 the runner names
+   such a name in a warning (`tests/regression/test_failed_runs.py`); no SAPHIR scene has one.
 8. **The runner builds the analytic Jacobian structure under TWOSTEP** (1.86 M terms for toluene)
    although the solver never uses it — wasted set-up time at GECKO-A sizes; skip it when
    `_use_twostep`.

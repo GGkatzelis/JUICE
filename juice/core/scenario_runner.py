@@ -264,10 +264,19 @@ class ScenarioRunner:
         return prod / np.maximum(k_eff, 1e-30)
 
     def run(self):
+        self.failed = False
         try:
             _run_start = time.time()
             print("\n>>> Starting SAPHIR Simulation Pipeline")
             print("-" * 40)
+            if not self.cfg.get('elog_path'):
+                # The early SAPHIR GUI wrote scenario files without an expanded EASY file (elog) and with the
+                # reactions as lists in the JSON.  Nothing writes them any more and that route is untested: such a
+                # file is refused (25 Nov 2026) instead of being run on it.
+                raise RuntimeError("this scenario file has no expanded EASY file (elog_path): it is in the format of "
+                                   "the early SAPHIR GUI, which JUICE no longer runs.  Prepare the experiment again "
+                                   "from its .easy and .enz (window: Import a FACSIMILE experiment; code: "
+                                   "juice.prepare, or scenario_prep.prepare_scenario).")
             self._setup_environment()
             self._build_mechanism()
             self._solve()
@@ -283,6 +292,7 @@ class ScenarioRunner:
                 print(f">>> Note: {_note}")
             self._show_results(out_path)
         except Exception as e:
+            self.failed = True
             print(f"\n[ERROR] [CRITICAL ERROR] Simulation failed!")
             print(f"Error Details: {str(e)}")
             import traceback
@@ -1024,6 +1034,27 @@ class ScenarioRunner:
                       f"chemistry, as FACSIMILE does (a misspelt species in the include file?)")
             self.mechanism.species = sorted(set(self.mechanism.species) | set(_added_species))
             all_species.update(_added_species)
+        # The loop above checks the parameters only.  A name in a reaction's rate that the run does not define reads
+        # as 0 at run time and switches the reaction off without a word (a misspelt species or setting in a rate
+        # line).  Said here since 25 Nov 2026; the value stays 0, so results do not change.
+        _rate_unknown = {}
+        for _rx in self.mechanism.reactions:
+            _rs = str(getattr(_rx, 'rate_expression', '') or '')
+            try:
+                _rcode = compile(fortran_d_to_e(re.sub(r'J\((\d+)\)', r'J\1', _rs.upper().replace('@', '**'))),
+                                 '<rate>', 'eval')
+            except Exception:
+                continue
+            for _n in _rcode.co_names:
+                _nu = _n.upper()
+                if not (_nu in _known or _nu.startswith('_') or _nu in _added_species):
+                    _rate_unknown.setdefault(_nu, (_rx, _rs))
+        for _nu, (_rx, _rs) in list(_rate_unknown.items())[:20]:
+            _lbl = ' + '.join(_rx.reactants) + ' --> ' + ' + '.join(_rx.products)
+            print(f"  [WARNING] '{_nu}' in the rate of {_lbl} ({_rs[:80]}) is defined nowhere: it reads as 0, so this "
+                  f"reaction does not run (a misspelt name?)")
+        if len(_rate_unknown) > 20:
+            print(f"  [WARNING] ... and {len(_rate_unknown) - 20} more undefined names in reaction rates")
         if _unresolved:
             lines = '\n'.join(f"  {va} uses '{co}'" for va, co in _unresolved[:10])
             raise RuntimeError(
@@ -3928,3 +3959,6 @@ if __name__ == "__main__":
     runner._toml_path   = _args.toml
     runner.cfg.update(_cli)
     runner.run()
+    # a failed run ends with exit code 1: the windows, studies and juice.solve judge a run by its exit code and its
+    # .cs, and the .cs of an earlier run of the same experiment would otherwise pass for this one (25 Nov 2026)
+    sys.exit(1 if getattr(runner, 'failed', False) else 0)

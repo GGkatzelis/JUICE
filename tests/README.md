@@ -41,4 +41,5 @@ dilution, temperature step); `regression/test_exact_scenarios.py` runs it in eve
 | Date | Decision | Test |
 |---|---|---|
 | 24 Nov 2026 | In a study, the injection group `voc` means every organic injection: single compounds and injected solutions. `mixture` is the solutions alone (each scaled as a whole, composition unchanged), `compound` the single compounds alone. | `unit/test_study.py::test_voc_group_takes_single_compounds_and_injected_solutions` |
+| 25 Nov 2026 | A scenario file without an expanded EASY file (the format of the early SAPHIR GUI) is refused with a message instead of run on the untested route; a failed run ends with exit code 1. | `regression/test_failed_runs.py` |
 | 24 Nov 2026 | An injection timed before the run still enters in the first step and one after the end does not enter (the ENZ files stay as they were); the review of the experiment warns about both. | `unit/test_spec_grid_and_archive.py::test_pulse_timed_before_the_run_enters_in_the_first_step_and_the_review_says_so` |
