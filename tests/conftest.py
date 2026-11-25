@@ -49,3 +49,41 @@ def exact_small_run(tmp_path_factory):
     import exact_small
     js = exact_small.prepare(tmp_path_factory.mktemp("exact_small"), "fast")
     return js, exact_small.run(js)
+
+
+@pytest.fixture(scope="session")
+def small_study(tmp_path_factory):
+    """A real study, run: the UV-lamp chamber template with ethanol injected at 10:30 (four hours, lamps on
+    09:00-13:00), swept over the initial NO2 (5 and 50 ppb) and the injected ethanol (x 0.5 and x 2), so a 2 x 2
+    isopleth.  Four runs of a few seconds each.  Returns the path of the .study.json."""
+    import contextlib
+    import io
+    import juice
+    from juice.core import study as S
+    from juice.core.experiment_spec import InjectionEvent
+    root = tmp_path_factory.mktemp("small_study")
+    spec = juice.new_experiment("uv_ethanol", template="uv_chamber_lamps")
+    c = spec.conditions
+    c.start, c.end = "08:00", "12:00"
+    spec.precursors = ["C2H5OH"]
+    spec.initials = list(spec.initials) + [("NO2", "M*1e-9*20")]
+    spec.injections = [InjectionEvent("ethanol", "C2H5OH", "200", "10:30", 2.0, action="voc")]
+    exp_dir = root / "uv_ethanol"
+    with contextlib.redirect_stdout(io.StringIO()):
+        files = juice.write(spec, str(exp_dir))
+    toml = os.path.join(REPO, "settings.toml")
+    st = S.new_study("iso", str(root / "studies" / "iso"), toml)
+    st.experiments = [files["spec_path"]]
+    st.mode = "sweep"
+    st.workers = 2
+    st.axes = [S.Axis("initial", "NO2", [5.0, 50.0]), S.Axis("injection_scale", "ethanol", [0.5, 2.0])]
+    os.makedirs(st.folder, exist_ok=True)
+    path = S.save_study(st, os.path.join(st.folder, "iso.study.json"))
+    runner = S.StudyRunner(st)
+    with contextlib.redirect_stdout(io.StringIO()):
+        errors = runner.materialise_all()
+        assert not errors, errors
+        runner.run_all(workers=2)
+    failed = [(p.name, p.message) for p in runner.plans if not S.is_done(p)]
+    assert not failed, failed
+    return path
