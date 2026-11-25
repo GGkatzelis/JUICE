@@ -4,9 +4,9 @@ Install once with `pip install -e .[dev]`, then run from the repository folder.
 
 | Command | What it runs | Time |
 |---|---|---|
-| `python -m pytest` | everything (about 800 tests) | about 11 min |
+| `python -m pytest -n auto` | everything (about 900 tests), on all cores | about 10 min (18 min on one core) |
+| `python -m pytest -n auto -m "not slow"` | everything except the long solver runs: what GitHub runs on every push | about 7 min on 4 cores |
 | `python -m pytest -m unit` | the unit tests only (about 550) | about a minute |
-| `python -m pytest -m "not slow"` | everything except the longest solver runs | |
 | `python -m pytest tests/unit/test_particles.py` | one file | |
 | `python -m pytest --cov --cov-report=html` | everything, and writes `htmlcov/index.html` showing every line no test reached | |
 
@@ -20,6 +20,9 @@ Each test file sits in the folder of its layer, and every test gets that folder'
 | `integration/` | Several modules in a chain: experiment description → EASY/ENZ → scenario, the importers, the Python interface. | The pieces no longer fit together. |
 | `regression/` | Results against a stored reference: FACSIMILE, an analytic solution, a tight solver run. | The numbers moved. |
 | `gui/` | Windows opened without a screen. | A window no longer builds what it shows. |
+
+On GitHub (`.github/workflows/tests.yml`) the quick job runs on every push, the full suite every night and on
+request; a test that hangs fails after its time limit (`--timeout`) and is named in the log.
 
 `fixtures/` holds input files for the tests; `conftest.py` holds the shared set-up. `exact_small.py` is a small
 experiment whose every result has a closed form (decay, equilibrium, second order, light switch, injection,

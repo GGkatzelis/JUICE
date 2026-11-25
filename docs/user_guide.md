@@ -182,7 +182,7 @@ git); the last line compares one of them again and lists every column.
 ### Tests
 ```powershell
 pip install -e .[dev]             # adds pytest
-python -m pytest                  # about 800 tests, about 11 minutes
+python -m pytest -n auto          # about 900 tests, about 10 minutes on all cores
 python -m pytest -m unit          # one function at a time, under a minute
 python -m pytest -m "not slow"    # everything except the longest solver runs
 ```

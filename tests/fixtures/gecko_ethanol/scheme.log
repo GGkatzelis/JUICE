@@ -1,0 +1,38 @@
+  ---------------------------- 
+  GECKO VERSION=v0.0.0 
+  ---------------------------- 
+  maxgen =            6
+  mechanism temperature (K) used for branching ratio:  298.0
+  reference temperature (K):  298.0
+  default 3rd body M (molec cm-3):   2.50E+19
+           
+  ---------------------------- 
+     ----  MECHANISM  ---- 
+  ---------------------------- 
+  gas/particle mass transfer: included
+  gas/wall mass transfer: included
+  DHF isomerisation: no
+           
+  ---------------------------- 
+     --------- SAR -------- 
+  ---------------------------- 
+  vapor pressure scheme=Nannoolal 2008
+  OH addition SAR =Jenkin 2018  
+  Alkoxy isomerisation: Vereecken 2009 
+  Alkoxy dissociation: Vereecken 2009 
+           
+  ---------------------------- 
+    -- OPTIONAL CHEMISTRY --   
+  ---------------------------- 
+           
+  ---------------------------- 
+     ----- Reductions ----- 
+  ---------------------------- 
+  critical vapor pressure (atm) =  -13.000000000000000     
+  isomerisation allowed 
+  Cut off branching ratio below which a reaction pathway is ignored:    5.0000000000000003E-002
+  high-NOx flag: F
+  All classes of RO2 in RO2+RO2:  T
+           
+  ---------------------------- 
+ Precursor: CH3CH2(OH)

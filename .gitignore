@@ -83,6 +83,8 @@ MCM_database/MCM_3.3.1/Limonene/
 
 # Local logs / scratch
 *.log
+# ... except the generator logs of the test fixtures (gecko_ethanol/scheme.log holds maxgen)
+!tests/fixtures/**/*.log
 /tmp/
 
 # Personal/lecture work — never committed, local-only scratch

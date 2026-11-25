@@ -16,7 +16,7 @@ requires-python = ">=3.11"
 dynamic = ["version", "dependencies"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5"]   # the test suite: pip install -e .[dev], then python -m pytest
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-xdist>=3", "pytest-timeout>=2"]   # the test suite: pip install -e .[dev], then python -m pytest
 
 [project.scripts]
 juice = "juice.gui.juice_start:main"

@@ -234,7 +234,7 @@ any key.
 (scene_01 … scene_09) through the full pipeline and compares every column of the result with
 FACSIMILE: maximum relative deviation over the whole run, concentrations measured against
 max(max|FAC|, 100 molec/cm³), the solver's absolute tolerance. The current table is in [user_guide.md](user_guide.md#validation).
-`python -m pytest` (about 11 min, also on GitHub Actions, with a coverage table) runs the test suite in four
+`python -m pytest -n auto` (about 10 min on all cores; on GitHub the quick part on every push, the whole suite every night) runs the test suite in four
 layers ([tests/README.md](../tests/README.md)): unit tests that call one function with a hand-made input; the
 input-side self-tests for every scene and the importers; regression tests against a reference — scene_04
 against FACSIMILE, the analytic scenes `validation/scene_00_clock` and `validation/scene_T1`, a small experiment
