@@ -45,3 +45,27 @@ def test_chamber_tracer_is_known():
     exp.chamber.tracer_dilution = ["CO2"]
     exp.injections = [InjectionEvent("CO2", "CO2", "5", "10:00", 2)]
     assert not [m for _lvl, m in juice.check(exp) if "is not a species" in m]
+
+
+@pytest.fixture
+def imported_gecko(tmp_path, monkeypatch):
+    """A GECKO-A base imported here, as a user imports one: the ethanol generator output of tests/fixtures under an id
+    of its own, in a temporary registry.  Stands in for the large imports (GECKOA_toluene, ...), which are git-ignored
+    and so missing on every machine but the one that made them."""
+    import os
+    import shutil
+    from juice._root import ROOT
+    from juice.chemistry import mechanism_registry as mreg
+    from juice.importers import gecko_import as gi
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    shutil.copytree(os.path.join(ROOT, "chemistry", "mechanisms", "base", "MCM_v3.3.1"), base_dir / "MCM_v3.3.1")
+    monkeypatch.setattr(mreg, "BASE_DIR", str(base_dir))
+    folder = os.path.join(ROOT, "tests", "fixtures", "gecko_ethanol")
+    return gi.import_generator_folder(folder, "GECKOA_imported", "C2H5OH", log=lambda *a: None).id
+
+
+def test_an_imported_gecko_base_checks_its_own_species(imported_gecko):
+    flagged = _flagged(imported_gecko, ["C2H5OH", "HCHO", "NO", "O3", "TOLUENE", "C5H8"])
+    assert set(flagged) == {"TOLUENE", "C5H8"}
+    assert all("used as a whole" in m for m in flagged.values())

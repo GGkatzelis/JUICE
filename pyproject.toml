@@ -30,6 +30,7 @@ include = ["juice*"]
 
 [tool.coverage.run]
 source = ["juice"]
+patch = ["subprocess"]       # also the solver, which runs as a program of its own (scenario_runner)
 
 [tool.coverage.report]
 show_missing = true

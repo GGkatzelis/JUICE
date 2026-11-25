@@ -36,7 +36,8 @@ dilution, temperature step); `regression/test_exact_scenarios.py` runs it in eve
 2. **New code comes with unit tests** in `unit/test_<module>.py`, named after the source file it tests.
 3. **File names are unique across the four folders** (pytest needs this, as the folders are not packages).
 4. **A test that runs the solver for more than a few seconds** is marked `@pytest.mark.slow`.
-5. **Coverage is a map, not a target.** Use the report to find code no test reaches; a line being
+5. **Coverage is a map, not a target.** It includes the solver, which runs as a program of its own (`patch = ["subprocess"]`
+   in `pyproject.toml`). Use the report to find code no test reaches; a line being
    reached does not mean its result is checked.
 
 ## Decisions the tests record

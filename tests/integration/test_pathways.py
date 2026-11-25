@@ -80,11 +80,31 @@ def test_structure_image():
     assert pw.structure_image("not a smiles") is None
 
 
-CS = os.path.join(os.path.dirname(__file__), "..", "..", "runs", "benchmark", "fast", "scene_05", "scene_05.cs")
+@pytest.fixture(scope="module")
+def ethanol_cs(tmp_path_factory):
+    """The SAPHIR ethanol day (scene_05) run here from its reference input files, which are in the repository.  Until
+    25 Nov 2026 the test read the benchmark run of the machine it ran on and was skipped wherever there was none
+    (on GitHub, always)."""
+    import contextlib, io, shutil, subprocess, sys
+    from juice._root import ROOT
+    from juice.core import scenario_prep as sp
+    toml = os.path.join(ROOT, "settings.toml")
+    src = os.path.join(ROOT, "validation", "IDL Input", "scene_05")
+    work = tmp_path_factory.mktemp("scene_05")
+    for ext in (".easy", ".enz", ".fac", ".out"):
+        if os.path.isfile(os.path.join(src, "scene_05" + ext)):
+            shutil.copy2(os.path.join(src, "scene_05" + ext), work)
+    with contextlib.redirect_stdout(io.StringIO()):
+        js = sp.prepare_scenario({"easy": str(work / "scene_05.easy"), "enz": str(work / "scene_05.enz")},
+                                 sp.load_paths(toml)["include_dir"], export_kv_pd=False, toml_path=toml,
+                                 solver=sp.solver_from_toml(toml, "fast"))
+    subprocess.run([sys.executable, "-m", "juice.core.scenario_runner", js, "--toml", toml], capture_output=True, check=True)
+    return js[:-5] + ".cs"
 
 
-@pytest.mark.skipif(not os.path.isfile(CS), reason="needs the ethanol benchmark run (runs/benchmark/fast/scene_05)")
-def test_ethanol_run():
+@pytest.mark.slow
+def test_ethanol_run(ethanol_cs):
+    CS = ethanol_cs
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])                 # noqa: F841

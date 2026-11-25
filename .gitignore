@@ -32,6 +32,7 @@ desktop.ini
 # pytest / coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # Distribution / packaging
