@@ -284,6 +284,10 @@ class ScenarioRunner:
             _elapsed = time.time() - _run_start
             print("-" * 40)
             print(f">>> All steps completed successfully.  Total time: {_elapsed//60:.0f}m {_elapsed%60:.1f}s")
+            _rw = getattr(self, '_rate_warnings', [])
+            if _rw:
+                print(f">>> WARNING: {len(_rw)} reaction rate(s) were not finite or beyond physical values "
+                      f"(the [WARNING] lines above, e.g. {_rw[0][1]}): check the rate expressions before using these results.")
             if 'O1D' in getattr(self, '_pss_species', set()):
                 print(">>> Note: O1D was not integrated by the ODE solver — its concentration "
                       "was computed analytically at each step as a pseudo-steady-state "
@@ -1892,12 +1896,20 @@ class ScenarioRunner:
                 # rate expression references a species, the result is row-constant.
                 try:
                     _compute_rates(ctx_s, _k_row_buf)
+                    _rate_check(_k_row_buf, t_abs)            # before non-finite values are set to 0
                     np.nan_to_num(_k_row_buf, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
                     _k_row_valid[0] = True
                     if _live_k_n:
                         _lv_row_prepare(ctx_s)
                 except Exception:
                     _k_row_valid[0] = False
+            else:                                             # rates depend on species: checked at the row start
+                try:
+                    with np.errstate(all='ignore'):
+                        _compute_rates(ctx_s, _rate_chk_buf)
+                    _rate_check(_rate_chk_buf, t_abs)
+                except Exception:
+                    pass
             # Optional observer (f0am_export.py): sees every settings snapshot exactly as the
             # solver uses it.  Never set during normal runs.
             _hook = getattr(self, 'snap_hook', None)
@@ -2341,6 +2353,42 @@ class ScenarioRunner:
                             and _as_bool(self.cfg.get('k_row_cache', True), True))
         _k_row_buf   = np.zeros(len(self.mechanism.reactions))
         _k_row_valid = [False]
+
+        # ── Rate sanity check (25 Nov 2026) ───────────────────────────────────────
+        # Once per row, on the rate constants as evaluated and before non-finite values are set to 0: a rate that is
+        # infinite or not a number, or far beyond any physical value for its order, is named in a warning once per
+        # reaction.  First order: 1e13 /s (a molecular vibration; nothing unimolecular is faster); second order:
+        # 1e-8 cm3/s (about 30 x the gas-kinetic collision limit).  Order 0 (sources) and 3: non-finite values only.
+        # The order counts the reactants the solver integrates (settings such as DIL, H2O or a switch are not).
+        # The run itself is not changed.
+        _rate_order = np.array([sum(float(_r['coeff']) for _r in getattr(_rx, 'reactants_parsed', []))
+                                for _rx in self.mechanism.reactions], dtype=float)
+        _rate_limit = np.where(np.isclose(_rate_order, 1.0), 1e13, np.where(np.isclose(_rate_order, 2.0), 1e-8, np.inf))
+        _rate_chk_buf = np.zeros(len(self.mechanism.reactions))
+        self._rate_warnings = []
+
+        def _rate_check(kraw, t_abs):
+            bad = ~np.isfinite(kraw)
+            big = np.abs(np.where(bad, 0.0, kraw)) > _rate_limit
+            if not (bad.any() or big.any()):
+                return
+            seen = {w[0] for w in self._rate_warnings}
+            hhmm = f"{int(t_abs % 86400 // 3600):02d}:{int(t_abs % 3600 // 60):02d}"
+            for i in np.flatnonzero(bad | big):
+                if i in seen or len(self._rate_warnings) >= 200:
+                    continue
+                rx = self.mechanism.reactions[i]
+                lbl = ' + '.join(rx.reactants) + ' --> ' + ' + '.join(rx.products)
+                expr = str(getattr(rx, 'rate_expression', ''))[:80]
+                if bad[i]:
+                    why = f"is {kraw[i]} (not a finite number) and is set to 0"
+                else:
+                    unit = "/s" if _rate_order[i] == 1 else "cm3/s"
+                    why = (f"is {kraw[i]:.3g} {unit}, beyond any physical value for a reaction of order "
+                           f"{_rate_order[i]:g} (limit {_rate_limit[i]:g} {unit})")
+                self._rate_warnings.append((i, lbl))
+                if len(self._rate_warnings) <= 20:
+                    print(f"  [WARNING] the rate of {lbl} ({expr}) {why}, first at {hhmm} UTC")
         # (the '[SOLVER] per-row k cache' line is printed after the live block, where the split is decided)
 
         # ── Live settings (FR 2026-11-14; same rules as EASY 7.01 - 7.05) ─────────────────

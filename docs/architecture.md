@@ -294,6 +294,14 @@ counters, which FACSIMILE has to accept.
    `INITIAL[*] = 1` it reads as 1 (met as O3 stuck at 1 ppb on the GECKO-A inorganic core; the writer now avoids
    it). In a *reaction rate* it reads as 0 and the reaction does not run; since 25 Nov 2026 the runner names
    such a name in a warning (`tests/regression/test_failed_runs.py`); no SAPHIR scene has one.
+10. **Rate sanity check** (25 Nov 2026). Once per row the runner checks every rate constant before it is used: a
+    value that is not finite (it is set to 0, as before), or one beyond any physical value for its order (first
+    order above 1e13 s⁻¹, second order above 1e-8 cm³ s⁻¹), is named in a warning and repeated at the end of the
+    run; the run itself is unchanged. No warning in CRACMM 2, CRACMM 1, RACM2, NOAA_BB, GECKO-A ethanol and
+    toluene, the MCM or the field examples. It does fire in scene_08 and scene_09: the photolysis of NO3CH2CHO
+    in `saphir.jmeasured_02.incl` (PHOTMMSC, exp(+1.389/cos)) reaches 6e15 and 2e33 s⁻¹ at twilight, where the
+    cosine is held at its 0.01 floor while jNO2 is still above 0. FACSIMILE computes the same, so the two still
+    agree; the include file needs a fix, and every SAPHIR run through sunrise or sunset with it shows the warning.
 8. **The runner builds the analytic Jacobian structure under TWOSTEP** (1.86 M terms for toluene)
    although the solver never uses it — wasted set-up time at GECKO-A sizes; skip it when
    `_use_twostep`.

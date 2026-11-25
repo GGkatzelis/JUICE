@@ -63,3 +63,25 @@ def test_an_unknown_name_in_a_rate_is_said(tmp_path, broken, name):
 def test_a_correct_experiment_gets_no_such_warning(tmp_path):
     _df, out = run(prepare(tmp_path, "fast"), with_log=True)
     assert "is defined nowhere" not in out and "Simulation failed" not in out
+
+
+@pytest.mark.parametrize("profile", ["fast", "twostep"])
+@pytest.mark.parametrize("rate, said", [
+    ("CONST(1.E200)", "is 1e+200 /s, beyond any physical value for a reaction of order 1 (limit 1e+13 /s)"),
+    ("CONST(1.E-4*EXP(800.))", "is inf (not a finite number) and is set to 0"),
+])
+def test_a_rate_beyond_physics_is_said(tmp_path, profile, rate, said):
+    """Rate sanity check of 25 Nov 2026: before, a rate of 1e200 /s ran to nonsense (B = 6e210 cm-3) and an
+    overflowing one was set to 0, both without a word.  The run itself is unchanged; the warning names the reaction
+    and is repeated at the end of the run."""
+    js = prepare(tmp_path, profile)
+    edit_elog(js, "k[A --> B] = CONST(1.E-4)", f"k[A --> B] = {rate}")
+    _df, out = run(js, with_log=True)
+    assert f"[WARNING] the rate of A --> B" in out and said in out
+    assert ">>> WARNING: 1 reaction rate(s) were not finite or beyond physical values" in out
+
+
+@pytest.mark.parametrize("profile", ["fast", "precise", "twostep"])
+def test_the_rates_of_a_correct_experiment_pass_the_check(tmp_path, profile):
+    _df, out = run(prepare(tmp_path, profile), with_log=True)
+    assert "[WARNING]" not in out and ">>> WARNING" not in out
