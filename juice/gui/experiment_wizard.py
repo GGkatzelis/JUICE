@@ -1,16 +1,18 @@
 """
-experiment_wizard.py — guided scenario builder (Step 3 of the JUICE workflow)
-============================================================================
+experiment_wizard.py — the step pages of the experiment window (juice_gui.py) and their dialogs
+==============================================================================================
 
-A QWizard that asks experiment questions and fills an `ExperimentSpec`
-(experiment_spec.py).  On Finish the backend writes <name>.enz, <name>.easy,
-the mechanism subset (if compounds were chosen) and <name>.experiment.json.
-Its pages are the steps of juice_gui.py (shared through ExperimentHost).  The user never edits a
-file; the review page shows the generated EASY and keeps an "expert overrides"
-box and a button to the block-level editor (easy_builder.EasyBuilderDialog).
+The pages ask the experiment questions and fill an `ExperimentSpec` (experiment_spec.py); ExperimentHost is what
+they need from the window that holds them.  On Run the backend writes <name>.enz, <name>.easy, the mechanism subset
+(if compounds were chosen) and <name>.experiment.json.  The user never edits a file; the review shows the
+generated EASY and keeps an "expert overrides" box.
 
 Pages:  Start (template, name, folder) → Where and when → Chemistry →
         Injections → Chamber effects → Initial conditions → Review
+Dialogs: the amount calculator, mixtures, the SAPHIR wiki import, a GECKO-A import.
+
+The pages were first a QWizard of their own (ExperimentWizard); nothing opened it any more, and it was removed on
+25 Nov 2026.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QStringListModel, QTimer
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QColor
-from PyQt6.QtWidgets import (QSplitter, QWizard, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+from PyQt6.QtWidgets import (QSplitter, QWizardPage, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QLineEdit, QPushButton, QCheckBox, QComboBox, QListWidget, QListWidgetItem,
                              QTableWidget, QTableWidgetItem, QPlainTextEdit, QFileDialog, QMessageBox,
                              QGroupBox, QHeaderView, QRadioButton, QButtonGroup, QWidget, QSpinBox,
@@ -2398,7 +2400,7 @@ class WikiImportDialog(QDialog):
 class ExperimentHost:
     """Everything the pages need from their container: the page objects, include/easy
     roots, spec <-> pages mapping, wiki import, output folder and writing.  Mixed into
-    the QWizard (ExperimentWizard) and into the step-by-step main window (juice_gui)."""
+    the step-by-step main window (juice_gui.JuiceWindow)."""
 
     include_dir: str = ""
     easy_root: str = ""
@@ -2536,37 +2538,3 @@ class ExperimentHost:
         for n in res.get("notes", []):
             print(f"[experiment] {n}")
         return res
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-class ExperimentWizard(QWizard, ExperimentHost):
-    experiment_written = pyqtSignal(str)
-
-    def __init__(self, parent=None, include_dir: str = "", easy_root: str = "", last_easy_dir: str = ""):
-        super().__init__(parent)
-        self.setWindowTitle("New experiment — JUICE")
-        self.resize(1250, 850)
-        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
-        self._init_host(include_dir, easy_root or last_easy_dir)
-        for p in self.pages():
-            self.addPage(p)
-        self.load_spec(self._base, keep_name=True)
-
-    # ── finish ───────────────────────────────────────────────────────────────
-    def accept(self):
-        try:
-            res = self.write_all()
-        except Exception as e:
-            QMessageBox.critical(self, "Write failed", str(e)); return
-        # no modal dialog here so that headless use cannot block
-        super().accept()
-        self.experiment_written.emit(res["easy"])
-
-
-if __name__ == "__main__":
-    import sys
-    from PyQt6.QtWidgets import QApplication
-    app = QApplication(sys.argv)
-    w = ExperimentWizard(include_dir=sys.argv[1] if len(sys.argv) > 1 else "", easy_root=sys.argv[2] if len(sys.argv) > 2 else "")
-    w.show()
-    sys.exit(app.exec())

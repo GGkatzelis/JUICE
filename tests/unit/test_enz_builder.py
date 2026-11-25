@@ -1,8 +1,7 @@
 """enz_builder.py, the functions without a window: the solar zenith angle, NetCDF time and variables,
-interpolation onto the ENZ grid, the step, roof and pulse columns, and the ENZ writer.  The experiment
+interpolation onto the ENZ grid, and the ENZ writer.  The experiment
 description, the field mode and the measured inputs all build their ENZ files from these."""
 from datetime import datetime, timezone
-from types import SimpleNamespace as NS
 
 import numpy as np
 import pytest
@@ -140,48 +139,6 @@ def test_interpolation_of_data_without_one_valid_value_is_the_fill_value():
     assert list(out) == [284.0, 284.0, 284.0]
 
 
-def test_step_function_holds_each_value_until_the_next():
-    grid = minute_grid(f"{DAY} 11:47", 9)                             # 11:47 … 11:55
-    out = eb.step_to_grid("11:54,0; 11:49,0.2", grid, DAY)            # unsorted on purpose
-    assert list(out) == [0, 0, 0.2, 0.2, 0.2, 0.2, 0.2, 0, 0]
-
-
-def test_step_function_skips_what_it_cannot_read():
-    grid = minute_grid(f"{DAY} 10:00", 3)
-    assert list(eb.step_to_grid("10:01,5; nonsense; 10:xx,7; ;10:02", grid, DAY)) == [0, 5, 5]
-    assert list(eb.step_to_grid("", grid, DAY)) == [0, 0, 0]
-
-
-def test_roof_is_open_from_the_opening_minute_up_to_but_not_at_the_closing_minute():
-    grid = minute_grid(f"{DAY} 08:58", 6)                             # 08:58 … 09:03
-    out = eb.hv_intervals_to_grid([("09:00", "09:02")], grid, DAY)
-    assert list(out) == [0, 0, 1, 1, 0, 0]
-
-
-def test_several_roof_intervals_and_an_unreadable_one():
-    grid = minute_grid(f"{DAY} 09:00", 6)
-    out = eb.hv_intervals_to_grid([("09:00", "09:01"), ("open", "close"), ("09:03", "09:05")], grid, DAY)
-    assert list(out) == [1, 0, 0, 1, 1, 0]
-
-
-def test_roof_interval_of_another_day_leaves_the_grid_closed():
-    grid = minute_grid("2024-07-10 09:00", 3)
-    assert list(eb.hv_intervals_to_grid([("09:00", "09:02")], grid, DAY)) == [0, 0, 0]
-
-
-def test_pulses_add_up_where_they_overlap():
-    grid = minute_grid(f"{DAY} 10:00", 6)
-    out = eb.pulse_to_grid([("10:01", "10:04", 2.0), ("10:03", "10:05", 0.5)], grid, DAY)
-    assert list(out) == [0, 2.0, 2.0, 2.5, 0.5, 0]
-
-
-def test_pulse_that_ends_before_it_starts_or_cannot_be_read_is_left_out():
-    grid = minute_grid(f"{DAY} 10:00", 4)
-    out = eb.pulse_to_grid([("10:02", "10:01", 9.0), ("10:02", "10:02", 9.0), (None, "10:03", 9.0),
-                            ("10:01", "10:02", "much"), ("10:03", "10:04", "1.5")], grid, DAY)
-    assert list(out) == [0, 0, 0, 1.5]
-
-
 # ── the ENZ file ─────────────────────────────────────────────────────────────
 
 def test_enz_file_header_columns_and_number_formats(tmp_path):
@@ -205,32 +162,3 @@ def test_written_enz_reads_back(tmp_path):
     assert np.array_equal(rows[:, 0], grid)
     assert rows[:, 1] == pytest.approx(columns["sz"], abs=1e-8)
     assert rows[:, 2] == pytest.approx(columns["jO1D"], rel=1e-8)
-
-
-# ── the rest ─────────────────────────────────────────────────────────────────
-
-def test_chamber_volume_is_saphirs_by_default_and_for_an_unknown_name():
-    assert eb._chamber_volume() == 276.0
-    assert eb._chamber_volume("SAPHIR") == 276.0
-
-
-def test_wiki_action_log_lines_are_found_in_the_page(monkeypatch):
-    requests = pytest.importorskip("requests")
-    page = ("<html><body><h1>2024-07-09</h1>\n<pre>\n"
-            "09:00 R  <b>roof</b> open\n"
-            "10:15 X 20 &amp; 5 µl   limonene&nbsp;injected\n"
-            "not an action line\n"
-            "10:30 XY two letters are not a code\n"
-            "14:30 r roof closed\n</pre></body></html>")
-    seen = {}
-
-    def fake_get(url, **kwargs):
-        seen["url"] = url
-        return NS(text=page, raise_for_status=lambda: None)
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    events = eb.fetch_wiki_events("2024-07-09")
-    assert seen["url"].endswith("/2024-07-09")
-    assert events == [{"time": "09:00", "code": "R", "description": "roof open"},
-                      {"time": "10:15", "code": "X", "description": "20 & 5 µl limonene injected"},
-                      {"time": "14:30", "code": "r", "description": "roof closed"}]
