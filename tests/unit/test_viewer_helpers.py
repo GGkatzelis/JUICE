@@ -99,3 +99,13 @@ def test_stoichiometry_and_reaction_labels():
     assert rv.BudgetEngine._make_label(Reaction([], ["HONO"], "k")) == "hv/wall → HONO"
     long = rv.BudgetEngine._make_label(Reaction(["A", "B", "C"], ["D", "E", "F", "G"], "k"))
     assert long == "A + B + ... → D + E + F + ..."
+
+
+def test_no_code_uses_functions_that_current_matplotlib_removed():
+    """matplotlib 3.11 removed cm.get_cmap.  The viewer used it in seven places; on a fresh install the budgets
+    crashed and the Phases tab aborted the program (on GitHub the test run hung from 15 to 25 Nov 2026)."""
+    import pathlib
+    root = pathlib.Path(rv.__file__).resolve().parents[1]
+    users = [str(p.relative_to(root)) for p in root.rglob("*.py") if "get_cmap(" in p.read_text(encoding="utf-8")]
+    assert users == []
+    assert rv._colormap("tab20")(0) == pytest.approx((0.12156862745098039, 0.4666666666666667, 0.7058823529411765, 1.0))

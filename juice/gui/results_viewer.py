@@ -163,15 +163,22 @@ _DEST_COLORS = ['#d62728', '#ff9896', '#ff7f0e', '#ffbb78', '#9467bd',
                 '#c49c94', '#8c564b', '#c7c7c7', '#e377c2', '#7f7f7f']
 
 
+def _colormap(name):
+    """A registered colormap by name.  matplotlib.colormaps exists since 3.5; cm.get_cmap, used here until 25 Nov 2026,
+    was removed in matplotlib 3.11, so a fresh install crashed in the budgets and the Phases tab."""
+    import matplotlib
+    return matplotlib.colormaps[name]
+
+
 def _distinct_colors(labels):
     """One clearly different colour per label (up to 60 without repeating: tab10, then the
     tab20b/tab20c dark members, then their light members); 'Other' is always grey."""
     import matplotlib.cm as _cm
     base = [_cm.tab10(i) for i in range(10)]
     for name in ("tab20b", "tab20c"):
-        base += [_cm.get_cmap(name)(i) for i in range(0, 20, 4)]      # dark members
+        base += [_colormap(name)(i) for i in range(0, 20, 4)]      # dark members
     for name in ("tab20b", "tab20c"):
-        base += [_cm.get_cmap(name)(i) for i in range(2, 20, 4)]      # light members
+        base += [_colormap(name)(i) for i in range(2, 20, 4)]      # light members
     out, i = [], 0
     for lbl in labels:
         if str(lbl).lower().startswith("other"):
@@ -4337,7 +4344,7 @@ class ResultsViewer(QMainWindow):
             k = key_fn(sp)
             totals[k] = totals.get(k, np.zeros(len(t))) + np.nan_to_num(ppb_c)
         keys = [k for k in order if k in totals and np.nanmax(totals[k]) > 1e-9] + [k for k in totals if k not in order and np.nanmax(totals[k]) > 1e-9]
-        cmap = _mcm.get_cmap(cmap_name)
+        cmap = _colormap(cmap_name)
         colors = [cmap(0.15 + 0.75 * i / max(1, len(keys) - 1)) for i in range(len(keys))]
         if keys:
             ax.stackplot(t, *[totals[k] for k in keys], labels=keys, colors=colors, alpha=0.85)
@@ -4350,7 +4357,7 @@ class ResultsViewer(QMainWindow):
                               key=lambda x: np.nanmean(x[1][1]), reverse=True)
         names  = [item[0] for item in sorted_items]
         arrays = [np.nan_to_num(item[1][1]) for item in sorted_items]
-        cmap   = _mcm.get_cmap('tab20')
+        cmap   = _colormap('tab20')
         colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
         ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
         return names, colors
@@ -4382,7 +4389,7 @@ class ResultsViewer(QMainWindow):
             split.sort(key=lambda kv: -float(np.nanmean(kv[1])))
             class_totals['Other'] = rest
         names, arrays, colors, hatches = [], [], [], []
-        _split_cmap = _mcm.get_cmap('Dark2')
+        _split_cmap = _colormap('Dark2')
         for cls in _CB_CLASS_ORDER:
             if cls == 'Parent VOC':
                 names += p_names; arrays += p_arrays; colors += p_colors; hatches += p_hatches
@@ -4475,7 +4482,7 @@ class ResultsViewer(QMainWindow):
                                   key=lambda x: np.nanmean(x[1][1]), reverse=True)
             names  = [item[0] for item in sorted_items]
             arrays = [np.nan_to_num(item[1][1]) for item in sorted_items]
-            cmap   = _mcm.get_cmap('tab20')
+            cmap   = _colormap('tab20')
             colors = [cmap((i % 20) / 20.0) for i in range(len(names))]
             ax.stackplot(t, *arrays, labels=names, colors=colors, alpha=0.85)
         else:
@@ -5140,7 +5147,7 @@ class ResultsViewer(QMainWindow):
         grp_no = (spc.groupby(['nC', 'nO_bin'])['unit_val'].sum().unstack(fill_value=0))
         grp_no = grp_no.reindex(x_all, fill_value=0)
         n_levels = sorted(grp_no.columns)
-        cmap = _mcm.get_cmap('viridis')
+        cmap = _colormap('viridis')
         bottoms = np.zeros(len(x_all))
         self._cs_co_bars = []                          # (axes, patch, nC, key, kind) for the hover list
         for no in n_levels:

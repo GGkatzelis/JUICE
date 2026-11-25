@@ -10,6 +10,7 @@ matplotlib>=3.9,<4
 PyQt6>=6.6,<7
 numba>=0.60            # compiled ODE kernel (scenario_runner, ode_backend = "numba")
 netCDF4>=1.6           # SAPHIR archive files (.nc)
+openpyxl>=3.1          # Excel input tables (.xlsx): measured inputs, field cases, particle size distributions
 requests>=2.31         # SAPHIR wiki import
 Pillow>=10             # figure snapshots for the figure list
 python-pptx>=1.0       # figure list -> .pptx document
