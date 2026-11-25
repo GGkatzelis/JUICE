@@ -6,14 +6,15 @@ juice_start.py — the JUICE start menu: choose what you need, then the matching
                                              #   .cs → results viewer, .study.json → study window,
                                              #   .experiment.json → experiment window, .field.json → field window
 
-First question: chamber experiment or field observations.  The chamber menu is below; the field menu
-offers a new or a saved field case and the same two results windows.
+First the start window (juice_hub.py): the logo with a circle for Chambers and one for Field.  It stays
+open; a circle opens its menu.  The chamber menu is below; the field menu offers a new or a saved field
+case and the same two results windows.
 
 Model an experiment:  new experiment · open a saved experiment · new study (sweep or several experiments)
 Look at results:      one experiment's results (.cs) · a study's results (.study.json)
 
-Every choice starts its own, independent window (its own process) and closes the menu, so clicking
-the icon again always gives a fresh menu, whatever is already open.  `choose_results()` is the same
+Every choice starts its own, independent window (its own process) and closes the menu; the start
+window is still there for the next one.  `choose_results()` is the same
 "one experiment or a study?" question for the results viewer when it is started without a file.
 """
 from __future__ import annotations
@@ -31,6 +32,8 @@ from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog, QFrame, QGroupB
 HERE = _JUICE_ROOT
 SCRIPTS = {"experiment": "juice.gui.juice_gui", "study": "juice.gui.study_window", "results": "juice.gui.results_viewer",
            "field": "juice.gui.field_window"}
+WHAT = {"experiment": "the experiment window", "study": "the study window", "results": "the results viewer",
+        "field": "the field window"}
 
 
 def _toml_args(toml: str) -> list:
@@ -38,9 +41,10 @@ def _toml_args(toml: str) -> list:
 
 
 def launch(kind: str, args: list = (), toml: str = "") -> bool:
-    """Start one JUICE window in its own process (independent of this one)."""
-    ok, _pid = QProcess.startDetached(sys.executable, ["-m", SCRIPTS[kind]] + list(args) + _toml_args(toml), HERE)
-    return bool(ok)
+    """Start one JUICE window in its own process (independent of this one).  A small "JUICE is opening …" card is
+    shown until that window is on screen (juice_loading.py)."""
+    from juice.gui import juice_loading
+    return juice_loading.start(SCRIPTS[kind], list(args) + _toml_args(toml), HERE, WHAT[kind])
 
 
 def open_file(path: str, toml: str = "") -> bool:
@@ -190,7 +194,8 @@ class StartWindow(QWidget):
         foot = QHBoxLayout()
         if on_back is not None:
             b = QPushButton("Back"); b.clicked.connect(on_back); foot.addWidget(b)
-        n = QLabel("Each choice opens its own window. Click the JUICE icon again for another one at any time.")
+        n = QLabel("Each choice opens its own window. " + ("The JUICE start window stays open for the next one." if on_back is not None
+                   else "Click the JUICE icon again for another one at any time."))
         n.setObjectName("subtitle"); foot.addWidget(n); foot.addStretch()
         q = QPushButton("Close"); q.clicked.connect(self.close); foot.addWidget(q)
         v.addLayout(foot)
@@ -276,41 +281,10 @@ def _show(window, previous=None):
     return window
 
 
-class FirstChoice(QWidget):
-    """The first question: a chamber experiment, or field observations?"""
-
-    def __init__(self, toml: str = ""):
-        super().__init__()
-        from juice.gui import juice_theme as theme
-        self.toml = toml
-        self.setWindowTitle("JUICE"); self.setWindowIcon(theme.app_icon()); self.setMinimumWidth(720)
-        v = QVBoxLayout(self); v.setContentsMargins(22, 18, 22, 16); v.setSpacing(12)
-        head = QHBoxLayout()
-        if os.path.isfile(theme.LOGO):
-            logo = QLabel(); logo.setPixmap(QPixmap(theme.LOGO).scaledToHeight(64, Qt.TransformationMode.SmoothTransformation))
-            head.addWidget(logo)
-        tl = QVBoxLayout()
-        t = QLabel("JUICE"); t.setObjectName("title"); tl.addWidget(t)
-        s = QLabel("Jülich Utility for Integrating Chemical Equations — what do you want to model?"); s.setObjectName("subtitle")
-        tl.addWidget(s); head.addLayout(tl); head.addStretch(); v.addLayout(head)
-        cols = QHBoxLayout(); cols.setSpacing(14)
-        a = _Choice("Chamber experiment", "A simulation chamber: injections, conditions and walls. New and saved experiments, "
-                    "studies, FACSIMILE imports and results.", primary=True)
-        b = _Choice("Field observations", "Air outside: a measurement site, a plume, or an air parcel along a trajectory.",
-                    primary=True)
-        a.clicked.connect(lambda: self.open_menu(StartWindow)); b.clicked.connect(lambda: self.open_menu(FieldMenu))
-        cols.addWidget(a, 1); cols.addWidget(b, 1); v.addLayout(cols)
-        foot = QHBoxLayout(); foot.addStretch()
-        q = QPushButton("Close"); q.clicked.connect(self.close); foot.addWidget(q)
-        v.addLayout(foot)
-
-    def open_menu(self, cls):
-        toml = self.toml
-
-        def back():
-            _show(FirstChoice(toml), menu)
-        menu = cls(toml, on_back=back)
-        return _show(menu, self)
+def FirstChoice(toml: str = ""):
+    """The start window: the logo with a circle for Chambers and one for Field (juice_hub.Hub).  It stays open."""
+    from juice.gui.juice_hub import Hub
+    return Hub(toml)
 
 
 def main(argv=None) -> int:
@@ -325,7 +299,7 @@ def main(argv=None) -> int:
     app = QApplication(argv); theme.apply_theme(app)
     if files:                                     # dropped on the icon: straight to the right window
         if open_file(files[0], toml):
-            return 0
+            return app.exec()                     # until the "JUICE is opening …" card has closed
         QMessageBox.warning(None, "JUICE", f"JUICE does not know what to open {os.path.basename(files[0])} with.\n"
                                            "It opens .cs results, .study.json studies, .experiment.json experiments, "
                                            ".field.json field cases and imports .easy / .elog FACSIMILE experiments.")

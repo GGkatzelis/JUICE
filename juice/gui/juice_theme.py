@@ -84,10 +84,34 @@ def taskbar_identity(name: str = "FZJ.JUICE") -> None:
             pass
 
 
+READY_ENV = "JUICE_READY_FILE"      # set by the window that started this process: a marker file to remove once on screen
+
+
+def signal_ready() -> None:
+    """Tell the window that started this process that ours is on screen: its "JUICE is opening …" card closes
+    (juice_loading.py).  Done once, when the event loop runs, so the window has been drawn."""
+    marker = os.environ.pop(READY_ENV, "")
+    if not marker:
+        return
+
+    def done():
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+    try:
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, done)
+    except Exception:
+        done()
+
+
 def force_taskbar_icon(widget) -> bool:
     """Windows: hand the .ico to the native window itself (WM_SETICON big + small, and the window
     class), independent of Qt's icon handling — the taskbar reads the icon from there.  Call after
-    show().  Returns True when it was applied."""
+    show().  Returns True when it was applied.  Every window calls this right after show(), so it is
+    also where the window reports that it is there (signal_ready)."""
+    signal_ready()
     if not sys.platform.startswith("win") or not os.path.isfile(ICON):
         return False
     try:

@@ -21,8 +21,9 @@ and runs it. Examples: [examples/](../examples).
 python -m juice.tools.make_shortcut              # the JUICE icon on the Desktop
 python -m juice.tools.make_shortcut --startmenu  # also in the Start menu
 ```
-The **JUICE** icon ([JUICE.bat](../JUICE.bat) → [juice_start.py](../juice/gui/juice_start.py)) first asks
-whether you model a chamber experiment or field observations. The chamber path opens this menu:
+The **JUICE** icon ([JUICE.bat](../JUICE.bat) → [juice_start.py](../juice/gui/juice_start.py)) opens the start
+window ([juice_hub.py](../juice/gui/juice_hub.py)): the logo with one circle for **Chambers** and one for **Field**.
+It stays open, so the next window is one click away. The Chambers circle opens this menu:
 
 | Model an experiment | Look at results |
 |---|---|

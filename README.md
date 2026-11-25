@@ -34,8 +34,9 @@ the code interface are plain Python.
 
 ## Use it
 
-**With the windows:** double-click the JUICE icon (or `JUICE.bat`). It asks whether you model a chamber
-experiment or field observations and walks you through five steps. [docs/tutorial.md](docs/tutorial.md) goes
+**With the windows:** double-click the JUICE icon (or `JUICE.bat`). The start window shows one circle for
+**Chambers** and one for **Field**; each opens a menu, and a new experiment or field case is set up in five
+steps. The start window stays open, so the next window is one click away. [docs/tutorial.md](docs/tutorial.md) goes
 through a chamber experiment, the same under UV lamps, a field case and a study in an afternoon.
 
 **From Python:** the same in a script ([examples/chamber/saphir_isoprene.py](examples/chamber/saphir_isoprene.py)):

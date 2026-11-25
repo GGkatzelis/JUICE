@@ -299,7 +299,8 @@ class StudyWindow(QMainWindow):
         hb.addStretch(); rl.addLayout(hb); self.tabs.addTab(rw, "Results")
         pw = QWidget(); pl = QVBoxLayout(pw); pl.setContentsMargins(0, 0, 0, 0)
         pl.addWidget(_more_info("What is drawn depends on the number of axes: two → isopleth, one → curves, none → one bar per experiment.", [
-            "<b>Two axes</b>: filled contours of the chosen result over axis 1 × axis 2 for the first experiment, interpolated between the "
+            "<b>Two axes</b>: filled contours of the chosen result over axis 1 (x) × axis 2 (y) for the first experiment — an axis that "
+            "varies NOx is always drawn on y, the other one (usually VOC) on x, as ozone isopleths are usually shown — interpolated between the "
             "grid points (black dots, value printed next to each). Few points give coarse contours: 4 × 4 or more for a usable isopleth.",
             "<b>One axis</b>: the result against the axis value, one line per experiment. The note below gives the normalised sensitivity "
             "between neighbouring points: % change of the result per % change of the parameter (+1 proportional, 0 insensitive, "
@@ -525,6 +526,10 @@ class StudyWindow(QMainWindow):
         st = self.study
         name, folder, notes, exps = st.name, st.folder, st.notes, list(st.experiments)
         mods, axes, metrics, workers, kvpd = list(st.modifications), list(st.axes), list(st.metrics), st.workers, st.export_kv_pd
+        # the axis names of the file are kept: the run folders on disk are named after them (see _keep_labels).  Also
+        # the name an axis without a label gets from its kind and target (a study written from code): until 25 Nov
+        # 2026 only explicit labels were kept, and such a study opened with its finished runs not found.
+        self._file_labels = {self._axis_key(a): a.label or a.name() for a in axes}
         mode = mode or st.mode
         sweep = mode == "sweep" if mode else (len(exps) == 1 and not mods)
         if st.field_case:
@@ -620,6 +625,7 @@ class StudyWindow(QMainWindow):
                         except ValueError:
                             vals = []
                         st.axes.append(S.Axis(kind.currentText(), target.text().strip(), vals))
+        self._keep_labels(st.axes)
         focus = self.focus.currentData()
         order = S.FOCUS[focus][1] if focus in S.FOCUS else []
         ticked = [k for k, cb in self.metric_boxes.items() if cb.isChecked()]
@@ -632,6 +638,20 @@ class StudyWindow(QMainWindow):
         if not st.solver or (prof != "custom" and prof != self._study_profile(st)):
             st.solver = solver_from_toml(st.toml, None if prof == "custom" else prof)
         return st
+
+    @staticmethod
+    def _axis_key(a: S.Axis):
+        return (a.kind, a.target, tuple((k, t) for k, t in a.also))
+
+    def _keep_labels(self, axes: List[S.Axis]) -> None:
+        """An axis that is still what the opened study file described keeps the file's label.  The window would make
+        its own (VOC_x, NO_added_0830_ppb, …), and the runs are stored in folders named after the labels: with another
+        label the finished runs of a study written from code, or by an earlier version, are not found."""
+        kept = getattr(self, "_file_labels", {})
+        for a in axes:
+            lab = kept.get(self._axis_key(a))
+            if lab:
+                a.label = lab
 
     def _study_profile(self, st: S.Study) -> str:
         """The solver profile a study's frozen solver keys belong to (studies from before profiles: by rtol)."""
@@ -830,6 +850,16 @@ class StudyWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Open failed", str(e)); return
         self._from_study(); self._refresh_results(); self._log(f"opened {p}")
+        self._land_on_plot()
+
+    def _land_on_plot(self):
+        """A study with finished runs opens on its plot: the ozone maximum (the O3 isopleth) when it was read."""
+        if not any(S.is_done(pl) for pl in S.plan_runs(self.study)):
+            return
+        i = self.plot_metric.findData("o3_max")
+        if i >= 0 and i != self.plot_metric.currentIndex():
+            self.plot_metric.setCurrentIndex(i)          # redraws
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self.canvas.parentWidget()))
 
     def _save(self, path: str = "") -> str:
         st = self._to_study()
@@ -1069,7 +1099,8 @@ class StudyWindow(QMainWindow):
         axes = st.axes; log = self.plot_log.isChecked()
         exps = sorted({r["experiment"] for r in rows})
         if len(axes) >= 2:
-            a1, a2 = axes[0].name(), axes[1].name()
+            xa, ya = self._xy_axes(st)
+            a1, a2 = xa.name(), ya.name()
             exp = exps[0]
             sub = [r for r in rows if r["experiment"] == exp and r.get(key) is not None and not math.isnan(r[key])]
             dropped = 0
@@ -1088,7 +1119,7 @@ class StudyWindow(QMainWindow):
                 regime_note = self._regimes(ax, st, sub, a1, a2, xs, ys, z, key, log) if self.show_regimes.isChecked() else ""
             else:
                 sc = ax.scatter(x, y, c=z, cmap="viridis", s=80); self.fig.colorbar(sc, ax=ax, label=f"{label} [{unit}]")
-            (lab1, tot1, _s1), (lab2, tot2, _s2) = S.axis_description(st, axes[0]), S.axis_description(st, axes[1])
+            (lab1, tot1, _s1), (lab2, tot2, _s2) = S.axis_description(st, xa), S.axis_description(st, ya)
             ax.set_xlabel(lab1 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
             ax.set_ylabel(lab2 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
             self._ppb_scale(ax, "x", tot1, log); self._ppb_scale(ax, "y", tot2, log)
@@ -1208,7 +1239,7 @@ class StudyWindow(QMainWindow):
 
     def _v_frame_values(self, key: str, i: int):
         d = self._v_data; st = self.study
-        a1, a2 = st.axes[0].name(), st.axes[1].name()
+        a1, a2 = (a.name() for a in self._xy_axes(st))
         x, y, z = d["axes"][a1], d["axes"][a2], d[key][:, i]
         ok = np.isfinite(z) & np.isfinite(x) & np.isfinite(y)
         if self.v_log.isChecked():
@@ -1246,7 +1277,8 @@ class StudyWindow(QMainWindow):
         note = ""
         if self.v_reg.isChecked():
             note = self._v_ridge(ax, st, a1, a2, x, y, po3, log)
-        (l1, t1, _), (l2, t2, _) = S.axis_description(st, st.axes[0]), S.axis_description(st, st.axes[1])
+        xa, ya = self._xy_axes(st)
+        (l1, t1, _), (l2, t2, _) = S.axis_description(st, xa), S.axis_description(st, ya)
         ax.set_xlabel(l1 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1); ax.set_ylabel(l2 + (" — log10 scale" if log else ""), fontsize=F["label"] - 1)
         self._ppb_scale(ax, "x", t1, log); self._ppb_scale(ax, "y", t2, log)
         ax.set_title(f"{lab} at {int(hh):02d}:{int(round(hh % 1 * 60)) % 60:02d} UTC" + ("  (roof open)" if lit else "  (dark)"), loc="left")
@@ -1265,7 +1297,7 @@ class StudyWindow(QMainWindow):
             key, f"Colour = {S.TS_QUANTITIES[key][0]} at this moment.")
 
     def _v_ridge(self, ax, st, a1, a2, x, y, po3, log) -> str:
-        i_nox = S.nox_axis(st.axes[:2])
+        i_nox = S.nox_axis(self._xy_axes(st))
         if i_nox < 0:
             return "regimes: no axis varies NOx"
         if np.nanmax(po3) <= 0:
@@ -1373,6 +1405,18 @@ class StudyWindow(QMainWindow):
             else:
                 lg.set_bbox_to_anchor(None); lg.set_loc(choice)
 
+    @staticmethod
+    def _xy_axes(st) -> list:
+        """The two axes of an isopleth in the order they are drawn, [x, y]: as given in the study, except that an axis
+        varying NOx goes on y (the usual ozone isopleth: VOC along x, NOx along y).  Without a NOx axis, a VOC axis
+        goes on x (e.g. HONO against VOC)."""
+        ax = list(st.axes[:2])
+        if len(ax) < 2:
+            return ax
+        i_nox = S.nox_axis(ax)
+        voc_second = i_nox < 0 and ax[1].name().upper().startswith("VOC") and not ax[0].name().upper().startswith("VOC")
+        return ax[::-1] if i_nox == 0 or voc_second else ax
+
     def _run_markers(self, ax, xs, ys, z, cs, circles: bool = True, values: bool = True):
         """One circle per run, filled with that run's own value on the contour's colour scale, thin white edge:
         a circle that stands out from its surroundings shows where the contour between runs is interpolated.
@@ -1418,7 +1462,7 @@ class StudyWindow(QMainWindow):
         The ridge comes from ozone production (not from the coloured result), so it is the same on every plot of the study."""
         from matplotlib.patches import Patch
         from matplotlib.lines import Line2D
-        i_nox = S.nox_axis(st.axes[:2])
+        i_nox = S.nox_axis(self._xy_axes(st))
         if i_nox < 0:
             return "regimes: no axis varies NOx (NO/NO2 injection or initial value), so the regimes are not drawn"
         okey = next((k for k in ("po3_lit_int", "ox_lit_delta", "o3_max") if all(r.get(k) is not None and np.isfinite(r[k]) for r in sub)), None)

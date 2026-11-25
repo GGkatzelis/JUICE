@@ -30,8 +30,9 @@ def _titles(menu):
 
 def test_first_choice_leads_to_todays_chamber_menu(app, calls):
     first = js.FirstChoice()
-    assert _titles(first) == ["Chamber experiment", "Field observations"]
+    assert first.titles() == ["Chambers", "Field"]
     menu = first.open_menu(js.StartWindow)
+    assert first.open_menu(js.StartWindow) is menu          # a second click brings the open menu to the front
     assert _titles(menu) == ["New experiment", "Open a saved experiment", "New study", "Import a FACSIMILE experiment",
                              "Results of one experiment", "Results of a study"]
     menu.close()
