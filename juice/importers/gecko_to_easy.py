@@ -693,6 +693,33 @@ def _eq_key(eq: str):
     return (sides[0], sides[1] if len(sides) > 1 else frozenset())
 
 
+def _template_reactions(template_lines: list) -> list:
+    """(reactants, products) of every reaction line of the template (not the k[] lines, not -/-> lines)."""
+    out = []
+    for ln in template_lines:
+        s = ln.split(';')[0].strip()
+        if s and '-->' in s and '-/->' not in s and not s.lower().startswith('k['):
+            out.append(_eq_key(s))
+    return out
+
+
+def _chain_intermediates(template_lines: list, allowed: set) -> set:
+    """Species of the template's own first-order chains that end on `allowed` species: the delayed release of an
+    injection (qVOC --> 0.9*VOCin1 + 0.1*VOCin2, VOCin1 --> VOCin_all, VOCin_all --> C2H5OH; 25 Nov 2026, until then
+    the whole chain was disabled as 'MCM-only' and the VOC was never injected).  A candidate is the only reactant of
+    some template line; it is dropped while one of its lines leads to a species that is neither allowed nor kept."""
+    rx = _template_reactions(template_lines)
+    inter = {next(iter(r)) for r, _p in rx if len(r) == 1} - set(allowed)
+    changed = True
+    while changed:
+        changed = False
+        for x in sorted(inter):
+            if any(r == frozenset({x}) and (p - set(allowed) - inter) for r, p in rx):
+                inter.discard(x)
+                changed = True
+    return inter
+
+
 def write_scenario_easy(template: str, name: str, out_dir: str, header: list, mode: str, known: set) -> tuple:
     """The scenario .easy from the SAPHIR template: the IDL MCM-converter includes (*.fac.*) are replaced by the
     GECKO-A include block; in `pure` mode the MCM inorganic set (anorg.mcm331.*, j_clear_sky, jmeasured) goes too.
@@ -710,7 +737,8 @@ def write_scenario_easy(template: str, name: str, out_dir: str, header: list, mo
         if s and '-->' in s and '-/->' not in s and not s.lower().startswith('k['):
             bare.add(_eq_key(s))
     allowed = set(known) | INORG_EASY | CHAMBER_WORDS | assigned
-    label = {'mcmcore': '(GECKO-A organics + MCM core)', 'pure': '(complete GECKO-A mechanism)'}[mode]
+    allowed |= _chain_intermediates(tl, allowed)
+    label ={'mcmcore': '(GECKO-A organics + MCM core)', 'pure': '(complete GECKO-A mechanism)'}[mode]
     out, notes, base_done = [], [], False
     for i, ln in enumerate(tl):
         s = ln.split(';')[0].strip()
@@ -767,11 +795,28 @@ def _generator_maxgen(gecko_dir: str) -> int | None:
 
 
 def template_voc(template_lines: list) -> str | None:
-    for ln in template_lines:
-        m = re.match(r'^\s*qVOC\s*-->\s*([A-Za-z_]\w*)', ln, re.I)
-        if m:
-            return m.group(1).upper()
-    return None
+    """The VOC the template injects: the end of the chain that starts at qVOC (qVOC --> X directly, or through the
+    first-order intermediates of a delayed release).  None when there is no qVOC line or the chain ends on more
+    than one species."""
+    rx = _template_reactions(template_lines)
+    start = [p for r, p in rx if r == frozenset({'QVOC'})]
+    if not start:
+        return None
+    nxt = {}
+    for r, p in rx:
+        if len(r) == 1:
+            nxt.setdefault(next(iter(r)), set()).update(p)
+    ends, seen, todo = set(), set(), list(start[0])
+    while todo:
+        x = todo.pop()
+        if x in seen:
+            continue
+        seen.add(x)
+        if x in nxt and x != 'QVOC':
+            todo += list(nxt[x])
+        else:
+            ends.add(x)
+    return ends.pop() if len(ends) == 1 else None
 
 
 def build(gecko_dir: str, template: str, name: str, mode: str, out_root: str,

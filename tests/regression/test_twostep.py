@@ -145,3 +145,66 @@ def test_a_fast_exchange_pair_no_longer_forces_tiny_steps():
                        stats=st_jac)
     assert st_jac["nfcn"] > 3 * st_pair["nfcn"]
     assert np.max(np.abs(y_jac[mask] / ref[mask] - 1.0)) > 1.0
+
+
+# ── paths of the integrator the profile settings rarely reach (25 Nov 2026) ─────────────────────────────────────────
+
+def _mini():
+    species, k, _env_names, arrays, y0, _M = ts._mini_mechanism()
+    env = np.array([1.0, 1.0])
+    return species, ts.PLSystem(len(species), k, env, arrays), y0, env
+
+
+def test_compiled_and_numpy_forms_give_identical_numbers(monkeypatch):
+    """The compiled one-pass helpers claim the same IEEE operations in the same order as the numpy expressions they
+    replace: a machine without numba must get the same numbers, bit for bit (convergence test included)."""
+    _sp, sysm, y0, _env = _mini()
+    kw = dict(dtmin=1e-6, dtmax=60.0, atol=100.0, rtol=1e-3, numit=3, numit_max=8)
+    compiled = ts.twostep(sysm, y0, 0.0, 1800.0, **kw)
+    monkeypatch.setattr(ts, "NUMBA", False)
+    plain = ts.twostep(sysm, y0, 0.0, 1800.0, **kw)
+    assert np.array_equal(compiled, plain)
+
+
+def test_rejected_steps_and_a_restart_still_give_the_right_answer():
+    """Loose settings (one sweep, rtol 1 %, growth x10) make the error test reject steps, twice in a row once, which
+    sends the integrator back one step to an implicit-Euler restart with dt / 10."""
+    species, sysm, y0, env = _mini()
+    ref = _reference(sysm, y0, [(0.0, 3600.0, 1.0)], env)[0]
+    st, kinds = {}, []
+    y = ts.twostep(sysm, y0, 0.0, 3600.0, dtmin=1e-6, dtmax=600.0, atol=100.0, rtol=1e-2, numit=1, max_growth=10.0,
+                   stats=st, trace=lambda t, yy, dt, kind: kinds.append(kind))
+    assert st["nrejec"] > 0 and st["nstart"] == 2 and kinds.count("euler") == 2
+    mask = ref > 1e6
+    assert np.max(np.abs(y[mask] / ref[mask] - 1.0)) < 0.03
+
+
+def test_fixed_steps_end_exactly_at_the_row_end():
+    """dtmin == dtmax: no error control; a row that is not a multiple of the step is closed by a shortened last step."""
+    species, sysm, y0, env = _mini()
+    ref = _reference(sysm, y0, [(0.0, 1805.0, 1.0)], env)[0]
+    times = []                                     # where the rates are evaluated: the end of each step
+
+    def pl(t, yy):
+        times.append(t)
+        return sysm(t, yy)
+    y = ts.twostep(pl, y0, 0.0, 1805.0, dtmin=10.0, dtmax=10.0, atol=100.0, rtol=1e-3, numit=3)
+    ends = sorted(set(round(t, 6) for t in times))
+    assert ends[:2] == [10.0, 20.0] and ends[-3:] == [1790.0, 1800.0, 1805.0]
+    mask = ref > 1e6
+    assert np.max(np.abs(y[mask] / ref[mask] - 1.0)) < 0.02
+
+
+def test_too_many_steps_is_an_error_not_a_hang():
+    _sp, sysm, y0, _env = _mini()
+    with pytest.raises(RuntimeError, match="more than 5 steps"):
+        ts.twostep(sysm, y0, 0.0, 3600.0, dtmin=1e-6, dtmax=1.0, atol=100.0, rtol=1e-3, numit=2, max_steps=5)
+
+
+def test_restart_growth_limits_the_first_steps():
+    _sp, sysm, y0, _env = _mini()
+    dts = []
+    ts.twostep(sysm, y0, 0.0, 600.0, dtmin=1e-6, dtmax=60.0, atol=100.0, rtol=1e-3, numit=3,
+               restart_growth=1.2, restart_steps=10, trace=lambda t, yy, dt, kind: dts.append(dt))
+    assert all(b <= 2.0 * a * (1 + 1e-12) for a, b in zip(dts, dts[1:]))
+    assert all(b <= 1.2 * a * (1 + 1e-12) for a, b in zip(dts[1:10], dts[2:11]))      # the first BDF2 steps

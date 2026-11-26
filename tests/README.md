@@ -38,7 +38,14 @@ dilution, temperature step); `regression/test_exact_scenarios.py` runs it in eve
 4. **A test that runs the solver for more than a few seconds** is marked `@pytest.mark.slow`.
 5. **Coverage is a map, not a target.** It includes the solver, which runs as a program of its own (`patch = ["subprocess"]`
    in `pyproject.toml`). Use the report to find code no test reaches; a line being
-   reached does not mean its result is checked.
+   reached does not mean its result is checked. Functions compiled by numba (`@_NJIT`, the kernels in
+   `twostep_solver.py` and all of `parallel_kernels.py`) always show as missed, because coverage cannot see inside
+   compiled code; they are checked by their results (`regression/test_twostep.py`, and the bit-identical serial and
+   multi-core runs in `regression/test_solver_options.py`).
+6. **The importers are checked by what they write.** The F0AM originals ship with each converted base
+   (`chemistry/mechanisms/base/<id>/f0am_source/`), and converting them again must give the installed files
+   (`integration/test_f0am_import.py`); every golden scene goes through the expert editor's widgets and back
+   unchanged (`gui/test_easy_builder_dialog.py`).
 
 ## Decisions the tests record
 
@@ -46,4 +53,5 @@ dilution, temperature step); `regression/test_exact_scenarios.py` runs it in eve
 |---|---|---|
 | 24 Nov 2026 | In a study, the injection group `voc` means every organic injection: single compounds and injected solutions. `mixture` is the solutions alone (each scaled as a whole, composition unchanged), `compound` the single compounds alone. | `unit/test_study.py::test_voc_group_takes_single_compounds_and_injected_solutions` |
 | 25 Nov 2026 | A scenario file without an expanded EASY file (the format of the early SAPHIR GUI) is refused with a message instead of run on the untested route; a failed run ends with exit code 1. | `regression/test_failed_runs.py` |
+| 25 Nov 2026 | `gecko_to_easy.build` keeps a template's delayed-release chain (qVOC --> intermediates --> VOC) when it ends on species of the mechanism, and takes the injected VOC from the end of that chain; before, the chain was disabled as "MCM-only" and nothing was injected. | `integration/test_gecko_import.py::test_build_writes_a_scenario_juice_can_expand` |
 | 24 Nov 2026 | An injection timed before the run still enters in the first step and one after the end does not enter (the ENZ files stay as they were); the review of the experiment warns about both. | `unit/test_spec_grid_and_archive.py::test_pulse_timed_before_the_run_enters_in_the_first_step_and_the_review_says_so` |

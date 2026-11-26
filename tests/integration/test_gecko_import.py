@@ -95,3 +95,58 @@ def test_generated_chemistry_parses_in_juice(mech, tmp_path):
     assert {"OH", "HONO", "O", "SA", "C2H5OH", "ETHGLY"} <= names, sorted(names)[:20]
     assert not ({"HO", "HNO2", "O3P", "SULF", "GOO2000"} & names)
     assert len(m.reactions) == n_an + n_org
+
+
+# ── the command line: a whole scenario from a SAPHIR template (25 Nov 2026) ─────────────────────────────────────────
+# scene_05 is an ethanol experiment whose injection is a delayed release (qVOC --> 0.9*VOCin1 + 0.1*VOCin2, the two
+# intermediates --> VOCin_all --> C2H5OH).  Until 25 Nov 2026 build() took the intermediates for MCM-only species,
+# disabled the whole chain and wrote a scenario into which no ethanol was ever injected.
+SCENE_05 = os.path.join(os.path.dirname(HERE), "validation", "IDL Input", "scene_05", "scene_05.easy")
+
+
+def test_template_voc_follows_a_delayed_release():
+    tl = open(SCENE_05, encoding="latin-1").read().splitlines()
+    assert g.template_voc(tl) == "C2H5OH"
+    assert g.template_voc(["qVOC --> C2H5OH", "k[qVOC --> C2H5OH] = CONST(1.)"]) == "C2H5OH"
+    assert g.template_voc(["qVOC --> 0.5*A + 0.5*B"]) is None                     # two ends: no single VOC
+    assert g.template_voc(["NO --> NO2"]) is None
+    assert g._chain_intermediates(tl, {"QVOC", "C2H5OH"}) == {"VOCIN1", "VOCIN2", "VOCIN_ALL"}
+    assert g._chain_intermediates(tl, {"QVOC"}) == set()                         # the chain ends on an unknown species
+
+
+def _active(text):
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith((";", "*"))]
+
+
+@pytest.mark.parametrize("mode", ["mcmcore", "pure"])
+def test_build_writes_a_scenario_juice_can_expand(mode, tmp_path, monkeypatch):
+    from juice.core.elog_generator import generate_both
+    monkeypatch.setattr(g, "MCM_NAMES", dict(g.MCM_NAMES))                       # build() names the primary in it
+    args = [ETHANOL, "--template", SCENE_05, "--name", "EtG", "--mode", mode, "--out", str(tmp_path / "easy"),
+            "--juice-dir", str(tmp_path / "juice")] + (["--maxgen", "2"] if mode == "pure" else [])
+    g.main(args)
+    out = tmp_path / "easy" / "EtG"
+    assert sorted(os.listdir(out)) == sorted(os.listdir(tmp_path / "juice" / "EtG"))
+    assert (out / "scene_05.enz").is_file()
+    text = (out / "EtG.easy").read_text(encoding="latin-1")
+    act = _active(text)
+    assert "qVOC-->0.9*VOCin1+0.1*VOCin2" in act and "VOCin_all-->C2H5OH" in act   # the injection is kept
+    assert not any(".fac." in l for l in act if l.startswith("#include"))            # the MCM converter files are gone
+    assert ("#include anorg.geckoa.incl" in " ".join(act)) == (mode == "pure")
+    assert any(l.startswith("#include anorg.mcm331.dark.rate") for l in act) == (mode == "mcmcore")
+    if mode == "pure":
+        assert "maxgen=2 (static generation cut" in text
+        assert not any(l.startswith("k[NO2 + HV") for l in act)                    # measured-J overrides of the MCM set
+    raw, _canon = generate_both(str(out / "EtG.easy"), search_dirs=[str(out), os.path.join(os.path.dirname(SCENE_05), "..", "include files")],
+                                output_dir=str(tmp_path / "x"))
+    elog = open(raw, encoding="latin-1").read()
+    assert "VOCin_all-->C2H5OH" in elog.replace(" ", "") and "ETHGLY" in elog
+
+
+def test_build_refuses_an_unknown_mode_and_a_missing_enz(tmp_path):
+    with pytest.raises(ValueError):
+        g.build(ETHANOL, SCENE_05, "x", "both", str(tmp_path))
+    t = tmp_path / "t.easy"
+    t.write_text("FILES[ENZ] = nowhere.enz\nqVOC --> C2H5OH\n", encoding="latin-1")
+    with pytest.raises(FileNotFoundError):
+        g.build(ETHANOL, str(t), "x", "mcmcore", str(tmp_path), log=lambda *_: None)

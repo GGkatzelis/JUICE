@@ -307,3 +307,111 @@ def test_a_rate_line_with_a_space_is_read_and_a_reaction_without_a_rate_is_repor
     species, reactions, dropped = fi.read_allrxns(str(p))
     assert [fi.easy_reaction(r) for r in reactions] == ["A --> B"] and reactions[0].rate == "2.0e-3"
     assert len(dropped) == 1 and dropped[0].startswith("B=C: no rate line")
+
+
+# ── the whole conversion, written to disk (25 Nov 2026) ─────────────────────────────────────────────────────────────
+# The F0AM originals ship with each base (f0am_source/): converting them again must give the installed files exactly,
+# apart from the lines that carry the date of conversion.  A change of the converter that would change a shipped
+# mechanism shows up here, reaction by reaction.
+
+def _undated(path):
+    return [l for l in open(path, encoding="utf-8", errors="replace").read().splitlines()
+            if not re.search(r"20\d\d-\d\d-\d\d", l)]
+
+
+@pytest.mark.parametrize("base_id", ["CRACMM2", "CRACMM1_aq", "RACM2"])
+def test_reconverting_the_shipped_sources_gives_the_installed_files(base_id, tmp_path):
+    installed = os.path.join(fi.BASE_DIR, base_id)
+    out = fi.write_base(base_id, os.path.join(installed, "f0am_source"), out_root=str(tmp_path))
+    written = sorted(f for f in os.listdir(out) if os.path.isfile(os.path.join(out, f)) and f != "manifest.json")
+    assert len(written) == 7
+    for f in written:
+        assert _undated(os.path.join(out, f)) == _undated(os.path.join(installed, f)), f
+    import json
+    new, old = (json.load(open(os.path.join(d, "manifest.json"), encoding="utf-8")) for d in (out, installed))
+    assert new["lumped"] == old["lumped"] and new["files"] == old["files"]
+    assert new["source"]["files_sha256"] == old["source"]["files_sha256"]
+    assert sorted(os.listdir(os.path.join(out, "f0am_source"))) == sorted(fi.PROFILES[base_id]["files"])
+
+
+def test_reconverting_in_place_does_not_copy_a_source_onto_itself(tmp_path):
+    first = fi.write_base("RACM2", os.path.join(fi.BASE_DIR, "RACM2", "f0am_source"), out_root=str(tmp_path))
+    again = fi.write_base("RACM2", os.path.join(first, "f0am_source"), out_root=str(tmp_path))
+    assert again == first and os.path.getsize(os.path.join(first, "f0am_source", "RACM2_AllRxns.m")) > 0
+
+
+def test_a_block_fix_that_no_longer_applies_is_an_error(tmp_path):
+    p = tmp_path / "s_AllRxns.m"
+    p.write_text(SYNTH)
+    with pytest.raises(ValueError, match="does not apply"):
+        fi.read_allrxns(str(p), fixed={"SEAWATER": 0.0}, block_fixes={"B + HO = D": [("fX(i)", "fY(i)")]})
+
+
+def test_a_j_name_equal_to_a_measured_input_is_renamed(tmp_path):
+    """RACM2 names JNO2 etc. like JUICE's measured inputs: they get _MECH, in the J map and in every rate."""
+    src = SYNTH.replace("k(:,i) = (JD_TEST );", "k(:,i) = (JNO2 );")
+    (tmp_path / "x_AllRxns.m").write_text(src)
+    (tmp_path / "x_K.m").write_text("i=0;\ni=i+1;\nKnames{i} = 'KX';\na = 2.0;\nkrx(:,i) = a.*1e-12;\n")
+    (tmp_path / "x_J.m").write_text("J.JNO2 = Jmcm.J4;\nJ.JHNO4 = 0.5.*Jmcm.Jn21;\n")
+    prof = {"files": ("x_AllRxns.m", "x_K.m", "x_J.m"), "fixed": {"SEAWATER": 0.0},
+            "j_fixes": {"JHNO4": ("JN21+JN22", "test")}}
+    mech = fi.read(str(tmp_path), prof)
+    assert mech.j_map == {"JNO2_MECH": "J4", "JHNO4": "JN21+JN22"}
+    back = next(r for r in mech.reactions if fi.easy_reaction(r) == "D --> B + HO")     # R003 + R004, merged
+    assert back.rate.endswith("+(JNO2_MECH)") and not re.search(r"\bJNO2\b", back.rate)
+    assert mech.k_names == {"KX": "(2.0)*1e-12"}
+    assert fi.mcm_j_numbers(mech) == ([4], [21, 22])
+    assert any("renamed JNO2_MECH" in n for n in mech.notes) and any("JHNO4 = JN21+JN22" in n for n in mech.notes)
+    assert [r.label for r in mech.reactions if "merged with" in " ".join(r.notes)]       # R003 and R004 summed
+
+
+def test_command_line_without_a_known_mechanism_prints_the_usage(capsys):
+    assert fi.main(["NOT_A_MECH", "folder"]) == 2
+    assert "bases:" in capsys.readouterr().out
+
+
+# The add-on builder on small synthetic FACSIMILE files: F0AM's MCM copy (base), its extension (mod) and the .m with
+# the RO2 list.  JUICE's own MCM is the real one.
+_ADDON_BASE = ("% 2.05D-11 : C6H5CH2OOH + OH = BENZAL + OH ;\n% 2.0D-11 : C6H5CH2OH + OH = BENZAL + HO2 ;\n"
+               "% 6.03D-12 : C6H5CH2NO3 + OH = BENZAL + NO2 ;\n")
+_ADDON_MOD = ("% 3.0D-11 : C6H5CH2OOH + OH = BENZAL + OH ;\n% 2.7D-11 : C6H5CH2OH + OH = BENZAL + HO2 ;\n"
+              "% 6.03D-12 : C6H5CH2NO3 + OH = BENZAL + NO2 ;\n% 4.0D-11 : FURAN + OH = FURANO2 ;\n"
+              "% J<58> : FURFURAL = FURAN + C3H4 ;\n% 1.0D-11*RO2 : FURANO2 = BENZAL ;\n")
+
+
+def _addon(tmp_path, monkeypatch, mod=_ADDON_MOD):
+    for n, t in (("b.fac", _ADDON_BASE), ("m.fac", mod), ("m.m", "RO2ToAdd = {'FURANO2'; 'BENZALO2'};\n")):
+        (tmp_path / n).write_text(t)
+    monkeypatch.setitem(fi.ADDON_PROFILES, "TESTBB", {**fi.ADDON_PROFILES["NOAA_BB"], "f0am_base": ("b.fac", "b.m"),
+                                                      "f0am_mod": ("m.fac", "m.m"), "precursors": ["FURAN", "FURFURAL", "SYRINGOL"]})
+    return fi.build_addon("TESTBB", str(tmp_path), mreg.base(mreg.DEFAULT_BASE).fac, out_root=str(tmp_path / "out"))
+
+
+def test_addon_is_the_difference_to_f0ams_mcm(tmp_path, monkeypatch):
+    import json
+    out = _addon(tmp_path, monkeypatch)
+    text = open(os.path.join(out, "testbb.incl"), encoding="latin-1").read()
+    m = json.load(open(os.path.join(out, "manifest.json"), encoding="utf-8"))
+    lines = text.splitlines()
+    assert [l for l in lines if "-->" in l and not l.startswith(("k[", ";"))] == [
+        "FURAN + OH  -->  FURANO2", "FURFURAL + hv  -->  FURAN + FURFC3H4", "FURANO2  -->  BENZAL"]
+    assert "k[FURFURAL+hv-->FURAN+FURFC3H4]=CONST(JN52)" in lines              # J<58> -> JN52, closed by the light switch
+    assert re.search(r"^JN52 = PHTFKT\(3\.5196e-04,", text, re.M)
+    assert "k[C6H5CH2OOH+OH-->BENZAL+OH]=CONST(3.0D-11)" in lines              # re-rated: an override after the base
+    assert not any(l.startswith("k[C6H5CH2OH+OH") for l in lines)            # already JUICE's rate: no override
+    assert "already JUICE's MCM v3.3.1 rate" in m["notes"]
+    assert m["overrides"] == ["C6H5CH2OOH + OH  -->  BENZAL + OH"]
+    assert m["ro2"] == ["FURANO2"] and m["j_f0am"] == [52]
+    assert m["precursors"] == ["FURAN", "FURFURAL"] and m["needs_base_species"] == ["OH", "BENZAL"]
+    assert m["adds_species"] == {"FURAN": "C4H4O", "FURANO2": "", "FURFURAL": "C5H4O2", "FURFC3H4": ""}
+
+
+def test_addon_rerating_a_reaction_juice_lacks_is_refused(tmp_path, monkeypatch):
+    files = {"b.fac": _ADDON_BASE + "% 1.0D-11 : NOTMCM + OH = BENZAL ;\n",
+             "m.fac": _ADDON_MOD + "% 2.0D-11 : NOTMCM + OH = BENZAL ;\n", "m.m": "RO2ToAdd = {};\n"}
+    for n, t in files.items():
+        (tmp_path / n).write_text(t)
+    monkeypatch.setitem(fi.ADDON_PROFILES, "TESTBB", {**fi.ADDON_PROFILES["NOAA_BB"], "f0am_base": ("b.fac", "b.m"),
+                                                      "f0am_mod": ("m.fac", "m.m")})
+    with pytest.raises(ValueError, match="cannot place the re-rated reaction"):
+        fi.build_addon("TESTBB", str(tmp_path), mreg.base(mreg.DEFAULT_BASE).fac, out_root=str(tmp_path / "out"))
